@@ -137,8 +137,8 @@ def cached_filtered_top5_charts():
     qualified = []
     
     us_yf = getattr(ind, "us100_yf", ["AAPL", "MSFT", "NVDA", "AMZN", "META"])[:5]
-    us_raw = getattr(ind, "us100_raw", ["AAPL", "MSFT", "NVDA", "AMZN", "META"])[:5]
     nifty_yf = getattr(ind, "nifty200_yf", ["RELIANCE.NS", "TCS.NS", "HDFCBANK.NS", "INFY.NS", "ICICIBANK.NS"])[:5]
+    us_raw = getattr(ind, "us100_raw", ["AAPL", "MSFT", "NVDA", "AMZN", "META"])[:5]
     nifty_raw = getattr(ind, "nifty200_raw", ["RELIANCE", "TCS", "HDFCBANK", "INFY", "ICICIBANK"])[:5]
     
     universe = list(zip(us_yf, us_raw)) + list(zip(nifty_yf, nifty_raw))
@@ -229,7 +229,7 @@ with col_menu:
             if st.button("Send test"):
                 ind.TELEGRAM_CONFIG["token"] = st.session_state.telegram_token
                 ind.TELEGRAM_CONFIG["chat_id"] = st.session_state.telegram_chat_id
-                ok, msg = ind.send_telegram_alert(f"✅ Test alert from QuantFX Terminal")
+                ok, msg = ind.send_telegram_alert("✅ Test alert from QuantFX Terminal")
                 st.success(msg) if ok else st.error(msg)
 
         if TELEGRAM_CONFIG_FILE.exists():
@@ -268,7 +268,7 @@ with st.sidebar.container():
         top_signals = cached_filtered_top5_charts()
 
     if top_signals:
-        for sig in top_signals[:5]:  # Expanded display count for more room!
+        for sig in top_signals[:5]:
             st.sidebar.markdown(
                 f"""
                 <div style="background-color: {COLOR_PANEL_BG}; border: 1px solid {COLOR_BULL}; border-radius: 6px; padding: 8px; margin-bottom: 6px;">

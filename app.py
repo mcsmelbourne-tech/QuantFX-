@@ -588,23 +588,17 @@ with tab_chart:
                 reasons_html = "".join(f"<li>{r}</li>" for r in outlook["reasons"])
 
                 st.markdown(
-                    f"""
-<div class="outlook-box">
-    <span style="font-weight:bold;color:{dir_color};font-size:14px;">
-        {outlook['direction']}
-    </span>
-    &nbsp;&nbsp;<b>{badge}</b><br>
-
-    <span style="color:{COLOR_TEXT_MUTED}; font-size: 11px;">
-        Range: ${outlook['range_low']:,.2f} – ${outlook['range_high']:,.2f}
-        (Last: ${outlook['last_close']:,.2f})
-    </span>
-
-    <ul style="margin-top:6px; margin-bottom: 4px; padding-left: 15px; font-size: 11px;">
-        {reasons_html}
-    </ul>
-</div>
-""",
+                    f"""<div class="outlook-box">
+<span style="font-weight:bold;color:{dir_color};font-size:14px;">{outlook['direction']}</span>
+&nbsp;&nbsp;<b>{badge}</b><br>
+<span style="color:{COLOR_TEXT_MUTED}; font-size: 11px;">
+Range: ${outlook['range_low']:,.2f} – ${outlook['range_high']:,.2f}
+(Last: ${outlook['last_close']:,.2f})
+</span>
+<ul style="margin-top:6px; margin-bottom: 4px; padding-left: 15px; font-size: 11px;">
+{reasons_html}
+</ul>
+</div>""",
                     unsafe_allow_html=True,
                 )
 
@@ -620,17 +614,10 @@ with tab_chart:
                     link = item.get("link", "#")
 
                     st.markdown(
-                        f"""
-<div class="news-card">
-    <a href="{link}" target="_blank"
-       style="color:{COLOR_BULL}; text-decoration:none; font-size:11px; font-weight:bold;">
-        {title}
-    </a><br>
-    <span style="color:{COLOR_TEXT_MUTED}; font-size:9px;">
-        Source: {publisher}
-    </span>
-</div>
-""",
+                        f"""<div class="news-card">
+<a href="{link}" target="_blank" style="color:{COLOR_BULL}; text-decoration:none; font-size:11px; font-weight:bold;">{title}</a><br>
+<span style="color:{COLOR_TEXT_MUTED}; font-size:9px;">Source: {publisher}</span>
+</div>""",
                         unsafe_allow_html=True,
                     )
             else:

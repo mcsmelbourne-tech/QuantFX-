@@ -183,7 +183,7 @@ def cached_scan(include_wide_universe):
 
 
 @st.cache_data(ttl=300, show_spinner=False)
-def cached_top5_scan():
+def cached_top5_scan():a
     """Dedicated fast scan for Top 5 US100 & Top 5 Nifty200 components."""
     us100_top5_res, nifty_top5_res = [], []
     
@@ -570,3 +570,15 @@ with tab_scanner:
                     st.success(f"Sent {len(valid_buys)} verified BUY alerts.") if ok else st.error(msg)
         else:
             st.info("No results — try running the scanner again.")
+# =====================================================================
+# BACKGROUND CRON TRIGGER
+# =====================================================================
+# This intercepts incoming cron requests to execute the scan engine
+if "trigger" in st.query_params and st.query_params["trigger"] == "hourly_scan":
+    import run_scan
+    try:
+        run_scan.main()
+        st.success("Background scan completed successfully!")
+    except Exception as e:
+        st.error(f"Scan execution error: {str(e)}")
+    st.stop() # Stops execution here so it doesn't render the whole UI for the cron bot

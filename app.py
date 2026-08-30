@@ -1,9 +1,17 @@
 # ================================================================
 # QuantFX Terminal — Web Edition (Full Merged Version)
 # ================================================================
+#
+# NOTE ON SCHEDULING:
+# Scheduled scans + Telegram alerts no longer run from inside this
+# Streamlit app — Streamlit Community Cloud has no background
+# scheduler and can't be triggered via query params. Scheduled scans
+# now live in run_scan.py, triggered by .github/workflows/hourly_scan.yml
+# (GitHub Actions cron). This file is UI-only: on-demand scans/alerts
+# via buttons still work exactly as before.
+# ================================================================
 
 import json
-import os
 from pathlib import Path
 
 import numpy as np
@@ -16,12 +24,13 @@ import yfinance as yf
 import indicators as ind
 
 # =====================================================================
-# PERSISTENT TELEGRAM CONFIG (Cloud‑Safe)
+# PERSISTENT TELEGRAM CONFIG (Cloud-Safe)
 # =====================================================================
 
 CONFIG_DIR = Path("./config")
 CONFIG_DIR.mkdir(exist_ok=True)
 TELEGRAM_CONFIG_FILE = CONFIG_DIR / "telegram_config.json"
+
 
 def load_saved_telegram_config():
     try:
@@ -30,8 +39,10 @@ def load_saved_telegram_config():
     except Exception:
         return "", ""
 
+
 def save_telegram_config(token, chat_id):
     TELEGRAM_CONFIG_FILE.write_text(json.dumps({"token": token, "chat_id": chat_id}))
+
 
 # =====================================================================
 # THEME
@@ -85,13 +96,13 @@ section[data-testid="stSidebar"] {{ background-color: {COLOR_PANEL_BG}; }}
 
 COMMODITIES = [
     ("GC=F", "GOLD"), ("SI=F", "SILVER"), ("KC=F", "COFFEE"),
-    ("CL=F", "CRUDE"), ("NG=F", "GAS")
+    ("CL=F", "CRUDE"), ("NG=F", "GAS"),
 ]
 
 FOREX = [
     ("EURUSD=X", "EUR/USD"), ("GBPUSD=X", "GBP/USD"),
     ("USDJPY=X", "USD/JPY"), ("AUDUSD=X", "AUD/USD"),
-    ("USDCAD=X", "USD/CAD")
+    ("USDCAD=X", "USD/CAD"),
 ]
 
 TIMEFRAMES = {
@@ -119,9 +130,11 @@ if "telegram_token" not in st.session_state:
 def cached_ohlc(symbol, period, interval):
     return ind.fetch_live_ohlc(symbol, period=period, interval=interval)
 
+
 @st.cache_data(ttl=60, show_spinner=False)
 def cached_outlook(symbol, display, period, interval):
     return ind.compute_7day_outlook(symbol, display, period=period, interval=interval)
+
 
 @st.cache_data(ttl=300, show_spinner=False)
 def cached_news(symbol):
@@ -131,18 +144,23 @@ def cached_news(symbol):
     except Exception:
         return []
 
+
 @st.cache_data(ttl=300, show_spinner=False)
 def cached_filtered_top5_charts():
-    """Strict BUY filter: BUY + Score ≥ 50% + TP1% ≥ 5%."""
+    """Strict BUY filter: BUY + Score >= 50% + TP1% >= 5%."""
     qualified = []
 
-    us_yf = getattr(ind, "us100_yf", ["AAPL","MSFT","NVDA","AMZN","META"])[:5]
-    us_raw = getattr(ind, "us100_raw", ["AAPL","MSFT","NVDA","AMZN","META"])[:5]
+    us_yf = getattr(ind, "us100_yf", ["AAPL", "MSFT", "NVDA", "AMZN", "META"])[:5]
+    us_raw = getattr(ind, "us100_raw", ["AAPL", "MSFT", "NVDA", "AMZN", "META"])[:5]
 
-    nifty_yf = getattr(ind, "nifty200_yf",
-                       ["RELIANCE.NS","TCS.NS","HDFCBANK.NS","INFY.NS","ICICIBANK.NS"])[:5]
-    nifty_raw = getattr(ind, "nifty200_raw",
-                        ["RELIANCE","TCS","HDFCBANK","INFY","ICICIBANK"])[:5]
+    nifty_yf = getattr(
+        ind, "nifty200_yf",
+        ["RELIANCE.NS", "TCS.NS", "HDFCBANK.NS", "INFY.NS", "ICICIBANK.NS"],
+    )[:5]
+    nifty_raw = getattr(
+        ind, "nifty200_raw",
+        ["RELIANCE", "TCS", "HDFCBANK", "INFY", "ICICIBANK"],
+    )[:5]
 
     universe = list(zip(us_yf, us_raw)) + list(zip(nifty_yf, nifty_raw))
 
@@ -150,14 +168,15 @@ def cached_filtered_top5_charts():
         r = ind.evaluate_oracle_score(yf_sym, display=disp)
         if r:
             try:
-                score = float(str(r["Score"]).replace("%",""))
-                tp1 = float(str(r["TP1_PCT"]).replace("%",""))
-                if r["Signal"].upper()=="BUY" and score>=50 and tp1>=5:
+                score = float(str(r["Score"]).replace("%", ""))
+                tp1 = float(str(r["TP1_PCT"]).replace("%", ""))
+                if r["Signal"].upper() == "BUY" and score >= 50 and tp1 >= 5:
                     qualified.append(r)
-            except:
+            except (ValueError, KeyError):
                 pass
 
     return qualified
+
 
 @st.cache_data(ttl=300, show_spinner=False)
 def cached_scan(include_wide_universe):
@@ -165,52 +184,65 @@ def cached_scan(include_wide_universe):
 
     for s, d in COMMODITIES:
         r = ind.evaluate_oracle_score(s, display=d)
-        if r: comm_res.append(r)
+        if r:
+            comm_res.append(r)
 
     for s, d in FOREX:
         r = ind.evaluate_oracle_score(s, display=d)
-        if r: forex_res.append(r)
+        if r:
+            forex_res.append(r)
 
     if include_wide_universe:
         for yf_sym, disp in zip(ind.nifty200_yf, ind.nifty200_raw):
             r = ind.evaluate_oracle_score(yf_sym, display=disp)
-            if r: nifty_res.append(r)
+            if r:
+                nifty_res.append(r)
 
         for yf_sym, disp in zip(ind.us100_yf, ind.us100_raw + ["IXIC"]):
             r = ind.evaluate_oracle_score(yf_sym, display=disp)
-            if r: us100_res.append(r)
+            if r:
+                us100_res.append(r)
 
     return {
         "commodities": comm_res,
         "forex": forex_res,
         "nifty200": nifty_res,
-        "us100": us100_res
+        "us100": us100_res,
     }
+
 
 @st.cache_data(ttl=300, show_spinner=False)
 def cached_top5_scan():
     """Dedicated fast scan for Top 5 US100 & Top 5 Nifty200 components."""
     us100_top5_res, nifty_top5_res = [], []
 
-    us_yf = getattr(ind,"us100_yf",["AAPL","MSFT","NVDA","AMZN","META"])[:5]
-    us_raw = getattr(ind,"us100_raw",["AAPL","MSFT","NVDA","AMZN","META"])[:5]
+    us_yf = getattr(ind, "us100_yf", ["AAPL", "MSFT", "NVDA", "AMZN", "META"])[:5]
+    us_raw = getattr(ind, "us100_raw", ["AAPL", "MSFT", "NVDA", "AMZN", "META"])[:5]
 
-    nifty_yf = getattr(ind,"nifty200_yf",
-                       ["RELIANCE.NS","TCS.NS","HDFCBANK.NS","INFY.NS","ICICIBANK.NS"])[:5]
-    nifty_raw = getattr(ind,"nifty200_raw",
-                        ["RELIANCE","TCS","HDFCBANK","INFY","ICICIBANK"])[:5]
+    nifty_yf = getattr(
+        ind, "nifty200_yf",
+        ["RELIANCE.NS", "TCS.NS", "HDFCBANK.NS", "INFY.NS", "ICICIBANK.NS"],
+    )[:5]
+    nifty_raw = getattr(
+        ind, "nifty200_raw",
+        ["RELIANCE", "TCS", "HDFCBANK", "INFY", "ICICIBANK"],
+    )[:5]
 
     for yf_sym, disp in zip(us_yf, us_raw):
         r = ind.evaluate_oracle_score(yf_sym, display=disp)
-        if r: us100_top5_res.append(r)
+        if r:
+            us100_top5_res.append(r)
 
     for yf_sym, disp in zip(nifty_yf, nifty_raw):
         r = ind.evaluate_oracle_score(yf_sym, display=disp)
-        if r: nifty_top5_res.append(r)
+        if r:
+            nifty_top5_res.append(r)
 
     return {"us100_top5": us100_top5_res, "nifty_top5": nifty_top5_res}
+
+
 # =====================================================================
-# EMA CROSS + MACD CROSS SIGNAL FUNCTIONS (NEW)
+# EMA CROSS + MACD CROSS SIGNAL FUNCTIONS
 # =====================================================================
 
 def compute_ema_cross(df, fast_col, slow_col):
@@ -245,8 +277,29 @@ def compute_macd_cross(df):
     return signals
 
 
+def add_signal_labels(fig, xs, ys, sig, row):
+    """Annotate BUY/SELL crossover points on a subplot."""
+    for xi, yi, s in zip(xs, ys, sig):
+        if s == "BUY":
+            fig.add_annotation(
+                x=xi, y=yi, text="<b>BUY</b>", showarrow=False,
+                font=dict(color="#FFFFFF", size=9),
+                bgcolor="#004D1A", bordercolor="#00FF9A",
+                borderwidth=1, borderpad=3,
+                row=row, col=1,
+            )
+        elif s == "SELL":
+            fig.add_annotation(
+                x=xi, y=yi, text="<b>SELL</b>", showarrow=False,
+                font=dict(color="#FFFFFF", size=9),
+                bgcolor="#4D004D", bordercolor="#FF66CC",
+                borderwidth=1, borderpad=3,
+                row=row, col=1,
+            )
+
+
 # =====================================================================
-# TOP HEADER BAR — Embedding Telegram Config inside the Menu (3 dots)
+# TOP HEADER BAR — Telegram Config inside the Menu (3 dots)
 # =====================================================================
 
 col_title, col_menu = st.columns([6, 1])
@@ -271,7 +324,7 @@ with col_menu:
             if st.button("💾 Save"):
                 save_telegram_config(
                     st.session_state.telegram_token,
-                    st.session_state.telegram_chat_id
+                    st.session_state.telegram_chat_id,
                 )
                 st.success("Saved!")
 
@@ -286,6 +339,12 @@ with col_menu:
             st.caption("🔒 Config loaded from server.")
         else:
             st.caption("Not saved yet.")
+
+        st.caption(
+            "For automated hourly alerts (not just on-demand from this UI), "
+            "see run_scan.py + the GitHub Actions workflow — this app has no "
+            "built-in scheduler."
+        )
 
 
 # =====================================================================
@@ -335,7 +394,7 @@ TP1: <b>{sig['TP1_PCT']}</b>
 </span>
 </div>
 """,
-                unsafe_allow_html=True
+                unsafe_allow_html=True,
             )
     else:
         st.sidebar.info("No components currently match strict BUY criteria.")
@@ -343,6 +402,7 @@ TP1: <b>{sig['TP1_PCT']}</b>
 st.sidebar.caption("Tip: on your phone, add app to Home Screen.")
 
 tab_chart, tab_scanner = st.tabs(["📈 Chart", "🔎 Scanner"])
+
 # =====================================================================
 # CHART TAB (Two-Column Layout: Left = Chart, Right = Outlook & News)
 # =====================================================================
@@ -354,52 +414,26 @@ with tab_chart:
     if df.empty:
         st.error(f"No data returned for {current_display}. Check the ticker symbol.")
     else:
-        # Build ATR Renko
         renko_df, brick_size = ind.build_atr_renko_df(
             df, atr_period=14, atr_multiplier=2.0,
-            ema_fast=ema_fast, ema_slow=ema_slow
+            ema_fast=ema_fast, ema_slow=ema_slow,
         )
 
         if renko_df.empty:
             st.warning(f"Not enough price movement yet to form ATR Renko bricks for {current_display}.")
         else:
-            # Heikin Ashi
             ha_df = ind.compute_heikin_ashi(renko_df)
             ha_df["EMA_FAST"] = ha_df["Close"].ewm(span=ema_fast, adjust=False).mean()
             ha_df["EMA_SLOW"] = ha_df["Close"].ewm(span=ema_slow, adjust=False).mean()
 
-            # EMA Cross Signals
             ha_df["Signal"] = compute_ema_cross(ha_df, "EMA_FAST", "EMA_SLOW")
             renko_df["Signal"] = compute_ema_cross(renko_df, "EMA_FAST", "EMA_SLOW")
-
-            # MACD Cross Signals
             renko_df["MACD_CROSS"] = compute_macd_cross(renko_df)
 
             x = np.arange(len(renko_df))
             dates = pd.to_datetime(renko_df["Date"])
             hover_dates = dates.dt.strftime("%d %b %Y %H:%M")
 
-            # Annotation helper
-            def add_signal_labels(fig, xs, ys, sig, row):
-                for xi, yi, s in zip(xs, ys, sig):
-                    if s == "BUY":
-                        fig.add_annotation(
-                            x=xi, y=yi, text="<b>BUY</b>", showarrow=False,
-                            font=dict(color="#FFFFFF", size=9),
-                            bgcolor="#004D1A", bordercolor="#00FF9A",
-                            borderwidth=1, borderpad=3,
-                            row=row, col=1,
-                        )
-                    elif s == "SELL":
-                        fig.add_annotation(
-                            x=xi, y=yi, text="<b>SELL</b>", showarrow=False,
-                            font=dict(color="#FFFFFF", size=9),
-                            bgcolor="#4D004D", bordercolor="#FF66CC",
-                            borderwidth=1, borderpad=3,
-                            row=row, col=1,
-                        )
-
-            # Create chart layout
             fig = make_subplots(
                 rows=4, cols=1, shared_xaxes=True,
                 row_heights=[0.28, 0.32, 0.2, 0.2],
@@ -412,118 +446,76 @@ with tab_chart:
                 ),
             )
 
-            # ============================================================
-            # ROW 1 — HEIKIN ASHI (Candle border = fill color)
-            # ============================================================
-
+            # ROW 1 — HEIKIN ASHI
             fig.add_trace(go.Candlestick(
-                x=x,
-                open=ha_df["Open"],
-                high=ha_df["High"],
-                low=ha_df["Low"],
-                close=ha_df["Close"],
-                increasing_line_color=COLOR_BULL,
-                increasing_fillcolor=COLOR_BULL,
-                decreasing_line_color=COLOR_BEAR,
-                decreasing_fillcolor=COLOR_BEAR,
-                text=hover_dates,
-                name="Heikin Ashi",
-                showlegend=False,
+                x=x, open=ha_df["Open"], high=ha_df["High"],
+                low=ha_df["Low"], close=ha_df["Close"],
+                increasing_line_color=COLOR_BULL, increasing_fillcolor=COLOR_BULL,
+                decreasing_line_color=COLOR_BEAR, decreasing_fillcolor=COLOR_BEAR,
+                text=hover_dates, name="Heikin Ashi", showlegend=False,
             ), row=1, col=1)
 
             fig.add_trace(go.Scatter(
-                x=x, y=ha_df["EMA_FAST"],
-                line=dict(color=COLOR_MA9, width=1.5),
-                name=f"EMA {ema_fast}"
+                x=x, y=ha_df["EMA_FAST"], line=dict(color=COLOR_MA9, width=1.5),
+                name=f"EMA {ema_fast}",
             ), row=1, col=1)
 
             fig.add_trace(go.Scatter(
-                x=x, y=ha_df["EMA_SLOW"],
-                line=dict(color=COLOR_MA20, width=1.5),
-                name=f"EMA {ema_slow}"
+                x=x, y=ha_df["EMA_SLOW"], line=dict(color=COLOR_MA20, width=1.5),
+                name=f"EMA {ema_slow}",
             ), row=1, col=1)
 
-            # Heikin Ashi EMA Cross Labels
             ha_buys = ha_df[ha_df["Signal"] == "BUY"]
             ha_sells = ha_df[ha_df["Signal"] == "SELL"]
 
             add_signal_labels(
                 fig,
                 list(x[ha_buys.index]) + list(x[ha_sells.index]),
-                list(ha_buys["Low"] - brick_size * 0.4) +
-                list(ha_sells["High"] + brick_size * 0.4),
+                list(ha_buys["Low"] - brick_size * 0.4) + list(ha_sells["High"] + brick_size * 0.4),
                 ["BUY"] * len(ha_buys) + ["SELL"] * len(ha_sells),
                 row=1,
             )
 
-            # ============================================================
-            # ROW 2 — ATR RENKO (Candle border = fill color)
-            # ============================================================
-
+            # ROW 2 — ATR RENKO
             fig.add_trace(go.Candlestick(
-                x=x,
-                open=renko_df["Open"],
-                high=renko_df["High"],
-                low=renko_df["Low"],
-                close=renko_df["Close"],
-                increasing_line_color=COLOR_BULL,
-                increasing_fillcolor=COLOR_BULL,
-                decreasing_line_color=COLOR_BEAR,
-                decreasing_fillcolor=COLOR_BEAR,
-                text=hover_dates,
-                name="Renko",
-                showlegend=False,
+                x=x, open=renko_df["Open"], high=renko_df["High"],
+                low=renko_df["Low"], close=renko_df["Close"],
+                increasing_line_color=COLOR_BULL, increasing_fillcolor=COLOR_BULL,
+                decreasing_line_color=COLOR_BEAR, decreasing_fillcolor=COLOR_BEAR,
+                text=hover_dates, name="Renko", showlegend=False,
             ), row=2, col=1)
 
             fig.add_trace(go.Scatter(
-                x=x, y=renko_df["EMA_FAST"],
-                line=dict(color=COLOR_MA9, width=1.5),
-                name=f"EMA {ema_fast} (Renko)",
-                showlegend=False
+                x=x, y=renko_df["EMA_FAST"], line=dict(color=COLOR_MA9, width=1.5),
+                name=f"EMA {ema_fast} (Renko)", showlegend=False,
             ), row=2, col=1)
 
             fig.add_trace(go.Scatter(
-                x=x, y=renko_df["EMA_SLOW"],
-                line=dict(color=COLOR_MA20, width=1.5),
-                name=f"EMA {ema_slow} (Renko)",
-                showlegend=False
+                x=x, y=renko_df["EMA_SLOW"], line=dict(color=COLOR_MA20, width=1.5),
+                name=f"EMA {ema_slow} (Renko)", showlegend=False,
             ), row=2, col=1)
 
-            # Renko EMA Cross Labels
             r_buys = renko_df[renko_df["Signal"] == "BUY"]
             r_sells = renko_df[renko_df["Signal"] == "SELL"]
 
             add_signal_labels(
                 fig,
                 list(x[r_buys.index]) + list(x[r_sells.index]),
-                list(r_buys["Close"] - brick_size * 0.4) +
-                list(r_sells["Close"] + brick_size * 0.4),
+                list(r_buys["Close"] - brick_size * 0.4) + list(r_sells["Close"] + brick_size * 0.4),
                 ["BUY"] * len(r_buys) + ["SELL"] * len(r_sells),
                 row=2,
             )
 
-            # ============================================================
             # ROW 3 — MACD CROSS SIGNALS
-            # ============================================================
-
             fig.add_trace(go.Scatter(
-                x=x, y=renko_df["MACD"],
-                line=dict(color=COLOR_MACD_LINE, width=1.3),
-                name="MACD"
+                x=x, y=renko_df["MACD"], line=dict(color=COLOR_MACD_LINE, width=1.3), name="MACD",
             ), row=3, col=1)
 
             fig.add_trace(go.Scatter(
-                x=x, y=renko_df["MACD_Signal"],
-                line=dict(color=COLOR_SIGNAL_LINE, width=1.3),
-                name="Signal"
+                x=x, y=renko_df["MACD_Signal"], line=dict(color=COLOR_SIGNAL_LINE, width=1.3), name="Signal",
             ), row=3, col=1)
 
-            fig.add_hline(
-                y=0,
-                line_color=COLOR_ZERO_LINE,
-                line_width=0.8,
-                row=3, col=1
-            )
+            fig.add_hline(y=0, line_color=COLOR_ZERO_LINE, line_width=0.8, row=3, col=1)
 
             macd_buys = renko_df[renko_df["MACD_CROSS"] == "BUY"]
             macd_sells = renko_df[renko_df["MACD_CROSS"] == "SELL"]
@@ -531,41 +523,21 @@ with tab_chart:
             add_signal_labels(
                 fig,
                 list(x[macd_buys.index]) + list(x[macd_sells.index]),
-                list(macd_buys["MACD"] - abs(renko_df["MACD"]).max() * 0.05) +
-                list(macd_sells["MACD"] + abs(renko_df["MACD"]).max() * 0.05),
+                list(macd_buys["MACD"] - abs(renko_df["MACD"]).max() * 0.05)
+                + list(macd_sells["MACD"] + abs(renko_df["MACD"]).max() * 0.05),
                 ["BUY"] * len(macd_buys) + ["SELL"] * len(macd_sells),
                 row=3,
             )
 
-            # ============================================================
             # ROW 4 — RSI
-            # ============================================================
-
             fig.add_trace(go.Scatter(
-                x=x, y=renko_df["RSI"],
-                line=dict(color="#FFD700", width=1.3),
-                name="RSI"
+                x=x, y=renko_df["RSI"], line=dict(color="#FFD700", width=1.3), name="RSI",
             ), row=4, col=1)
 
-            fig.add_hline(
-                y=70,
-                line_color=COLOR_RED,
-                line_width=0.8,
-                line_dash="dash",
-                row=4, col=1
-            )
-
-            fig.add_hline(
-                y=30,
-                line_color=COLOR_GREEN,
-                line_width=0.8,
-                line_dash="dash",
-                row=4, col=1
-            )
-
+            fig.add_hline(y=70, line_color=COLOR_RED, line_width=0.8, line_dash="dash", row=4, col=1)
+            fig.add_hline(y=30, line_color=COLOR_GREEN, line_width=0.8, line_dash="dash", row=4, col=1)
             fig.update_yaxes(range=[0, 100], row=4, col=1)
 
-            # X-axis formatting
             step = max(len(x) // 8, 1)
             fig.update_xaxes(
                 tickmode="array",
@@ -588,19 +560,14 @@ with tab_chart:
                 dragmode="pan",
             )
 
-        # ============================================================
-        # Side-by-Side Layout: Chart + Outlook + News
-        # ============================================================
-
         col_chart, col_side = st.columns([2, 1])
 
         with col_chart:
             if not renko_df.empty:
                 st.plotly_chart(fig, use_container_width=True, config={"scrollZoom": True, "displaylogo": False})
+
         with col_side:
-            # ============================================================
-            # 7-DAY OUTLOOK
-            # ============================================================
+            # ---------------- 7-DAY OUTLOOK ----------------
             st.subheader("🗓️ 7-Day Outlook")
 
             with st.spinner("Computing outlook…"):
@@ -614,11 +581,10 @@ with tab_chart:
 
                 dir_color = {
                     "Bullish": COLOR_GREEN,
-                    "Bearish": COLOR_RED
+                    "Bearish": COLOR_RED,
                 }.get(outlook["direction"], COLOR_TEXT_MUTED)
 
                 badge = "🟢 CONDITIONS MET" if conditions_met else "🔴 CONDITIONS NOT MET"
-
                 reasons_html = "".join(f"<li>{r}</li>" for r in outlook["reasons"])
 
                 st.markdown(
@@ -642,9 +608,7 @@ with tab_chart:
                     unsafe_allow_html=True,
                 )
 
-            # ============================================================
-            # LATEST NEWS (KeyError-safe)
-            # ============================================================
+            # ---------------- LATEST NEWS ----------------
             st.subheader("📰 Latest Market News")
 
             news_items = cached_news(current_symbol)
@@ -653,7 +617,7 @@ with tab_chart:
                 for item in news_items[:4]:
                     title = item.get("title", "No title")
                     publisher = item.get("publisher", "Yahoo Finance")
-                    link = item.get("link", "#")  # FIXED: prevents KeyError
+                    link = item.get("link", "#")
 
                     st.markdown(
                         f"""
@@ -683,45 +647,36 @@ with tab_scanner:
 
     if st.button("Run Top 5 Quick Scan", type="primary"):
         with st.spinner("Scanning top index components..."):
-            top5_results = cached_top5_scan()
-            st.session_state["top5_results"] = top5_results
+            st.session_state["top5_results"] = cached_top5_scan()
 
     top5_data = st.session_state.get("top5_results")
 
     if top5_data:
         c1, c2 = st.columns(2)
 
-        # ---------------- US100 TOP 5 ----------------
         with c1:
             st.markdown("### 🇺🇸 US100 (Top 5)")
             us_top5_df = pd.DataFrame(top5_data["us100_top5"])
-
             if not us_top5_df.empty:
                 st.dataframe(
                     us_top5_df[["Ticker", "Price", "ChangePct", "Signal", "Score", "SL", "TP1"]],
-                    use_container_width=True
+                    use_container_width=True,
                 )
             else:
                 st.info("No data returned for US100 top 5.")
 
-        # ---------------- NIFTY200 TOP 5 ----------------
         with c2:
             st.markdown("### 🇮🇳 Nifty200 (Top 5)")
             nifty_top5_df = pd.DataFrame(top5_data["nifty_top5"])
-
             if not nifty_top5_df.empty:
                 st.dataframe(
                     nifty_top5_df[["Ticker", "Price", "ChangePct", "Signal", "Score", "SL", "TP1"]],
-                    use_container_width=True
+                    use_container_width=True,
                 )
             else:
                 st.info("No data returned for Nifty200 top 5.")
 
     st.markdown("---")
-
-    # =====================================================================
-    # FULL UNIVERSE SCANNER
-    # =====================================================================
 
     st.subheader("🌐 Full Universe Scanner")
     st.caption("Commodities + forex always included. Full Nifty200 + US100 universe is slower (200+ symbols).")
@@ -731,17 +686,13 @@ with tab_scanner:
 
     if run_full:
         with st.spinner("Scanning full markets…"):
-            results = cached_scan(include_wide)
-            st.session_state["scan_results"] = results
+            st.session_state["scan_results"] = cached_scan(include_wide)
 
     results = st.session_state.get("scan_results")
 
     if results:
         all_rows = (
-            results["commodities"]
-            + results["forex"]
-            + results["nifty200"]
-            + results["us100"]
+            results["commodities"] + results["forex"] + results["nifty200"] + results["us100"]
         )
 
         if all_rows:
@@ -752,32 +703,21 @@ with tab_scanner:
                 df_scan = df_scan[df_scan["Ticker"].str.contains(search, case=False, na=False)]
 
             st.dataframe(
-                df_scan[
-                    [
-                        "Ticker", "Price", "ChangePct", "Signal", "Score",
-                        "SL", "TP1", "TP1_PCT", "TP2"
-                    ]
-                ],
+                df_scan[["Ticker", "Price", "ChangePct", "Signal", "Score", "SL", "TP1", "TP1_PCT", "TP2"]],
                 use_container_width=True,
                 height=500,
             )
-
-            # ============================================================
-            # SEND STRICT BUY ALERTS TO TELEGRAM
-            # ============================================================
 
             if st.button("Send filtered BUY alerts to Telegram"):
                 ind.TELEGRAM_CONFIG["token"] = st.session_state.telegram_token
                 ind.TELEGRAM_CONFIG["chat_id"] = st.session_state.telegram_chat_id
 
                 valid_buys = []
-
                 for row in all_rows:
                     try:
                         score = float(str(row["Score"]).replace("%", ""))
                         tp1_pct = float(str(row["TP1_PCT"]).replace("%", ""))
                         signal = str(row["Signal"]).upper()
-
                         if signal == "BUY" and score >= 50.0 and tp1_pct >= 5.0:
                             valid_buys.append(row)
                     except (ValueError, KeyError):
@@ -787,7 +727,6 @@ with tab_scanner:
                     st.info("No symbols currently meet the strict criteria (BUY signal, Score ≥ 50%, TP1% ≥ 5%).")
                 else:
                     lines = ["*🚨 High-Conviction BUY Alerts* _(Score ≥ 50%, TP1% ≥ 5%)_"]
-
                     for r in valid_buys[:15]:
                         lines.append(
                             f"• *{r['Ticker']}*: {r['Signal']} | Price: {r['Price']} "
@@ -795,28 +734,9 @@ with tab_scanner:
                         )
 
                     ok, msg = ind.send_telegram_alert("\n".join(lines))
-
                     st.success(f"Sent {len(valid_buys)} verified BUY alerts.") if ok else st.error(msg)
-
         else:
             st.info("No results — try running the scanner again.")
-# =====================================================================
-# END OF FILE — CLEAN EXIT FOR STREAMLIT CLOUD
-# =====================================================================
-
-# Note:
-# The original desktop version had a cron-trigger block:
-#
-#     if "trigger" in st.query_params and st.query_params["trigger"] == "hourly_scan":
-#         import run_scan
-#         run_scan.main()
-#
-# This is intentionally removed because Streamlit Cloud does NOT support
-# background execution or query-parameter-triggered server-side jobs.
-#
-# Your app is now fully cloud-safe, deploy-ready, and stable.
-#
-# =====================================================================
 
 st.markdown(
     """

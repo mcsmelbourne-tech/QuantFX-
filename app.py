@@ -693,50 +693,53 @@ def render_charts(renko_df, ha_df, brick_size, display, ema_fast, ema_slow):
 
     # --- Row 1: Heikin Ashi candles + EMAs -----------------------------------
    # --- Row 1: Heikin Ashi BLOCKS instead of candles -----------------------
+    # --- Row 1: Heikin Ashi BLOCKS instead of candles -----------------------
 
-ha_colors = [
-    COLOR_BULL if ha_df["Close"].iloc[i] >= ha_df["Open"].iloc[i] else COLOR_BEAR
-    for i in range(len(ha_df))
-]
+    ha_colors = [
+        COLOR_BULL if ha_df["Close"].iloc[i] >= ha_df["Open"].iloc[i] else COLOR_BEAR
+        for i in range(len(ha_df))
+    ]
 
-# Draw HA blocks
-for i in range(len(ha_df)):
-    o = ha_df["Open"].iloc[i]
-    c = ha_df["Close"].iloc[i]
-    h = ha_df["High"].iloc[i]
-    l = ha_df["Low"].iloc[i]
+    # Draw HA blocks
+    for i in range(len(ha_df)):
+        o = ha_df["Open"].iloc[i]
+        c = ha_df["Close"].iloc[i]
+        h = ha_df["High"].iloc[i]
+        l = ha_df["Low"].iloc[i]
 
-    # Brick body (rectangle)
-    fig.add_shape(
-        type="rect",
-        x0=i - 0.45, x1=i + 0.45,
-        y0=min(o, c), y1=max(o, c),
-        fillcolor=ha_colors[i],
-        line=dict(color=ha_colors[i], width=1),
-        row=1, col=1
-    )
+        # Brick body (rectangle)
+        fig.add_shape(
+            type="rect",
+            x0=i - 0.45, x1=i + 0.45,
+            y0=min(o, c), y1=max(o, c),
+            fillcolor=ha_colors[i],
+            line=dict(color=ha_colors[i], width=1),
+            row=1, col=1
+        )
 
-    # Wick (vertical line)
-    fig.add_shape(
-        type="line",
-        x0=i, x1=i,
-        y0=l, y1=h,
-        line=dict(color=ha_colors[i], width=1),
-        row=1, col=1
-    )
+        # Wick (vertical line)
+        fig.add_shape(
+            type="line",
+            x0=i, x1=i,
+            y0=l, y1=h,
+            line=dict(color=ha_colors[i], width=1),
+            row=1, col=1
+        )
 
-# Add EMAs on top
-fig.add_trace(go.Scatter(
-    x=x_ha, y=ha_df["EMA_FAST"],
-    line=dict(color=COLOR_MA_FAST, width=1.5),
-    name=f"HA EMA {ema_fast}",
-), row=1, col=1)
+    # Add EMAs on top
+    fig.add_trace(go.Scatter(
+        x=x_ha, y=ha_df["EMA_FAST"],
+        line=dict(color=COLOR_MA_FAST, width=1.5),
+        name=f"HA EMA {ema_fast}",
+    ), row=1, col=1)
 
-fig.add_trace(go.Scatter(
-    x=x_ha, y=ha_df["EMA_SLOW"],
-    line=dict(color=COLOR_MA_SLOW, width=1.5),
-    name=f"HA EMA {ema_slow}",
-), row=1, col=1)
+    fig.add_trace(go.Scatter(
+        x=x_ha, y=ha_df["EMA_SLOW"],
+        line=dict(color=COLOR_MA_SLOW, width=1.5),
+        name=f"HA EMA {ema_slow}",
+    ), row=1, col=1)
+
+
 
 
     # --- Row 2: ATR Renko candles + EMAs + structure -------------------

@@ -1,7 +1,8 @@
 """
 QuantFX Terminal — ATR Renko & Macro Smart Money Structure
 Streamlit rewrite with custom candle coloring, right-side axes, 
-Heikin Ashi EMAs, Confluence Signals (EMA + MACD + HA + RSI), and targeted multi-market Telegram alerts.
+Heikin Ashi EMAs, targeted multi-market Telegram alerts, and 
+Renko EMA 9/20 Crossover Signal Markers.
 """
 import numpy as np
 import pandas as pd
@@ -88,7 +89,7 @@ def send_telegram_alert(message, token, chat_id):
 # =====================================================================
 # INDICATORS & HEIKIN ASHI / MACD
 # =====================================================================
-def compute_heikin_ashi(df, ema_fast=21, ema_slow=50):
+def compute_heikin_ashi(df, ema_fast=9, ema_slow=20):
     """Standard Heiken Ashi transform with EMAs."""
     ha = pd.DataFrame(index=df.index)
     ha["Close"] = (df["Open"] + df["High"] + df["Low"] + df["Close"]) / 4.0
@@ -234,8 +235,8 @@ def latest_structure_event(struct_df, lookback=15):
 def build_atr_renko_df(df,
                         atr_period=21,
                         atr_multiplier=3.0,
-                        ema_fast=21,
-                        ema_slow=50,
+                        ema_fast=9,
+                        ema_slow=20,
                         macd_fast=12,
                         macd_slow=26,
                         macd_signal=9,
@@ -282,12 +283,10 @@ def build_atr_renko_df(df,
     r_close = renko_df["Close"]
     renko_df["EMA_FAST"] = r_close.ewm(span=ema_fast, adjust=False).mean()
     renko_df["EMA_SLOW"] = r_close.ewm(span=ema_slow, adjust=False).mean()
-    
     real_exp1 = closes.ewm(span=macd_fast, adjust=False).mean()
     real_exp2 = closes.ewm(span=macd_slow, adjust=False).mean()
     real_macd = real_exp1 - real_exp2
     real_macd_signal = real_macd.ewm(span=macd_signal, adjust=False).mean()
-    
     macd_lookup = pd.DataFrame({
         "Date": dates,
         "MACD": real_macd.values,
@@ -299,78 +298,30 @@ def build_atr_renko_df(df,
         on="Date",
         direction="backward",
     )
-    
     delta = r_close.diff()
     gain = (delta.where(delta > 0, 0.0)).rolling(rsi_period).mean()
     loss = (-delta.where(delta < 0, 0.0)).rolling(rsi_period).mean()
     rs = gain / loss.replace(0, np.nan)
     renko_df["RSI"] = 100 - (100 / (1 + rs))
-
-    # Compute Heikin Ashi status alignment
-    ha_full = compute_heikin_ashi(df, ema_fast=ema_fast, ema_slow=ema_slow)
-    ha_lookup = pd.DataFrame({
-        "Date": dates,
-        "HA_Bullish": (ha_full["Close"] > ha_full["Open"]).values
-    }).sort_values("Date")
-    renko_df = pd.merge_asof(
-        renko_df.sort_values("Date").reset_index(drop=True),
-        ha_lookup,
-        on="Date",
-        direction="backward",
-    )
-    renko_df["HA_Bullish"] = renko_df["HA_Bullish"].fillna(True)
-
-    # Base EMA Signals
     signals = []
-    confluence_signals = []
-    
     for i in range(len(renko_df)):
         if i == 0:
             signals.append("HOLD")
-            confluence_signals.append("HOLD")
             continue
-            
         ema_fast_now = renko_df.loc[i, "EMA_FAST"]
         ema_slow_now = renko_df.loc[i, "EMA_SLOW"]
         ema_fast_prev = renko_df.loc[i - 1, "EMA_FAST"]
         ema_slow_prev = renko_df.loc[i - 1, "EMA_SLOW"]
-        
-        # EMA Crossover check
-        ema_cross_buy = (ema_fast_now > ema_slow_now and ema_fast_prev <= ema_slow_prev)
-        ema_cross_sell = (ema_fast_now < ema_slow_now and ema_fast_prev >= ema_slow_prev)
-        
-        if ema_cross_buy:
+        if ema_fast_now > ema_slow_now and ema_fast_prev <= ema_slow_prev:
             signals.append("BUY")
-        elif ema_cross_sell:
+        elif ema_fast_now < ema_slow_now and ema_fast_prev >= ema_slow_prev:
             signals.append("SELL")
         else:
             signals.append("HOLD")
-            
-        # Confluence condition check: EMA Cross + MACD + Heikin Ashi + RSI
-        macd_val = renko_df.loc[i, "MACD"]
-        macd_sig_val = renko_df.loc[i, "MACD_Signal"]
-        rsi_val = renko_df.loc[i, "RSI"]
-        ha_bullish = renko_df.loc[i, "HA_Bullish"]
-        
-        # Buy Confluence Criteria
-        cond_buy = (ema_cross_buy or ema_fast_now > ema_slow_now) and (macd_val > macd_sig_val) and ha_bullish and (rsi_val > 50)
-        # Sell Confluence Criteria
-        cond_sell = (ema_cross_sell or ema_fast_now < ema_slow_now) and (macd_val < macd_sig_val) and (not ha_bullish) and (rsi_val < 50)
-        
-        if cond_buy:
-            confluence_signals.append("BUY")
-        elif cond_sell:
-            confluence_signals.append("SELL")
-        else:
-            confluence_signals.append("HOLD")
-            
     renko_df["Signal"] = signals
-    renko_df["Confluence_Signal"] = confluence_signals
-    
     macd_sigs, macd_types = detect_macd_crossovers(renko_df)
     renko_df["Div_Signal"] = macd_sigs
     renko_df["Div_Type"] = macd_types
-    
     struct_df = detect_market_structure(
         renko_df["High"], renko_df["Low"], renko_df["Close"],
         swing_lookback=5, brick_type=renko_df["Type"]
@@ -381,7 +332,7 @@ def build_atr_renko_df(df,
     return renko_df, brick_size
 
 # =====================================================================
-# DATA SOURCE & OUTLOOK
+# DATA SOURCE & OUTLOOK & SCANNER
 # =====================================================================
 @st.cache_data(ttl=300, show_spinner=False)
 def fetch_live_ohlc(symbol="GC=F", period="6mo", interval="1d"):
@@ -472,6 +423,16 @@ def evaluate_oracle_score(symbol, display=None):
     except Exception:
         return None
 
+def run_scanner(categories):
+    results = []
+    for cat in categories:
+        if cat in WATCHLIST_CATEGORIES:
+            for sym, disp in WATCHLIST_CATEGORIES[cat]:
+                res = evaluate_oracle_score(sym, disp)
+                if res:
+                    results.append(res)
+    return pd.DataFrame(results)
+
 def compute_7day_outlook(symbol, display, period="1y", interval="1d"):
     try:
         data = fetch_live_ohlc(symbol, period=period, interval=interval)
@@ -480,8 +441,8 @@ def compute_7day_outlook(symbol, display, period="1y", interval="1d"):
         close = data["Close"]
         high = data["High"]
         low = data["Low"]
-        ema21 = close.ewm(span=21, adjust=False).mean()
-        ema50 = close.ewm(span=50, adjust=False).mean()
+        ema9 = close.ewm(span=9, adjust=False).mean()
+        ema20 = close.ewm(span=20, adjust=False).mean()
         delta = close.diff()
         gain = delta.where(delta > 0, 0.0).rolling(14).mean()
         loss = (-delta.where(delta < 0, 0.0)).rolling(14).mean()
@@ -498,7 +459,7 @@ def compute_7day_outlook(symbol, display, period="1y", interval="1d"):
         tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
         atr = tr.rolling(21).mean()
         last_close = float(close.iloc[-1])
-        last_ema21, last_ema50 = float(ema21.iloc[-1]), float(ema50.iloc[-1])
+        last_ema9, last_ema20 = float(ema9.iloc[-1]), float(ema20.iloc[-1])
         last_atr = float(atr.iloc[-1]) if not np.isnan(atr.iloc[-1]) else last_close * 0.02
         atr_pct = (last_atr / last_close) * 100
         idx = data.index
@@ -511,15 +472,15 @@ def compute_7day_outlook(symbol, display, period="1y", interval="1d"):
         bars_in_7_days = max((7 * 24 * 60) / avg_bar_minutes, 1.0)
         reasons = []
         bias_score = 0.0
-        if last_ema21 > last_ema50:
+        if last_ema9 > last_ema20:
             bias_score += 1
-            reasons.append(f"EMA21 (${last_ema21:,.2f}) is above EMA50 (${last_ema50:,.2f}), keeping the trend bullish.")
+            reasons.append(f"EMA 9 (${last_ema9:,.2f}) is above EMA 20 (${last_ema20:,.2f}), keeping the trend bullish.")
         else:
             bias_score -= 1
-            reasons.append(f"EMA21 (${last_ema21:,.2f}) is below EMA50 (${last_ema50:,.2f}), keeping the trend bearish.")
+            reasons.append(f"EMA 9 (${last_ema9:,.2f}) is below EMA 20 (${last_ema20:,.2f}), keeping the trend bearish.")
         renko_df, _ = build_atr_renko_df(
             data, atr_period=21, atr_multiplier=3.0,
-            ema_fast=21, ema_slow=50,
+            ema_fast=9, ema_slow=20,
             macd_fast=12, macd_slow=26, macd_signal=9,
             rsi_period=14
         )
@@ -625,7 +586,7 @@ TIMEFRAME_PERIODS = {
 }
 
 # =====================================================================
-# CHARTING (Plotly — Renko & Heikin Ashi with Right-Side Values & EMAs)
+# CHARTING (Plotly — Renko & Heikin Ashi with EMA Crossover Markers)
 # =====================================================================
 def render_charts(renko_df, ha_df, brick_size, display, ema_fast, ema_slow):
     x_renko = list(range(len(renko_df)))
@@ -636,7 +597,7 @@ def render_charts(renko_df, ha_df, brick_size, display, ema_fast, ema_slow):
         vertical_spacing=0.035,
         subplot_titles=(
             f"{display} — Heikin Ashi (with EMA {ema_fast} & {ema_slow})",
-            f"{display} — ATR Renko & Confluence Buy/Sell Signals",
+            f"{display} — ATR Renko & EMA Crossover Signals",
             "MACD (real price series)",
             "RSI",
         ),
@@ -657,7 +618,7 @@ def render_charts(renko_df, ha_df, brick_size, display, ema_fast, ema_slow):
         name=f"HA EMA {ema_slow}",
     ), row=1, col=1)
 
-    # --- Row 2: ATR Renko candles + EMAs + Confluence Buy/Sell Buttons/Markers ---
+    # --- Row 2: ATR Renko candles + EMAs + Crossover Markers & Structure ---
     fig.add_trace(go.Candlestick(
         x=x_renko, open=renko_df["Open"], high=renko_df["High"], low=renko_df["Low"], close=renko_df["Close"],
         increasing_line_color=COLOR_BULL, decreasing_line_color=COLOR_BEAR,
@@ -673,29 +634,20 @@ def render_charts(renko_df, ha_df, brick_size, display, ema_fast, ema_slow):
         name=f"EMA {ema_slow}",
     ), row=2, col=1)
 
-    # Plot Confluence Buy / Sell Buttons / Markers on Renko Chart
-    confluence_buy_x = [i for i in range(len(renko_df)) if renko_df["Confluence_Signal"].iloc[i] == "BUY"]
-    confluence_buy_y = [renko_df["Low"].iloc[i] - (brick_size * 0.8) for i in confluence_buy_x]
-    
-    confluence_sell_x = [i for i in range(len(renko_df)) if renko_df["Confluence_Signal"].iloc[i] == "SELL"]
-    confluence_sell_y = [renko_df["High"].iloc[i] + (brick_size * 0.8) for i in confluence_sell_x]
-
-    if confluence_buy_x:
+    # Plot EMA Crossover Buy/Sell Triangle Markers on Renko Subplot
+    renko_buy_x = [i for i in range(len(renko_df)) if renko_df["Signal"].iloc[i] == "BUY"]
+    renko_sell_x = [i for i in range(len(renko_df)) if renko_df["Signal"].iloc[i] == "SELL"]
+    if renko_buy_x:
         fig.add_trace(go.Scatter(
-            x=confluence_buy_x, y=confluence_buy_y, mode="markers+text",
-            marker=dict(color=COLOR_GREEN, size=14, symbol="triangle-up"),
-            text=["BUY"] * len(confluence_buy_x), textposition="bottom center",
-            textfont=dict(color=COLOR_GREEN, size=10, weight="bold"),
-            name="Confluence BUY",
+            x=renko_buy_x, y=renko_df["Low"].iloc[renko_buy_x] * 0.995, mode="markers",
+            marker=dict(color=COLOR_GREEN, size=11, symbol="triangle-up"),
+            name=f"EMA {ema_fast}/{ema_slow} Buy Cross",
         ), row=2, col=1)
-
-    if confluence_sell_x:
+    if renko_sell_x:
         fig.add_trace(go.Scatter(
-            x=confluence_sell_x, y=confluence_sell_y, mode="markers+text",
-            marker=dict(color=COLOR_RED, size=14, symbol="triangle-down"),
-            text=["SELL"] * len(confluence_sell_x), textposition="top center",
-            textfont=dict(color=COLOR_RED, size=10, weight="bold"),
-            name="Confluence SELL",
+            x=renko_sell_x, y=renko_df["High"].iloc[renko_sell_x] * 1.005, mode="markers",
+            marker=dict(color=COLOR_RED, size=11, symbol="triangle-down"),
+            name=f"EMA {ema_fast}/{ema_slow} Sell Cross",
         ), row=2, col=1)
 
     struct_style = {
@@ -774,7 +726,7 @@ def render_charts(renko_df, ha_df, brick_size, display, ema_fast, ema_slow):
 # SIDEBAR CONTROLS
 # =====================================================================
 st.sidebar.markdown("## 📈 QuantFX Terminal")
-st.sidebar.caption("ATR Renko · Heikin Ashi · Confluence Engine")
+st.sidebar.caption("ATR Renko · Heikin Ashi · EMA 9/20 Cross · Smart Money Structure")
 symbol_mode = st.sidebar.radio("Symbol source", ["Presets", "Custom"], horizontal=True)
 if symbol_mode == "Presets":
     preset_cat = st.sidebar.selectbox("Category", list(WATCHLIST_CATEGORIES.keys()))
@@ -784,15 +736,15 @@ if symbol_mode == "Presets":
 else:
     current_symbol = st.sidebar.text_input("Yahoo Finance symbol", value="GC=F")
     current_display = st.sidebar.text_input("Display name", value=current_symbol)
-
 interval = st.sidebar.select_slider(
     "Timeframe", options=list(TIMEFRAME_PERIODS.keys()), value="1d"
 )
 period = TIMEFRAME_PERIODS[interval]
+
 st.sidebar.markdown("---")
 c1, c2 = st.sidebar.columns(2)
-ema_fast = c1.number_input("EMA Fast", min_value=1, max_value=200, value=21)
-ema_slow = c2.number_input("EMA Slow", min_value=1, max_value=200, value=50)
+ema_fast = c1.number_input("EMA Fast", min_value=1, max_value=200, value=9)
+ema_slow = c2.number_input("EMA Slow", min_value=1, max_value=200, value=20)
 c3, c4 = st.sidebar.columns(2)
 atr_period = c3.number_input("ATR Period", min_value=2, max_value=100, value=21)
 atr_multiplier = c4.number_input("ATR Mult.", min_value=0.1, max_value=10.0, value=3.0, step=0.1)
@@ -814,6 +766,52 @@ if st.sidebar.button("🔄 Refresh data", use_container_width=True):
     st.rerun()
 
 # =====================================================================
+# AUTOMATED MULTI-MARKET TELEGRAM SCANNER & DISPATCHER
+# =====================================================================
+st.sidebar.markdown("---")
+st.sidebar.markdown("### 🔔 Automated Triggers")
+if st.sidebar.button("🚀 Run Rule-Based Telegram Scan", use_container_width=True):
+    triggered_messages = []
+    fx_comm_watchlist = [("Commodities", COMMODITIES), ("Forex", FOREX_PAIRS)]
+    for cat_name, symbols in fx_comm_watchlist:
+        for sym, disp in symbols:
+            try:
+                df = fetch_live_ohlc(sym, period="10d", interval="30m")
+                if not df.empty:
+                    renko_df, _ = build_atr_renko_df(df, atr_period=int(atr_period), atr_multiplier=float(atr_multiplier), ema_fast=int(ema_fast), ema_slow=int(ema_slow))
+                    ev = latest_structure_event(renko_df, lookback=3)
+                    if ev and ev["type"] in ["CHOCH_DEMAND", "CHOCH_SUPPLY", "BOS_DEMAND", "BOS_SUPPLY"]:
+                        if ev["bars_ago"] <= 1:
+                            triggered_messages.append(f"🚨 *[30m FX/Comm]* *{disp}* triggered *{ev['label']}* at `${ev['level']:,.4f}`")
+            except Exception:
+                continue
+
+    indices_watchlist = [("US100", WATCHLIST_CATEGORIES["US100"]), ("Nifty200", WATCHLIST_CATEGORIES["Nifty200"])]
+    for cat_name, symbols in indices_watchlist:
+        for sym, disp in symbols:
+            try:
+                df = fetch_live_ohlc(sym, period="60d", interval="1h")
+                if not df.empty:
+                    df_4h = df.resample("4h").agg({"Open": "first", "High": "max", "Low": "min", "Close": "last", "Volume": "sum"}).dropna()
+                    renko_df, _ = build_atr_renko_df(df_4h, atr_period=int(atr_period), atr_multiplier=float(atr_multiplier), ema_fast=int(ema_fast), ema_slow=int(ema_slow))
+                    ev = latest_structure_event(renko_df, lookback=3)
+                    if ev and ev["type"] in ["CHOCH_DEMAND", "BOS_DEMAND"]:
+                        if ev["bars_ago"] <= 1:
+                            triggered_messages.append(f"🚨 *[4h {cat_name}]* *{disp}* triggered *{ev['label']}* at `${ev['level']:,.2f}`")
+            except Exception:
+                continue
+
+    if triggered_messages:
+        combined_msg = "📢 *QuantFX Automated Triggers*\n\n" + "\n".join(triggered_messages)
+        ok, m = send_telegram_alert(combined_msg, tg_token, tg_chat)
+        if ok:
+            st.sidebar.success(f"Dispatched {len(triggered_messages)} alert(s) via Telegram!")
+        else:
+            st.sidebar.error(f"Failed to send: {m}")
+    else:
+        st.sidebar.info("Scan completed: No new active triggers matching rules.")
+
+# =====================================================================
 # MAIN LAYOUT
 # =====================================================================
 st.markdown(
@@ -821,6 +819,7 @@ st.markdown(
     f"<span style='color:{COLOR_TEXT_MUTED};font-size:14px;'>({current_symbol}) · {interval}</span></h2>",
     unsafe_allow_html=True,
 )
+
 tab_chart, tab_outlook, tab_scanner = st.tabs(["📊 Charts", "🧭 7-Day Outlook", "🔎 Scanner"])
 
 # ---- Charts tab --------------------------------------------------------
@@ -852,23 +851,18 @@ with tab_chart:
             render_charts(renko_df, ha_df, brick_size, current_display, ema_fast, ema_slow)
             
             last_signal = renko_df["Signal"].iloc[-1]
-            last_confluence = renko_df["Confluence_Signal"].iloc[-1]
             last_div = renko_df["Div_Signal"].iloc[-1]
-            
-            conf_color = COLOR_GREEN if last_confluence == "BUY" else (COLOR_RED if last_confluence == "SELL" else COLOR_TEXT_MUTED)
+            badge_color = COLOR_GREEN if last_signal == "BUY" else (COLOR_RED if last_signal == "SELL" else COLOR_TEXT_MUTED)
             st.markdown(
-                f"Confluence Signal (EMA + MACD + HA + RSI): <span class='qfx-badge' style='background:{conf_color}22;color:{conf_color};'>{last_confluence}</span>"
-                f"&nbsp;&nbsp;·&nbsp;&nbsp;EMA Signal: <b>{last_signal}</b>"
-                f"&nbsp;&nbsp;·&nbsp;&nbsp;MACD Cross: <b>{last_div}</b>",
+                f"EMA {ema_fast}/{ema_slow} Cross Signal: <span class='qfx-badge' style='background:{badge_color}22;color:{badge_color};'>{last_signal}</span>"
+                f"&nbsp;&nbsp;·&nbsp;&nbsp;Latest MACD crossover: <b>{last_div}</b>",
                 unsafe_allow_html=True,
             )
-            
             if st.button("📨 Send current signal to Telegram"):
                 msg = (
                     f"*{current_display}* ({current_symbol})\n"
                     f"Price: {float(raw_df['Close'].iloc[-1]):,.4g}\n"
-                    f"Confluence Signal: {last_confluence}\n"
-                    f"EMA Signal: {last_signal}\n"
+                    f"EMA {ema_fast}/{ema_slow} Signal: {last_signal}\n"
                     f"MACD Cross: {last_div}\n"
                     f"Structure: {struct_event['label'] if struct_event else '—'}"
                 )
@@ -908,3 +902,18 @@ with tab_scanner:
     if st.button("▶️ Run scanner", type="primary"):
         if not cats:
             st.warning("Pick at least one watchlist.")
+        else:
+            df_res = run_scanner(cats)
+            st.session_state["scanner_results"] = df_res
+    df_res = st.session_state.get("scanner_results")
+    if df_res is not None and not df_res.empty:
+        display_cols = ["Ticker", "Price", "ChangePct", "Signal", "Structure", "Score", "SL", "TP1", "TP1_PCT", "TP2"]
+        def _row_style(row):
+            color = COLOR_GREEN if row["Signal"] == "BUY" else COLOR_RED
+            return [f"color: {color}" if col == "Signal" else "" for col in row.index]
+        st.dataframe(
+            df_res[display_cols].style.apply(_row_style, axis=1),
+            use_container_width=True, hide_index=True,
+        )
+    elif df_res is not None:
+        st.info("No results — the data source may be rate-limiting or the symbols returned no data.")

@@ -1,7 +1,7 @@
 """
 QuantFX Terminal — ATR Renko & Macro Smart Money Structure
-Streamlit rewrite with custom candle coloring, right-side axes, 
-Heikin Ashi EMAs, and targeted multi-market Telegram alerts.
+Updated with fully synchronized x-axes (shared zoom/pan across 
+Heikin Ashi, ATR Renko, MACD, and RSI charts).
 """
 
 import numpy as np
@@ -523,10 +523,6 @@ def compute_7day_outlook(symbol, display, period="1y", interval="1d"):
 
         last_close = float(close.iloc[-1])
         last_ema21, last_ema50 = float(ema21.iloc[-1]), float(ema50.iloc[-1])
-        prev_ema21, prev_ema50 = float(ema21.iloc[-2]), float(ema50.iloc[-2])
-        last_rsi = float(rsi.iloc[-1]) if not np.isnan(rsi.iloc[-1]) else 50.0
-        last_macd_hist = float(macd_hist.iloc[-1])
-        prev_macd_hist = float(macd_hist.iloc[-2])
         last_atr = float(atr.iloc[-1]) if not np.isnan(atr.iloc[-1]) else last_close * 0.02
         atr_pct = (last_atr / last_close) * 100
 
@@ -538,10 +534,6 @@ def compute_7day_outlook(symbol, display, period="1y", interval="1d"):
         else:
             avg_bar_minutes = 1440.0
         bars_in_7_days = max((7 * 24 * 60) / avg_bar_minutes, 1.0)
-
-        ema21_slope_pct = 0.0
-        if len(ema21) > 6 and float(ema21.iloc[-6]) != 0:
-            ema21_slope_pct = ((last_ema21 - float(ema21.iloc[-6])) / float(ema21.iloc[-6])) * 100
 
         reasons = []
         bias_score = 0.0
@@ -673,14 +665,15 @@ TIMEFRAME_PERIODS = {
 
 
 # =====================================================================
-# CHARTING (Plotly — Renko & Heikin Ashi with Right-Side Values & EMAs)
+# CHARTING (Plotly — Synchronized X-Axes, Right-Side Values & EMAs)
 # =====================================================================
 def render_charts(renko_df, ha_df, brick_size, display, ema_fast, ema_slow):
-    x_renko = list(range(len(renko_df)))
-    x_ha = list(range(len(ha_df)))
+    # Use datetime arrays for synchronized cross-chart zooming/panning
+    x_ha = ha_df.index
+    x_renko = renko_df["Date"]
 
     fig = make_subplots(
-        rows=4, cols=1, shared_xaxes=False,
+        rows=4, cols=1, shared_xaxes=True,  # Synchronizes zoom/pan across all subplots
         row_heights=[0.30, 0.32, 0.20, 0.18],
         vertical_spacing=0.035,
         subplot_titles=(
@@ -736,14 +729,17 @@ def render_charts(renko_df, ha_df, brick_size, display, ema_fast, ema_slow):
         color, label = struct_style[s_type]
         s_level = renko_df["StructureLevel"].iloc[i]
         origin_idx = renko_df["StructureOriginIdx"].iloc[i]
-        span_start = int(origin_idx) if pd.notna(origin_idx) else max(i - 6, 0)
+        span_start_idx = int(origin_idx) if pd.notna(origin_idx) else max(i - 6, 0)
+        span_start_date = renko_df["Date"].iloc[span_start_idx]
+        current_date = renko_df["Date"].iloc[i]
+
         fig.add_shape(
-            type="line", x0=span_start, x1=i, y0=s_level, y1=s_level,
+            type="line", x0=span_start_date, x1=current_date, y0=s_level, y1=s_level,
             line=dict(color=color, width=1.5, dash="dash"), opacity=0.6,
             row=2, col=1,
         )
         fig.add_annotation(
-            x=i, y=s_level, text=label, showarrow=False,
+            x=current_date, y=s_level, text=label, showarrow=False,
             font=dict(color="#FFFFFF", size=10), bgcolor="#1E222D",
             bordercolor=color, borderwidth=1, row=2, col=1,
             yshift=14 if s_type in ("BOS_DEMAND", "CHOCH_DEMAND") else -14,
@@ -758,17 +754,17 @@ def render_charts(renko_df, ha_df, brick_size, display, ema_fast, ema_slow):
     ), row=3, col=1)
     fig.add_hline(y=0, line=dict(color=COLOR_ZERO_LINE, width=1), row=3, col=1)
 
-    buy_x = [i for i in range(len(renko_df)) if renko_df["Div_Signal"].iloc[i] == "BUY"]
-    sell_x = [i for i in range(len(renko_df)) if renko_df["Div_Signal"].iloc[i] == "SELL"]
-    if buy_x:
+    buy_dates = renko_df["Date"][renko_df["Div_Signal"] == "BUY"]
+    sell_dates = renko_df["Date"][renko_df["Div_Signal"] == "SELL"]
+    if not buy_dates.empty:
         fig.add_trace(go.Scatter(
-            x=buy_x, y=renko_df["MACD"].iloc[buy_x], mode="markers",
+            x=buy_dates, y=renko_df.loc[renko_df["Div_Signal"] == "BUY", "MACD"], mode="markers",
             marker=dict(color=COLOR_GREEN, size=9, symbol="triangle-up"),
             name="MACD Buy Cross",
         ), row=3, col=1)
-    if sell_x:
+    if not sell_dates.empty:
         fig.add_trace(go.Scatter(
-            x=sell_x, y=renko_df["MACD"].iloc[sell_x], mode="markers",
+            x=sell_dates, y=renko_df.loc[renko_df["Div_Signal"] == "SELL", "MACD"], mode="markers",
             marker=dict(color=COLOR_RED, size=9, symbol="triangle-down"),
             name="MACD Sell Cross",
         ), row=3, col=1)
@@ -790,6 +786,8 @@ def render_charts(renko_df, ha_df, brick_size, display, ema_fast, ema_slow):
         margin=dict(l=10, r=10, t=50, b=10),
         xaxis_rangeslider_visible=False,
         xaxis2_rangeslider_visible=False,
+        xaxis3_rangeslider_visible=False,
+        xaxis4_rangeslider_visible=False,
     )
     for r in range(1, 5):
         fig.update_xaxes(showgrid=False, row=r, col=1)
@@ -853,7 +851,6 @@ st.sidebar.markdown("### 🔔 Automated Triggers")
 if st.sidebar.button("🚀 Run Rule-Based Telegram Scan", use_container_width=True):
     triggered_messages = []
     
-    # Rules:
     # 1. Forex & Commodities on 30m -> Trigger on CH-D, CH-S, B-S, B-D
     fx_comm_watchlist = [("Commodities", COMMODITIES), ("Forex", FOREX_PAIRS)]
     for cat_name, symbols in fx_comm_watchlist:
@@ -864,7 +861,7 @@ if st.sidebar.button("🚀 Run Rule-Based Telegram Scan", use_container_width=Tr
                     renko_df, _ = build_atr_renko_df(df, atr_period=int(atr_period), atr_multiplier=float(atr_multiplier))
                     ev = latest_structure_event(renko_df, lookback=3)
                     if ev and ev["type"] in ["CHOCH_DEMAND", "CHOCH_SUPPLY", "BOS_DEMAND", "BOS_SUPPLY"]:
-                        if ev["bars_ago"] <= 1:  # Fresh trigger on recent bars
+                        if ev["bars_ago"] <= 1:
                             triggered_messages.append(f"🚨 *[30m FX/Comm]* *{disp}* triggered *{ev['label']}* at `${ev['level']:,.4f}`")
             except Exception:
                 continue
@@ -874,12 +871,12 @@ if st.sidebar.button("🚀 Run Rule-Based Telegram Scan", use_container_width=Tr
     for cat_name, symbols in indices_watchlist:
         for sym, disp in symbols:
             try:
-                df = fetch_live_ohlc(sym, period="60d", interval="1h") # Resample to 4h if interval 4h not supported natively
+                df = fetch_live_ohlc(sym, period="60d", interval="1h")
                 if not df.empty:
                     df_4h = df.resample("4h").agg({"Open": "first", "High": "max", "Low": "min", "Close": "last", "Volume": "sum"}).dropna()
                     renko_df, _ = build_atr_renko_df(df_4h, atr_period=int(atr_period), atr_multiplier=float(atr_multiplier))
                     ev = latest_structure_event(renko_df, lookback=3)
-                    if ev and ev["type"] in ["CHOCH_DEMAND", "BOS_DEMAND"]: # CH-S & B-S triggers
+                    if ev and ev["type"] in ["CHOCH_DEMAND", "BOS_DEMAND"]:
                         if ev["bars_ago"] <= 1:
                             triggered_messages.append(f"🚨 *[4h {cat_name}]* *{disp}* triggered *{ev['label']}* at `${ev['level']:,.2f}`")
             except Exception:

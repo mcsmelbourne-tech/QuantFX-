@@ -1,26 +1,36 @@
-import sys
-from datetime import datetime
+"""
+QuantFX Terminal — ATR Renko & Macro Smart Money Structure
+Streamlit rewrite (the original was a PyQt6 desktop app and cannot run on
+Streamlit Cloud — no display server, no `import streamlit`, and it ended in
+`sys.exit(app.exec())` which opens a native GUI window).
+
+All analytics (ATR Renko construction, Heikin Ashi, MACD, RSI, BOS/CHoCH
+market-structure detection, the oracle score, and the 7-day outlook) are
+carried over unchanged from the original. The UI layer is new: Streamlit for
+controls/layout, Plotly for interactive (zoom/pan built in) charts instead of
+matplotlib+Qt canvases.
+"""
+
 import numpy as np
 import pandas as pd
 import yfinance as yf
 import requests
-import matplotlib
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
-import matplotlib.patches as patches
-
-from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
-from PyQt6.QtWidgets import (
-    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QTabWidget, QTableWidget, QTableWidgetItem, QHeaderView,
-    QPushButton, QLabel, QLineEdit, QTextBrowser, QProgressBar,
-    QSplitter, QSpinBox, QDialog, QFormLayout, QMessageBox
-)
-from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer
-from PyQt6.QtGui import QColor, QKeySequence, QShortcut
+import streamlit as st
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 
 # =====================================================================
-# COLORS – TradingView‑style dark + neon
+# PAGE CONFIG
+# =====================================================================
+st.set_page_config(
+    page_title="QuantFX Terminal",
+    page_icon="📈",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
+
+# =====================================================================
+# COLORS – TradingView-style dark + neon
 # =====================================================================
 COLOR_BG_DARK = "#0B0E11"
 COLOR_PANEL_BG = "#11151C"
@@ -34,68 +44,64 @@ COLOR_BEAR = "#FF4F7B"
 COLOR_GREEN = "#00FF66"
 COLOR_RED = "#FF3333"
 
-COLOR_MA9 = "#00FF66"
-COLOR_MA20 = "#FF3333"
+COLOR_MA_FAST = "#00FF66"
+COLOR_MA_SLOW = "#FF3333"
 
 COLOR_MACD_LINE = "#00FFCC"
 COLOR_SIGNAL_LINE = "#FF66CC"
 COLOR_ZERO_LINE = "#4C566A"
-COLOR_DARK_TEXT = "#000000"
 
-# Market structure (BOS / CHoCH) overlay colors
-COLOR_BOS_DEMAND = "#26FF9A"     # bullish continuation
-COLOR_BOS_SUPPLY = "#FF4F7B"     # bearish continuation
-COLOR_CHOCH_DEMAND = "#00D4FF"   # bullish reversal / structural flip
-COLOR_CHOCH_SUPPLY = "#FF9900"   # bearish reversal / structural flip
-COLOR_SWING_MARKER = "#9FA8C3"
+COLOR_BOS_DEMAND = "#26FF9A"
+COLOR_BOS_SUPPLY = "#FF4F7B"
+COLOR_CHOCH_DEMAND = "#00D4FF"
+COLOR_CHOCH_SUPPLY = "#FF9900"
 
-BG_IMAGE_PATH = None
+# =====================================================================
+# GLOBAL DARK THEME CSS
+# =====================================================================
+st.markdown(
+    f"""
+    <style>
+    .stApp {{ background-color: {COLOR_BG_DARK}; }}
+    section[data-testid="stSidebar"] {{ background-color: {COLOR_PANEL_BG}; }}
+    div[data-testid="stMetric"] {{
+        background-color: {COLOR_PANEL_BG};
+        border: 1px solid {COLOR_BORDER};
+        border-radius: 6px;
+        padding: 10px 14px;
+    }}
+    .qfx-badge {{
+        display:inline-block; padding:3px 10px; border-radius:4px;
+        font-weight:700; font-size:12px; letter-spacing:0.5px;
+    }}
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 
-# Global Telegram Config Cache
-TELEGRAM_CONFIG = {
-    "token": "",
-    "chat_id": ""
-}
-
-def send_telegram_alert(message):
-    token = TELEGRAM_CONFIG.get("token", "").strip()
-    chat_id = TELEGRAM_CONFIG.get("chat_id", "").strip()
+# =====================================================================
+# TELEGRAM
+# =====================================================================
+def send_telegram_alert(message, token, chat_id):
+    token = (token or "").strip()
+    chat_id = (chat_id or "").strip()
     if not token or not chat_id:
         return False, "Bot Token or Chat ID is missing."
-    
+
     url = f"https://api.telegram.org/bot{token}/sendMessage"
-    payload = {
-        "chat_id": chat_id,
-        "text": message,
-        "parse_mode": "Markdown"
-    }
+    payload = {"chat_id": chat_id, "text": message, "parse_mode": "Markdown"}
     try:
         response = requests.post(url, json=payload, timeout=10)
         data = response.json()
         if data.get("ok"):
             return True, "Success"
-        else:
-            return False, data.get("description", "Unknown Telegram API error")
+        return False, data.get("description", "Unknown Telegram API error")
     except Exception as e:
         return False, str(e)
 
-# =====================================================================
-# TABLE ITEM
-# =====================================================================
-class NumericTableWidgetItem(QTableWidgetItem):
-    def __init__(self, text):
-        super().__init__(text)
-
-    def __lt__(self, other):
-        try:
-            val1 = float(self.text().replace('$', '').replace('%', '').replace(',', ''))
-            val2 = float(other.text().replace('$', '').replace('%', '').replace(',', ''))
-            return val1 < val2
-        except ValueError:
-            return super().__lt__(other)
 
 # =====================================================================
-# INDICATORS & REFINED MACD CROSSOVER DETECTION
+# INDICATORS & MACD CROSSOVER DETECTION
 # =====================================================================
 def compute_heikin_ashi(df):
     """Standard Heiken Ashi transform of an OHLC dataframe."""
@@ -109,14 +115,14 @@ def compute_heikin_ashi(df):
 
     ha["High"] = pd.concat([df["High"], ha["Open"], ha["Close"]], axis=1).max(axis=1)
     ha["Low"] = pd.concat([df["Low"], ha["Open"], ha["Close"]], axis=1).min(axis=1)
-
     return ha
+
 
 def detect_macd_crossovers(renko_df):
     """Detects robust MACD line and Signal line crossovers for Buy/Sell triggers."""
     macd = renko_df["MACD"].values
     signal = renko_df["MACD_Signal"].values
-    
+
     macd_signals = ["HOLD"] * len(renko_df)
     macd_types = [None] * len(renko_df)
 
@@ -124,16 +130,15 @@ def detect_macd_crossovers(renko_df):
         return macd_signals, macd_types
 
     for i in range(1, len(renko_df)):
-        # Bullish Crossover: MACD crosses above Signal line
         if macd[i] > signal[i] and macd[i - 1] <= signal[i - 1]:
             macd_signals[i] = "BUY"
             macd_types[i] = "MACD Cross Up"
-        # Bearish Crossover: MACD crosses below Signal line
         elif macd[i] < signal[i] and macd[i - 1] >= signal[i - 1]:
             macd_signals[i] = "SELL"
             macd_types[i] = "MACD Cross Down"
 
     return macd_signals, macd_types
+
 
 # =====================================================================
 # SMART MONEY STRUCTURE — BOS & CHoCH
@@ -236,12 +241,14 @@ def detect_market_structure(high, low, close, swing_lookback=5, brick_type=None)
         "Trend": trend_arr,
     })
 
+
 STRUCTURE_LABELS = {
     "BOS_DEMAND": "B-S",
     "BOS_SUPPLY": "B-D",
     "CHOCH_DEMAND": "CH-S",
     "CHOCH_SUPPLY": "CH-D",
 }
+
 
 def latest_structure_event(struct_df, lookback=15):
     if struct_df is None or struct_df.empty or "Structure" not in struct_df.columns:
@@ -260,15 +267,16 @@ def latest_structure_event(struct_df, lookback=15):
         "bars_ago": int((len(struct_df) - 1) - last_idx),
     }
 
+
 def build_atr_renko_df(df,
-                       atr_period=21,
-                       atr_multiplier=3.0,
-                       ema_fast=21,
-                       ema_slow=50,
-                       macd_fast=12,
-                       macd_slow=26,
-                       macd_signal=9,
-                       rsi_period=14):
+                        atr_period=21,
+                        atr_multiplier=3.0,
+                        ema_fast=21,
+                        ema_slow=50,
+                        macd_fast=12,
+                        macd_slow=26,
+                        macd_signal=9,
+                        rsi_period=14):
     if df.empty or len(df) < atr_period + 5:
         return pd.DataFrame(), 1.0
 
@@ -322,14 +330,13 @@ def build_atr_renko_df(df,
     renko_df["EMA_SLOW"] = r_close.ewm(span=ema_slow, adjust=False).mean()
 
     # ---- MACD Calculation -------------------------------------------------
-    # NOTE: MACD is intentionally computed from the *real*, time-indexed close
-    # price series (df["Close"]), not from the Renko brick closes. Renko bricks
-    # collapse a whole price history down to only as many rows as there are
-    # bricks (often just a handful), which starves the 12/26/9 EMAs of data and
-    # produces a MACD line that barely moves off a single smooth sweep — i.e.
-    # it "looks flat". Computing MACD on the full-resolution close series gives
-    # it enough data to actually oscillate and cross, and each Renko brick is
-    # then stamped with the MACD/Signal value as of that brick's date.
+    # MACD is computed from the *real*, time-indexed close price series
+    # (df["Close"]), not from the Renko brick closes. Renko bricks collapse a
+    # whole price history down to only as many rows as there are bricks
+    # (often just a handful), which starves the 12/26/9 EMAs of data and
+    # makes MACD look flat. Computing it on the full-resolution close series
+    # lets it actually oscillate/cross, and each brick is stamped with the
+    # MACD/Signal value as of that brick's date.
     real_exp1 = closes.ewm(span=macd_fast, adjust=False).mean()
     real_exp2 = closes.ewm(span=macd_slow, adjust=False).mean()
     real_macd = real_exp1 - real_exp2
@@ -358,29 +365,19 @@ def build_atr_renko_df(df,
         if i == 0:
             signals.append("HOLD")
             continue
-
         ema_fast_now = renko_df.loc[i, "EMA_FAST"]
         ema_slow_now = renko_df.loc[i, "EMA_SLOW"]
-        ema_fast_prev = renko_df.loc[i-1, "EMA_FAST"]
-        ema_slow_prev = renko_df.loc[i-1, "EMA_SLOW"]
-
-        buy = False
-        sell = False
+        ema_fast_prev = renko_df.loc[i - 1, "EMA_FAST"]
+        ema_slow_prev = renko_df.loc[i - 1, "EMA_SLOW"]
 
         if ema_fast_now > ema_slow_now and ema_fast_prev <= ema_slow_prev:
-            buy = True
-        elif ema_fast_now < ema_slow_now and ema_fast_prev >= ema_slow_prev:
-            sell = True
-
-        if buy:
             signals.append("BUY")
-        elif sell:
+        elif ema_fast_now < ema_slow_now and ema_fast_prev >= ema_slow_prev:
             signals.append("SELL")
         else:
             signals.append("HOLD")
-
     renko_df["Signal"] = signals
-    
+
     macd_sigs, macd_types = detect_macd_crossovers(renko_df)
     renko_df["Div_Signal"] = macd_sigs
     renko_df["Div_Type"] = macd_types
@@ -395,14 +392,17 @@ def build_atr_renko_df(df,
 
     return renko_df, brick_size
 
+
 # =====================================================================
 # DATA SOURCE & OUTLOOK
 # =====================================================================
+@st.cache_data(ttl=300, show_spinner=False)
 def fetch_live_ohlc(symbol="GC=F", period="6mo", interval="1d"):
     df = yf.download(symbol, period=period, interval=interval, progress=False)
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.get_level_values(0)
     return df
+
 
 def evaluate_oracle_score(symbol, display=None):
     try:
@@ -501,6 +501,7 @@ def evaluate_oracle_score(symbol, display=None):
         }
     except Exception:
         return None
+
 
 def compute_7day_outlook(symbol, display, period="1y", interval="1d"):
     try:
@@ -627,10 +628,8 @@ def compute_7day_outlook(symbol, display, period="1y", interval="1d"):
             structure_event = latest_structure_event(renko_df, lookback=15)
 
             structure_weight = {
-                "BOS_DEMAND": 1.2,
-                "BOS_SUPPLY": -1.2,
-                "CHOCH_DEMAND": 1.8,
-                "CHOCH_SUPPLY": -1.8,
+                "BOS_DEMAND": 1.2, "BOS_SUPPLY": -1.2,
+                "CHOCH_DEMAND": 1.8, "CHOCH_SUPPLY": -1.8,
             }
             if structure_event:
                 s_type = structure_event["type"]
@@ -669,8 +668,6 @@ def compute_7day_outlook(symbol, display, period="1y", interval="1d"):
             "range_low": min(range_low, range_high),
             "range_high": max(range_low, range_high),
             "reasons": reasons,
-            "last_ema9": last_ema21,
-            "last_ema20": last_ema50,
             "last_rsi": last_rsi,
             "last_macd": float(macd.iloc[-1]),
             "last_macd_signal": float(macd_signal.iloc[-1]),
@@ -680,8 +677,9 @@ def compute_7day_outlook(symbol, display, period="1y", interval="1d"):
     except Exception:
         return None
 
+
 # =====================================================================
-# LISTS
+# WATCHLISTS
 # =====================================================================
 nifty200_raw = [
 "ABB","ABFRL","ACC","ADANIENSOL","ADANIENT","ADANIGREEN","ADANIPORTS","ADANIPOWER",
@@ -725,6 +723,7 @@ us100_raw = [
 
 nifty200_yf = [f"{t}.NS" for t in nifty200_raw]
 
+
 def convert_us100_symbol(t):
     if t == "NAS100":
         return "^NDX"
@@ -734,1159 +733,317 @@ def convert_us100_symbol(t):
         return "^DJI"
     return t
 
+
 us100_yf = [convert_us100_symbol(t) for t in us100_raw] + ["^IXIC"]
 
-# =====================================================================
-# WORKERS
-# =====================================================================
-class ScannerWorker(QThread):
-    progress = pyqtSignal(int)
-    resultReady = pyqtSignal(dict)
+COMMODITIES = [("GC=F", "GOLD"), ("SI=F", "SILVER"), ("KC=F", "COFFEE"), ("CL=F", "CRUDE"), ("NG=F", "GAS")]
+FOREX_PAIRS = [("EURUSD=X", "EUR/USD"), ("GBPUSD=X", "GBP/USD"), ("USDJPY=X", "USD/JPY"),
+               ("AUDUSD=X", "AUD/USD"), ("USDCAD=X", "USD/CAD")]
 
-    def run(self):
-        commodities = [
-            ("GC=F", "GOLD"), ("SI=F", "SILVER"), ("KC=F", "COFFEE"),
-            ("CL=F", "CRUDE"), ("NG=F", "GAS")
-        ]
-        forex_pairs = [
-            ("EURUSD=X", "EUR/USD"), ("GBPUSD=X", "GBP/USD"),
-            ("USDJPY=X", "USD/JPY"), ("AUDUSD=X", "AUD/USD"),
-            ("USDCAD=X", "USD/CAD")
-        ]
+WATCHLIST_CATEGORIES = {
+    "Commodities": COMMODITIES,
+    "Forex": FOREX_PAIRS,
+    "Nifty200": list(zip(nifty200_yf, nifty200_raw)),
+    "US100": list(zip(us100_yf, us100_raw + ["IXIC"])),
+}
 
-        comm_res = []
-        forex_res = []
-        nifty_res = []
-        us100_res = []
+TIMEFRAME_PERIODS = {
+    "15m": "10d", "30m": "20d", "60m": "60d",
+    "4h": "180d", "1d": "1y", "1wk": "5y",
+}
 
-        total = len(commodities) + len(forex_pairs) + len(nifty200_yf) + len(us100_yf)
-        count = 0
 
-        for s, d in commodities:
-            res = evaluate_oracle_score(s, display=d)
-            if res:
-                comm_res.append(res)
-            count += 1
-            self.progress.emit(int((count / total) * 100))
+def run_scanner(category_names):
+    """Runs the oracle score across the selected watchlist categories."""
+    tasks = []
+    for cat in category_names:
+        tasks.extend(WATCHLIST_CATEGORIES[cat])
 
-        for s, d in forex_pairs:
-            res = evaluate_oracle_score(s, display=d)
-            if res:
-                forex_res.append(res)
-            count += 1
-            self.progress.emit(int((count / total) * 100))
+    results = []
+    progress = st.progress(0, text="Scanning...")
+    for i, (sym, disp) in enumerate(tasks):
+        res = evaluate_oracle_score(sym, display=disp)
+        if res:
+            results.append(res)
+        progress.progress((i + 1) / max(len(tasks), 1), text=f"Scanning {disp}...")
+    progress.empty()
+    return pd.DataFrame(results)
 
-        for yf_sym, disp in zip(nifty200_yf, nifty200_raw):
-            res = evaluate_oracle_score(yf_sym, display=disp)
-            if res:
-                nifty_res.append(res)
-            count += 1
-            self.progress.emit(int((count / total) * 100))
-
-        for yf_sym, disp in zip(us100_yf, us100_raw + ["IXIC"]):
-            res = evaluate_oracle_score(yf_sym, display=disp)
-            if res:
-                us100_res.append(res)
-            count += 1
-            self.progress.emit(int((count / total) * 100))
-
-        results = {
-            "commodities": comm_res,
-            "forex": forex_res,
-            "nifty200": nifty_res,
-            "us100": us100_res
-        }
-        self.resultReady.emit(results)
-
-class NewsWorker(QThread):
-    resultReady = pyqtSignal(list, str)
-
-    def __init__(self, symbol, display):
-        super().__init__()
-        self.symbol = symbol
-        self.display = display
-
-    def run(self):
-        items = []
-        try:
-            ticker = yf.Ticker(self.symbol)
-            raw = ticker.news or []
-            if isinstance(raw, list):
-                items = raw
-        except Exception:
-            items = []
-        self.resultReady.emit(items, self.display)
-
-class OutlookWorker(QThread):
-    resultReady = pyqtSignal(object, str)
-
-    def __init__(self, symbol, display, period="1y", interval="1d"):
-        super().__init__()
-        self.symbol = symbol
-        self.display = display
-        self.period = period
-        self.interval = interval
-
-    def run(self):
-        try:
-            outlook = compute_7day_outlook(self.symbol, self.display, self.period, self.interval)
-        except Exception:
-            outlook = None
-        self.resultReady.emit(outlook, self.display)
 
 # =====================================================================
-# DIALOGS & WIDGETS
+# CHARTING (Plotly — zoom/pan are built in)
 # =====================================================================
-class TelegramSettingsDialog(QDialog):
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setWindowTitle("Telegram Configuration")
-        self.resize(380, 200)
-        
-        layout = QFormLayout(self)
-        self.token_input = QLineEdit()
-        self.token_input.setText(TELEGRAM_CONFIG.get("token", ""))
-        self.token_input.setPlaceholderText("Enter Bot Token...")
-        
-        self.chat_input = QLineEdit()
-        self.chat_input.setText(TELEGRAM_CONFIG.get("chat_id", ""))
-        self.chat_input.setPlaceholderText("Enter Chat ID...")
-        
-        layout.addRow("Bot Token", self.token_input)
-        layout.addRow("Chat ID", self.chat_input)
-        
-        btn_test = QPushButton("Send Test Message")
-        btn_test.setStyleSheet(f"background-color: {COLOR_PANEL_BG}; color: {COLOR_GREEN}; border: 1px solid {COLOR_GREEN};")
-        btn_test.clicked.connect(self.send_test_alert)
-        layout.addRow(btn_test)
-        
-        btn_save = QPushButton("Save Settings")
-        btn_save.clicked.connect(self.save_settings)
-        layout.addRow(btn_save)
+def render_charts(renko_df, ha_df, brick_size, display, ema_fast, ema_slow):
+    x_renko = list(range(len(renko_df)))
+    x_ha = list(range(len(ha_df)))
 
-    def send_test_alert(self):
-        TELEGRAM_CONFIG["token"] = self.token_input.text().strip()
-        TELEGRAM_CONFIG["chat_id"] = self.chat_input.text().strip()
-        
-        success, msg = send_telegram_alert("🟢 *QuantFX Terminal Test Alert*\nConnection successfully established!")
-        if success:
-            QMessageBox.information(self, "Success", "Test message sent to Telegram successfully!")
-        else:
-            QMessageBox.critical(self, "Error", f"Failed to send test message:\n{msg}")
+    fig = make_subplots(
+        rows=4, cols=1, shared_xaxes=False,
+        row_heights=[0.30, 0.32, 0.20, 0.18],
+        vertical_spacing=0.035,
+        subplot_titles=(
+            f"{display} — Heikin Ashi",
+            f"{display} — ATR Renko (brick ≈ {brick_size:,.4g})",
+            "MACD (real price series)",
+            "RSI",
+        ),
+    )
 
-    def save_settings(self):
-        TELEGRAM_CONFIG["token"] = self.token_input.text().strip()
-        TELEGRAM_CONFIG["chat_id"] = self.chat_input.text().strip()
-        QMessageBox.information(self, "Saved", "Telegram settings successfully updated.")
-        self.accept()
+    # --- Row 1: Heikin Ashi candles -----------------------------------
+    fig.add_trace(go.Candlestick(
+        x=x_ha, open=ha_df["Open"], high=ha_df["High"], low=ha_df["Low"], close=ha_df["Close"],
+        increasing_line_color=COLOR_BULL, decreasing_line_color=COLOR_BEAR,
+        name="Heikin Ashi", showlegend=False,
+    ), row=1, col=1)
 
-class SearchDialog(QDialog):
-    def __init__(self, table_widget, parent=None):
-        super().__init__(parent)
-        self.setWindowTitle("Search")
-        self.resize(300, 100)
-        self.table = table_widget
-        layout = QVBoxLayout(self)
+    # --- Row 2: ATR Renko candles + EMAs + structure -------------------
+    fig.add_trace(go.Candlestick(
+        x=x_renko, open=renko_df["Open"], high=renko_df["High"], low=renko_df["Low"], close=renko_df["Close"],
+        increasing_line_color=COLOR_BULL, decreasing_line_color=COLOR_BEAR,
+        name="ATR Renko", showlegend=False,
+    ), row=2, col=1)
+    fig.add_trace(go.Scatter(
+        x=x_renko, y=renko_df["EMA_FAST"], line=dict(color=COLOR_MA_FAST, width=1.5),
+        name=f"EMA {ema_fast}",
+    ), row=2, col=1)
+    fig.add_trace(go.Scatter(
+        x=x_renko, y=renko_df["EMA_SLOW"], line=dict(color=COLOR_MA_SLOW, width=1.5),
+        name=f"EMA {ema_slow}",
+    ), row=2, col=1)
 
-        self.search_input = QLineEdit()
-        self.search_input.setPlaceholderText("Enter symbol...")
-        self.search_input.textChanged.connect(self.filter_table)
-        layout.addWidget(self.search_input)
+    struct_style = {
+        "BOS_DEMAND": (COLOR_BOS_DEMAND, "B-S"),
+        "BOS_SUPPLY": (COLOR_BOS_SUPPLY, "B-D"),
+        "CHOCH_DEMAND": (COLOR_CHOCH_DEMAND, "CH-S"),
+        "CHOCH_SUPPLY": (COLOR_CHOCH_SUPPLY, "CH-D"),
+    }
+    for i in range(len(renko_df)):
+        s_type = renko_df["Structure"].iloc[i]
+        if s_type not in struct_style:
+            continue
+        color, label = struct_style[s_type]
+        s_level = renko_df["StructureLevel"].iloc[i]
+        origin_idx = renko_df["StructureOriginIdx"].iloc[i]
+        span_start = int(origin_idx) if pd.notna(origin_idx) else max(i - 6, 0)
+        fig.add_shape(
+            type="line", x0=span_start, x1=i, y0=s_level, y1=s_level,
+            line=dict(color=color, width=1.5, dash="dash"), opacity=0.6,
+            row=2, col=1,
+        )
+        fig.add_annotation(
+            x=i, y=s_level, text=label, showarrow=False,
+            font=dict(color="#FFFFFF", size=10), bgcolor="#1E222D",
+            bordercolor=color, borderwidth=1, row=2, col=1,
+            yshift=14 if s_type in ("BOS_DEMAND", "CHOCH_DEMAND") else -14,
+        )
 
-    def filter_table(self, text):
-        for row in range(self.table.rowCount()):
-            item = self.table.item(row, 0)
-            if item:
-                match = text.lower() in item.text().lower()
-                self.table.setRowHidden(row, not match)
+    # --- Row 3: MACD -----------------------------------------------------
+    fig.add_trace(go.Scatter(
+        x=x_renko, y=renko_df["MACD"], line=dict(color=COLOR_MACD_LINE, width=1.6), name="MACD",
+    ), row=3, col=1)
+    fig.add_trace(go.Scatter(
+        x=x_renko, y=renko_df["MACD_Signal"], line=dict(color=COLOR_SIGNAL_LINE, width=1.6), name="Signal",
+    ), row=3, col=1)
+    fig.add_hline(y=0, line=dict(color=COLOR_ZERO_LINE, width=1), row=3, col=1)
 
-class ImageBackgroundWidget(QWidget):
-    def __init__(self, image_path=None, parent=None):
-        super().__init__(parent)
-        self.image_path = image_path
+    buy_x = [i for i in range(len(renko_df)) if renko_df["Div_Signal"].iloc[i] == "BUY"]
+    sell_x = [i for i in range(len(renko_df)) if renko_df["Div_Signal"].iloc[i] == "SELL"]
+    if buy_x:
+        fig.add_trace(go.Scatter(
+            x=buy_x, y=renko_df["MACD"].iloc[buy_x], mode="markers",
+            marker=dict(color=COLOR_GREEN, size=9, symbol="triangle-up"),
+            name="MACD Buy Cross",
+        ), row=3, col=1)
+    if sell_x:
+        fig.add_trace(go.Scatter(
+            x=sell_x, y=renko_df["MACD"].iloc[sell_x], mode="markers",
+            marker=dict(color=COLOR_RED, size=9, symbol="triangle-down"),
+            name="MACD Sell Cross",
+        ), row=3, col=1)
+
+    # --- Row 4: RSI --------------------------------------------------------
+    fig.add_trace(go.Scatter(
+        x=x_renko, y=renko_df["RSI"], line=dict(color="#FFD700", width=1.5), name="RSI",
+    ), row=4, col=1)
+    fig.add_hline(y=70, line=dict(color=COLOR_RED, width=1, dash="dash"), row=4, col=1)
+    fig.add_hline(y=30, line=dict(color=COLOR_GREEN, width=1, dash="dash"), row=4, col=1)
+    fig.update_yaxes(range=[0, 100], row=4, col=1)
+
+    fig.update_layout(
+        height=980,
+        paper_bgcolor=COLOR_BG_DARK,
+        plot_bgcolor=COLOR_BG_DARK,
+        font=dict(color=COLOR_TEXT_MUTED, size=11),
+        legend=dict(orientation="h", y=1.02, x=0, bgcolor="rgba(0,0,0,0)"),
+        margin=dict(l=10, r=10, t=50, b=10),
+        xaxis_rangeslider_visible=False,
+        xaxis2_rangeslider_visible=False,
+    )
+    for r in range(1, 5):
+        fig.update_xaxes(showgrid=False, row=r, col=1)
+        fig.update_yaxes(gridcolor="#2A2F3A", row=r, col=1)
+
+    st.plotly_chart(fig, use_container_width=True, theme=None)
+
 
 # =====================================================================
-# MAIN WINDOW
+# SIDEBAR CONTROLS
 # =====================================================================
-class QuantFXTerminal(QMainWindow):
-    def __init__(self):
-        super().__init__()
-        self.setWindowTitle("QuantFX – ATR Renko & Macro Smart Money Structure")
-        self.resize(1600, 900)
+st.sidebar.markdown("## 📈 QuantFX Terminal")
+st.sidebar.caption("ATR Renko · Heikin Ashi · Macro Smart Money Structure")
 
-        self.current_symbol = "GC=F"
-        self.current_display = "GOLD"
-        self.current_interval = "1d"
-        self.current_period = "1y"
-        self.renko_len = 0
-        self.ha_len = 0
-        self.is_panning = False
-        self.pan_start_x = None
-        self.pan_source_axes = None
-        self.is_syncing_x = False
-        self.renko_df_cache = pd.DataFrame()
-        self.ha_df_cache = pd.DataFrame()
-        self.active_workers = []
+symbol_mode = st.sidebar.radio("Symbol source", ["Presets", "Custom"], horizontal=True)
 
-        self.setStyleSheet(f"""
-            QMainWindow {{
-                background-color: {COLOR_BG_DARK};
-            }}
-            QWidget {{
-                background-color: {COLOR_BG_DARK};
-                color: {COLOR_TEXT_MAIN};
-                font-family: Segoe UI, sans-serif;
-                font-size: 11px;
-            }}
-            QPushButton {{
-                background-color: #1E222D;
-                color: {COLOR_TEXT_MAIN};
-                border: 1px solid {COLOR_BORDER};
-                padding: 5px 12px;
-                border-radius: 4px;
-                font-weight: bold;
-            }}
-            QPushButton:hover {{
-                background-color: #2A2F3A;
-            }}
-            QTabWidget::pane {{
-                border: 1px solid {COLOR_BORDER};
-                background-color: {COLOR_PANEL_BG};
-            }}
-            QTableWidget {{
-                background-color: rgba(17, 21, 28, 0.9);
-                color: {COLOR_TEXT_MAIN};
-                gridline-color: {COLOR_BORDER};
-                font-size: 11px;
-                border: none;
-                selection-background-color: rgba(42, 47, 58, 0.9);
-            }}
-            QHeaderView::section {{
-                background-color: rgba(30, 34, 45, 0.95);
-                color: {COLOR_TEXT_MUTED};
-                font-weight: 600;
-                padding: 6px;
-                border: 1px solid {COLOR_BORDER};
-            }}
-            QTextBrowser {{
-                background-color: rgba(11, 15, 20, 0.95);
-                color: #00FFCC;
-                border: 1px solid {COLOR_BORDER};
-                font-size: 11px;
-            }}
-            QProgressBar {{
-                background-color: rgba(11, 15, 20, 0.8);
-                height: 4px;
-                border: none;
-            }}
-            QProgressBar::chunk {{
-                background-color: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                    stop:0 #00FF66, stop:0.5 #00CCFF, stop:1 #FF33CC);
-            }}
-        """)
+if symbol_mode == "Presets":
+    preset_cat = st.sidebar.selectbox("Category", list(WATCHLIST_CATEGORIES.keys()))
+    options = WATCHLIST_CATEGORIES[preset_cat]
+    choice = st.sidebar.selectbox("Symbol", options, format_func=lambda t: t[1])
+    current_symbol, current_display = choice
+else:
+    current_symbol = st.sidebar.text_input("Yahoo Finance symbol", value="GC=F")
+    current_display = st.sidebar.text_input("Display name", value=current_symbol)
 
-        central = ImageBackgroundWidget(BG_IMAGE_PATH)
-        self.setCentralWidget(central)
-        layout = QVBoxLayout(central)
+interval = st.sidebar.select_slider(
+    "Timeframe", options=list(TIMEFRAME_PERIODS.keys()), value="1d"
+)
+period = TIMEFRAME_PERIODS[interval]
 
-        header = QHBoxLayout()
-        title = QLabel("QuantFX")
-        title.setStyleSheet(
-            "font-size: 14px; font-weight: bold; color: #FFFFFF; letter-spacing: 1px;"
+st.sidebar.markdown("---")
+c1, c2 = st.sidebar.columns(2)
+ema_fast = c1.number_input("EMA Fast", min_value=1, max_value=200, value=21)
+ema_slow = c2.number_input("EMA Slow", min_value=1, max_value=200, value=50)
+
+c3, c4 = st.sidebar.columns(2)
+atr_period = c3.number_input("ATR Period", min_value=2, max_value=100, value=21)
+atr_multiplier = c4.number_input("ATR Mult.", min_value=0.1, max_value=10.0, value=3.0, step=0.1)
+
+st.sidebar.markdown("---")
+with st.sidebar.expander("Telegram alerts"):
+    tg_token = st.text_input("Bot Token", value=st.session_state.get("tg_token", ""), type="password")
+    tg_chat = st.text_input("Chat ID", value=st.session_state.get("tg_chat", ""))
+    st.session_state["tg_token"] = tg_token
+    st.session_state["tg_chat"] = tg_chat
+    if st.button("Send test alert"):
+        ok, msg = send_telegram_alert(
+            "🟢 *QuantFX Terminal Test Alert*\nConnection successfully established!", tg_token, tg_chat
         )
-        header.addWidget(title)
-        header.addStretch()
-
-        btn_telegram = QPushButton("Telegram")
-        btn_telegram.clicked.connect(self.open_telegram_dialog)
-        header.addWidget(btn_telegram)
-
-        btn_refresh = QPushButton("Refresh")
-        btn_refresh.clicked.connect(self.start_scan)
-        header.addWidget(btn_refresh)
-
-        layout.addLayout(header)
-
-        self.pbar = QProgressBar()
-        layout.addWidget(self.pbar)
-
-        main_splitter = QSplitter(Qt.Orientation.Horizontal)
-
-        self.tabs = QTabWidget()
-
-        comm_tab_widget = QWidget()
-        comm_tab_layout = QVBoxLayout(comm_tab_widget)
-        comm_tab_layout.setContentsMargins(4, 4, 4, 4)
-
-        lbl_comm_header = QLabel("COMMODITIES")
-        lbl_comm_header.setStyleSheet(
-            f"font-size: 11px; font-weight: bold; color: {COLOR_TEXT_MUTED}; margin-bottom: 2px;"
-        )
-        comm_tab_layout.addWidget(lbl_comm_header)
-
-        self.comm = self.make_table()
-        comm_tab_layout.addWidget(self.comm)
-
-        lbl_forex_header = QLabel("MAJOR FOREX PAIRS")
-        lbl_forex_header.setStyleSheet(
-            f"font-size: 11px; font-weight: bold; color: {COLOR_TEXT_MUTED}; margin-top: 6px; margin-bottom: 2px;"
-        )
-        comm_tab_layout.addWidget(lbl_forex_header)
-
-        self.forex = self.make_table()
-        comm_tab_layout.addWidget(self.forex)
-
-        self.tabs.addTab(comm_tab_widget, "Commodities & Forex")
-
-        self.nifty_table = self.make_table()
-        self.tabs.addTab(self.nifty_table, "Nifty 200")
-
-        self.us100_table = self.make_table()
-        self.tabs.addTab(self.us100_table, "US100")
-
-        main_splitter.addWidget(self.tabs)
-
-        chart_widget = QWidget()
-        chart_layout = QVBoxLayout(chart_widget)
-
-        tf_layout = QHBoxLayout()
-        tf_label = QLabel("Macro Timeframe:")
-        tf_label.setStyleSheet(f"color: {COLOR_TEXT_MUTED}; font-weight: bold;")
-        tf_layout.addWidget(tf_label)
-
-        self.btn_tf_15m = QPushButton("15m")
-        self.btn_tf_30m = QPushButton("30m")
-        self.btn_tf_1h = QPushButton("1h")
-        self.btn_tf_4h = QPushButton("4h")
-        self.btn_tf_1d = QPushButton("1d")
-        self.btn_tf_1wk = QPushButton("1wk")
-
-        self.tf_buttons = {
-            "15m": self.btn_tf_15m,
-            "30m": self.btn_tf_30m,
-            "60m": self.btn_tf_1h,
-            "4h": self.btn_tf_4h,
-            "1d": self.btn_tf_1d,
-            "1wk": self.btn_tf_1wk
-        }
-
-        self.btn_tf_15m.clicked.connect(lambda: self.set_timeframe("15m"))
-        self.btn_tf_30m.clicked.connect(lambda: self.set_timeframe("30m"))
-        self.btn_tf_1h.clicked.connect(lambda: self.set_timeframe("60m"))
-        self.btn_tf_4h.clicked.connect(lambda: self.set_timeframe("4h"))
-        self.btn_tf_1d.clicked.connect(lambda: self.set_timeframe("1d"))
-        self.btn_tf_1wk.clicked.connect(lambda: self.set_timeframe("1wk"))
-
-        for b in [self.btn_tf_15m, self.btn_tf_30m, self.btn_tf_1h, self.btn_tf_4h, self.btn_tf_1d, self.btn_tf_1wk]:
-            tf_layout.addWidget(b)
-
-        tf_layout.addStretch()
-        self.btn_zoom_in = QPushButton("Zoom In (+)")
-        self.btn_zoom_out = QPushButton("Zoom Out (-)")
-        self.btn_zoom_in.clicked.connect(lambda: self.adjust_zoom(0.8))
-        self.btn_zoom_out.clicked.connect(lambda: self.adjust_zoom(1.25))
-        tf_layout.addWidget(self.btn_zoom_in)
-        tf_layout.addWidget(self.btn_zoom_out)
-
-        chart_layout.addLayout(tf_layout)
-
-        ema_param_layout = QHBoxLayout()
-        lbl_fast = QLabel("EMA Fast:")
-        self.spin_fast = QSpinBox()
-        self.spin_fast.setRange(1, 200)
-        self.spin_fast.setValue(21)
-        self.spin_fast.valueChanged.connect(self.plot_atr_renko_chart)
-
-        lbl_slow = QLabel("EMA Slow:")
-        self.spin_slow = QSpinBox()
-        self.spin_slow.setRange(1, 200)
-        self.spin_slow.setValue(50)
-        self.spin_slow.valueChanged.connect(self.plot_atr_renko_chart)
-
-        ema_param_layout.addWidget(lbl_fast)
-        ema_param_layout.addWidget(self.spin_fast)
-        ema_param_layout.addWidget(lbl_slow)
-        ema_param_layout.addWidget(self.spin_slow)
-        ema_param_layout.addStretch()
-        chart_layout.addLayout(ema_param_layout)
-
-        self.chart_title = QLabel("ATR Renko × 3 + Macro EMA Cross")
-        self.chart_title.setStyleSheet(
-            f"font-size: 12px; color: {COLOR_TEXT_MUTED}; font-weight: bold;"
-        )
-        chart_layout.addWidget(self.chart_title)
-
-        plt.style.use("dark_background")
-
-        self.fig_ha, self.ax_ha = plt.subplots(figsize=(7, 3.6))
-        self.fig_ha.patch.set_facecolor(COLOR_BG_DARK)
-        self.ax_ha.set_facecolor(COLOR_BG_DARK)
-        self.canvas_ha = FigureCanvas(self.fig_ha)
-        chart_layout.addWidget(self.canvas_ha, 2)
-
-        self.fig_main, self.ax = plt.subplots(figsize=(7, 3.6))
-        self.fig_main.patch.set_facecolor(COLOR_BG_DARK)
-        self.ax.set_facecolor(COLOR_BG_DARK)
-        self.canvas_main = FigureCanvas(self.fig_main)
-        chart_layout.addWidget(self.canvas_main, 2)
-
-        self.fig_macd, self.ax_macd = plt.subplots(figsize=(7, 1.8))
-        self.fig_macd.patch.set_facecolor(COLOR_BG_DARK)
-        self.ax_macd.set_facecolor(COLOR_BG_DARK)
-        self.canvas_macd = FigureCanvas(self.fig_macd)
-        chart_layout.addWidget(self.canvas_macd, 1)
-
-        self.fig_rsi, self.ax_rsi = plt.subplots(figsize=(7, 1.8))
-        self.fig_rsi.patch.set_facecolor(COLOR_BG_DARK)
-        self.ax_rsi.set_facecolor(COLOR_BG_DARK)
-        self.canvas_rsi = FigureCanvas(self.fig_rsi)
-        chart_layout.addWidget(self.canvas_rsi, 1)
-
-        for canvas in (self.canvas_ha, self.canvas_main, self.canvas_macd, self.canvas_rsi):
-            canvas.mpl_connect("scroll_event", self.on_scroll_zoom)
-            canvas.mpl_connect("button_press_event", self.on_mouse_press)
-            canvas.mpl_connect("motion_notify_event", self.on_mouse_drag)
-            canvas.mpl_connect("button_release_event", self.on_mouse_release)
-
-        main_splitter.addWidget(chart_widget)
-
-        right_panel = QWidget()
-        right_layout = QVBoxLayout(right_panel)
-        right_layout.setContentsMargins(0, 0, 0, 0)
-
-        outlook_widget = QWidget()
-        outlook_widget.setStyleSheet(
-            f"background-color: {COLOR_PANEL_BG}; border: 1px solid {COLOR_BORDER}; border-radius: 4px;"
-        )
-        outlook_layout = QVBoxLayout(outlook_widget)
-        outlook_layout.setContentsMargins(10, 6, 10, 6)
-
-        self.outlook_title = QLabel("OUTLOOK")
-        self.outlook_title.setStyleSheet(
-            "font-size: 12px; font-weight: bold; color: #00FFCC; margin-bottom: 2px;"
-        )
-        outlook_layout.addWidget(self.outlook_title)
-
-        self.outlook_box = QTextBrowser()
-        self.outlook_box.setOpenExternalLinks(False)
-        self.outlook_box.setFixedHeight(190)
-        self.outlook_box.setStyleSheet("border: none; background-color: transparent;")
-        self.outlook_box.setHtml(
-            f"<p style='color:{COLOR_TEXT_MUTED};'>Loading outlook…</p>"
-        )
-        outlook_layout.addWidget(self.outlook_box)
-
-        outlook_widget.setMaximumHeight(230)
-        right_layout.addWidget(outlook_widget, 0)
-
-        news_widget = QWidget()
-        news_layout = QVBoxLayout(news_widget)
-        self.news_title = QLabel("LIVE NEWS")
-        self.news_title.setStyleSheet(
-            "font-size: 13px; font-weight: bold; color: #00FFCC;"
-        )
-        news_layout.addWidget(self.news_title)
-
-        self.news_box = QTextBrowser()
-        self.news_box.setOpenExternalLinks(True)
-        self.news_box.setHtml(
-            f"<p style='color:{COLOR_TEXT_MUTED};'>Loading news…</p>"
-        )
-        news_layout.addWidget(self.news_box)
-
-        right_layout.addWidget(news_widget, 1)
-
-        main_splitter.addWidget(right_panel)
-
-        main_splitter.setSizes([500, 750, 350])
-        layout.addWidget(main_splitter)
-
-        self.status = QLabel("Ready")
-        self.status.setStyleSheet(f"color: {COLOR_TEXT_MUTED};")
-        layout.addWidget(self.status)
-
-        self.shortcut_search = QShortcut(QKeySequence("Ctrl+F"), self)
-        self.shortcut_search.activated.connect(self.open_search_dialog)
-
-        self.refresh_timer = QTimer(self)
-        self.refresh_timer.setInterval(600000)
-        self.refresh_timer.timeout.connect(self.start_scan)
-        self.refresh_timer.start()
-
-        QTimer.singleShot(100, self.start_scan)
-
-    def set_timeframe(self, interval):
-        self.current_interval = interval
-        if interval == "15m":
-            self.current_period = "10d"
-        elif interval == "30m":
-            self.current_period = "20d"
-        elif interval == "60m":
-            self.current_period = "60d"
-        elif interval == "4h":
-            self.current_period = "180d"
-        elif interval == "1d":
-            self.current_period = "1y"
-        elif interval == "1wk":
-            self.current_period = "5y"
-        
-        for tf_key, btn in self.tf_buttons.items():
-            if tf_key == self.current_interval:
-                btn.setStyleSheet(f"background-color: {COLOR_GREEN}; color: #000000; border: 1px solid {COLOR_GREEN}; font-weight: bold;")
-            else:
-                btn.setStyleSheet("")
-
-        self.plot_atr_renko_chart()
-        self.refresh_outlook()
-
-    def make_table(self):
-        t = QTableWidget()
-        t.setColumnCount(12)
-        t.setHorizontalHeaderLabels([
-            "Symbol", "Price", "Change % ⇅", "Day High", "Day Low",
-            "Call", "Structure", "Score ⇅", "SL", "TP1", "TP1% ⇅", "TP2"
-        ])
-        t.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
-        t.verticalHeader().setVisible(False)
-        t.cellClicked.connect(lambda r, c, tab=t: self.cell_click(tab, r, c))
-        t.setSortingEnabled(True)
-        return t
-
-    def fill_table(self, table, rows):
-        table.setRowCount(0)
-        table.setSortingEnabled(False)
-        for r_idx, row in enumerate(rows):
-            table.insertRow(r_idx)
-
-            sym_item = QTableWidgetItem(row["Ticker"])
-            sym_item.setData(Qt.ItemDataRole.UserRole, row)
-            table.setItem(r_idx, 0, sym_item)
-
-            table.setItem(r_idx, 1, NumericTableWidgetItem(row["Price"]))
-
-            chg_item = NumericTableWidgetItem(row["ChangePct"])
-            raw_chg = row.get("RawChange", 0.0)
-            chg_item.setForeground(QColor(COLOR_GREEN) if raw_chg >= 0 else QColor(COLOR_RED))
-            table.setItem(r_idx, 2, chg_item)
-
-            table.setItem(r_idx, 3, NumericTableWidgetItem(row["DayHigh"]))
-            table.setItem(r_idx, 4, NumericTableWidgetItem(row["DayLow"]))
-
-            call_item = QTableWidgetItem(row["Signal"])
-            call_item.setForeground(QColor(COLOR_GREEN) if row["Signal"] == "BUY" else QColor(COLOR_RED))
-            table.setItem(r_idx, 5, call_item)
-
-            struct_item = QTableWidgetItem(row.get("Structure", "—"))
-            struct_color_map = {
-                "BOS_DEMAND": COLOR_BOS_DEMAND,
-                "BOS_SUPPLY": COLOR_BOS_SUPPLY,
-                "CHOCH_DEMAND": COLOR_CHOCH_DEMAND,
-                "CHOCH_SUPPLY": COLOR_CHOCH_SUPPLY,
-            }
-            struct_type = row.get("StructureType")
-            if struct_type in struct_color_map:
-                struct_item.setForeground(QColor(struct_color_map[struct_type]))
-            else:
-                struct_item.setForeground(QColor(COLOR_TEXT_MUTED))
-            table.setItem(r_idx, 6, struct_item)
-
-            table.setItem(r_idx, 7, NumericTableWidgetItem(row["Score"]))
-            table.setItem(r_idx, 8, NumericTableWidgetItem(row["SL"]))
-            table.setItem(r_idx, 9, NumericTableWidgetItem(row["TP1"]))
-            table.setItem(r_idx, 10, NumericTableWidgetItem(row["TP1_PCT"]))
-            table.setItem(r_idx, 11, NumericTableWidgetItem(row["TP2"]))
-
-        table.setSortingEnabled(True)
-
-    def cell_click(self, table, row, col):
-        item = table.item(row, 0)
-        if item:
-            data = item.data(Qt.ItemDataRole.UserRole)
-            if data and isinstance(data, dict):
-                self.current_symbol = data["RawSymbol"]
-                self.current_display = item.text()
-                self.plot_atr_renko_chart()
-                self.refresh_news()
-                self.refresh_outlook()
-
-    def open_search_dialog(self):
-        SearchDialog(self.comm, self).exec()
-
-    def open_telegram_dialog(self):
-        TelegramSettingsDialog(self).exec()
-
-    def _launch_worker(self, worker):
-        self.active_workers.append(worker)
-
-        def _cleanup(*_args, w=worker):
-            if w in self.active_workers:
-                self.active_workers.remove(w)
-            w.deleteLater()
-
-        worker.finished.connect(_cleanup)
-        worker.start()
-        return worker
-
-    def start_scan(self):
-        self.status.setText("Scanning market data...")
-        self.pbar.setValue(0)
-        self.worker = ScannerWorker()
-        self.worker.progress.connect(self.pbar.setValue)
-        self.worker.resultReady.connect(self.populate_tables_and_tabs)
-        self._launch_worker(self.worker)
-
-    def send_filtered_trading_alerts(self, scan_results):
-        commodities = scan_results.get("commodities", [])
-        us100 = scan_results.get("us100", [])
-        nifty200 = scan_results.get("nifty200", [])
-
-        def filter_and_sort(items, top_n=None):
-            valid = []
-            for item in items:
-                try:
-                    score = float(item["Score"].replace("%", ""))
-                    tp1_pct = float(item["TP1_PCT"].replace("%", ""))
-                    if score >= 50.0 and tp1_pct >= 5.0:
-                        valid.append((score, tp1_pct, item))
-                except (ValueError, KeyError):
-                    continue
-            valid.sort(key=lambda x: (x[0], x[1]), reverse=True)
-            entries = [entry[2] for entry in valid]
-            return entries[:top_n] if top_n else entries
-
-        top_us100 = filter_and_sort(us100, top_n=5)
-        top_nifty = filter_and_sort(nifty200, top_n=5)
-
-        msg_lines = [
-            "🚨 *QUANTFX HIGH-PROBABILITY ALERTS* 🚨",
-            "_(Score ≥ 50%, TP1% ≥ 5%)_\n"
-        ]
-
-        msg_lines.append("🪙 *Commodities Status:*")
-        if commodities:
-            for c in commodities:
-                msg_lines.append(f"• *{c['Ticker']}*: {c['Signal']} | Structure: {c.get('Structure', '—')} | Price: {c['Price']} ({c['ChangePct']}) | Score: {c['Score']} | TP1: {c['TP1_PCT']}")
-        else:
-            msg_lines.append("• No commodity data available.")
-
-        msg_lines.append("\n🇺🇸 *US100 Top 5 Stocks:*")
-        if top_us100:
-            for s in top_us100:
-                msg_lines.append(f"• *{s['Ticker']}*: {s['Signal']} | Structure: {s.get('Structure', '—')} | Price: {s['Price']} | Score: {s['Score']} | TP1: {s['TP1_PCT']}")
-        else:
-            msg_lines.append("• No qualifying US100 stocks found.")
-
-        msg_lines.append("\n🇮🇳 *Nifty 200 Top 5 Stocks:*")
-        if top_nifty:
-            for n in top_nifty:
-                msg_lines.append(f"• *{n['Ticker']}*: {n['Signal']} | Structure: {n.get('Structure', '—')} | Price: {n['Price']} | Score: {n['Score']} | TP1: {n['TP1_PCT']}")
-        else:
-            msg_lines.append("• No qualifying Nifty 200 stocks found.")
-
-        final_message = "\n".join(msg_lines)
-        send_telegram_alert(final_message)
-
-    def populate_tables_and_tabs(self, data):
-        self.fill_table(self.comm, data.get("commodities", []))
-        self.fill_table(self.forex, data.get("forex", []))
-        self.fill_table(self.nifty_table, data.get("nifty200", []))
-        self.fill_table(self.us100_table, data.get("us100", []))
-
-        self.status.setText("Scan complete.")
-        self.set_timeframe("1d")
-        self.refresh_news()
-        self.refresh_outlook()
-        
-        if TELEGRAM_CONFIG.get("token") and TELEGRAM_CONFIG.get("chat_id"):
-            self.send_filtered_trading_alerts(data)
-
-    def refresh_news(self):
-        self.news_title.setText(f"LIVE NEWS — {self.current_display}")
-        self.news_box.setHtml(f"<p style='color:{COLOR_TEXT_MUTED};'>Loading news for {self.current_display}…</p>")
-        self.news_worker = NewsWorker(self.current_symbol, self.current_display)
-        self.news_worker.resultReady.connect(self.populate_news)
-        self._launch_worker(self.news_worker)
-
-    def populate_news(self, news_items, display):
-        if display != self.current_display:
-            return
-
-        self.news_title.setText(f"LIVE NEWS — {display}")
-
-        if not news_items:
-            self.news_box.setHtml(f"<p style='color:{COLOR_TEXT_MUTED};'>No recent news found for {display}.</p>")
-            return
-
-        parts = []
-        for item in news_items[:10]:
-            title, publisher, link, ts_display = self._extract_news_fields(item)
-            safe_title = (title or "Untitled").replace("<", "&lt;").replace(">", "&gt;")
-            headline_html = f'<a href="{link}" style="color:{COLOR_TEXT_MAIN}; text-decoration:none;">{safe_title}</a>' if link else safe_title
-            meta_bits = [b for b in (publisher, ts_display) if b]
-            meta_html = " · ".join(meta_bits)
-
-            parts.append(
-                f"<p style='margin:0 0 2px 0; font-weight:bold; font-size:12px;'>{headline_html}</p>"
-                f"<p style='margin:0 0 6px 0; color:{COLOR_TEXT_MUTED}; font-size:10px;'>{meta_html}</p>"
-                f"<hr style='border-color:{COLOR_BORDER}; margin:6px 0;'>"
-            )
-
-        self.news_box.setHtml("".join(parts))
-
-    def _extract_news_fields(self, item):
-        content = item.get("content") if isinstance(item.get("content"), dict) else {}
-        title = content.get("title") or item.get("title") or "Untitled"
-
-        publisher = None
-        provider = content.get("provider")
-        if isinstance(provider, dict):
-            publisher = provider.get("displayName")
-        publisher = publisher or item.get("publisher")
-
-        link = None
-        canonical = content.get("canonicalUrl")
-        if isinstance(canonical, dict):
-            link = canonical.get("url")
-        link = link or item.get("link") or content.get("link")
-
-        ts_display = ""
-        pub_time = item.get("providerPublishTime")
-        pub_date_str = content.get("pubDate")
-        try:
-            if pub_time:
-                ts_display = datetime.fromtimestamp(pub_time).strftime("%d %b %H:%M")
-            elif pub_date_str:
-                ts_display = str(pub_date_str).replace("T", " ")[:16]
-        except Exception:
-            ts_display = ""
-
-        return title, publisher, link, ts_display
-
-    def refresh_outlook(self):
-        self.outlook_title.setText(f"OUTLOOK — {self.current_display} ({self.current_interval})")
-        self.outlook_box.setHtml(f"<p style='color:{COLOR_TEXT_MUTED};'>Computing outlook for {self.current_display}…</p>")
-        self.outlook_worker = OutlookWorker(self.current_symbol, self.current_display, self.current_period, self.current_interval)
-        self.outlook_worker.resultReady.connect(self.populate_outlook)
-        self._launch_worker(self.outlook_worker)
-
-    def populate_outlook(self, outlook, display):
-        if display != self.current_display:
-            return
-
-        self.outlook_title.setText(f"OUTLOOK — {display} ({self.current_interval})")
-
-        if not outlook:
-            self.outlook_box.setHtml(f"<p style='color:{COLOR_TEXT_MUTED};'>Not enough macro history to project {display}.</p>")
-            return
-
-        bias_score = outlook["bias_score"]
-        conditions_met = abs(bias_score) >= 2.0
-
-        dir_color = COLOR_GREEN if outlook["direction"] == "Bullish" else (COLOR_RED if outlook["direction"] == "Bearish" else COLOR_TEXT_MUTED)
-
-        status_button = f"""
-            <span style='background-color: {COLOR_GREEN if conditions_met else COLOR_RED}; color: {'#000000' if conditions_met else '#FFFFFF'}; padding: 2px 8px; 
-            border-radius: 4px; font-weight: bold; font-size: 10px;'>{'🟢 CONDITIONS MET' if conditions_met else '🔴 CONDITIONS NOT MET'}</span>
-        """
-
-        reasons_html = "".join(f"<li style='margin-bottom:2px;'>{r}</li>" for r in outlook["reasons"])
-
-        struct_badge = ""
-        structure_event = outlook.get("structure_event")
-        if structure_event:
-            struct_color_map = {
-                "BOS_DEMAND": COLOR_BOS_DEMAND,
-                "BOS_SUPPLY": COLOR_BOS_SUPPLY,
-                "CHOCH_DEMAND": COLOR_CHOCH_DEMAND,
-                "CHOCH_SUPPLY": COLOR_CHOCH_SUPPLY,
-            }
-            s_color = struct_color_map.get(structure_event["type"], COLOR_TEXT_MUTED)
-            bars_ago = structure_event["bars_ago"]
-            recency = "latest brick" if bars_ago == 0 else f"{bars_ago} bricks ago"
-            struct_badge = f"""
-                <span style='background-color:#1E222D; color:{s_color}; border: 1px solid {s_color}; padding:2px 8px;
-                border-radius:4px; font-weight:bold; font-size:10px;'>{structure_event['label']}</span>
-                <span style='color:{COLOR_TEXT_MUTED}; font-size:10px;'>
-                    &nbsp;@ ${structure_event['level']:,.2f} ({recency})
-                </span>
-            """
-
-        html = f"""
-        <p style='margin:0 0 4px 0;'>
-            <span style='font-weight:bold; color:{dir_color}; font-size:13px;'>{outlook['direction']}</span>
-            &nbsp;&nbsp;{status_button}
-            <span style='color:{COLOR_TEXT_MUTED};'>
-                &nbsp;— projected macro range ${outlook['range_low']:,.2f} – ${outlook['range_high']:,.2f}
-                (last: ${outlook['last_close']:,.2f})
-            </span>
-        </p>
-        <p style='margin:0 0 4px 0;'>{struct_badge}</p>
-        <ul style='margin:0 0 4px 18px; padding:0; color:{COLOR_TEXT_MAIN}; font-size:11px;'>
-            {reasons_html}
-        </ul>
-        """
-        self.outlook_box.setHtml(html)
-
-    def plot_atr_renko_chart(self):
-        df = fetch_live_ohlc(self.current_symbol, self.current_period, self.current_interval)
-        if df.empty:
-            self.chart_title.setText(f"No data for {self.current_display}")
-            return
-
-        ema_fast = self.spin_fast.value()
-        ema_slow = self.spin_slow.value()
-
+        st.success(msg) if ok else st.error(msg)
+
+if st.sidebar.button("🔄 Refresh data", use_container_width=True):
+    st.cache_data.clear()
+    st.rerun()
+
+# =====================================================================
+# MAIN LAYOUT
+# =====================================================================
+st.markdown(
+    f"<h2 style='color:#FFFFFF;margin-bottom:0;'>{current_display} "
+    f"<span style='color:{COLOR_TEXT_MUTED};font-size:14px;'>({current_symbol}) · {interval}</span></h2>",
+    unsafe_allow_html=True,
+)
+
+tab_chart, tab_outlook, tab_scanner = st.tabs(["📊 Charts", "🧭 7-Day Outlook", "🔎 Scanner"])
+
+# ---- Charts tab --------------------------------------------------------
+with tab_chart:
+    with st.spinner(f"Fetching {current_display}..."):
+        raw_df = fetch_live_ohlc(current_symbol, period=period, interval=interval)
+
+    if raw_df.empty:
+        st.error(f"No data returned for {current_display} ({current_symbol}).")
+    else:
         renko_df, brick_size = build_atr_renko_df(
-            df, atr_period=21, atr_multiplier=3.0,
-            ema_fast=ema_fast, ema_slow=ema_slow
+            raw_df, atr_period=atr_period, atr_multiplier=atr_multiplier,
+            ema_fast=ema_fast, ema_slow=ema_slow,
         )
-        self.renko_df_cache = renko_df
-
-        self.ax_ha.clear()
-        self.ax.clear()
-        self.ax_macd.clear()
-        self.ax_rsi.clear()
-
-        self.ax_ha.set_facecolor(COLOR_BG_DARK)
-        self.ax.set_facecolor(COLOR_BG_DARK)
-        self.ax_macd.set_facecolor(COLOR_BG_DARK)
-        self.ax_rsi.set_facecolor(COLOR_BG_DARK)
-
         if renko_df.empty:
-            self.chart_title.setText(f"No ATR Renko bricks for {self.current_display}")
-            self.canvas_ha.draw_idle()
-            self.canvas_main.draw_idle()
-            self.canvas_macd.draw_idle()
-            self.canvas_rsi.draw_idle()
-            return
+            st.warning("Not enough data to build ATR Renko bricks for this timeframe — try a longer timeframe.")
+        else:
+            ha_df = compute_heikin_ashi(renko_df)
 
-        ha_df = compute_heikin_ashi(renko_df)
-        ha_df["EMA_FAST"] = ha_df["Close"].ewm(span=ema_fast, adjust=False).mean()
-        ha_df["EMA_SLOW"] = ha_df["Close"].ewm(span=ema_slow, adjust=False).mean()
+            last_close = float(renko_df["Close"].iloc[-1])
+            prev_close = float(raw_df["Close"].iloc[-2]) if len(raw_df) > 1 else last_close
+            chg_pct = ((float(raw_df["Close"].iloc[-1]) - prev_close) / prev_close) * 100 if prev_close else 0.0
 
-        ha_signals = []
-        for i in range(len(ha_df)):
-            if i == 0:
-                ha_signals.append("HOLD")
-                continue
-            f_now, s_now = ha_df.loc[i, "EMA_FAST"], ha_df.loc[i, "EMA_SLOW"]
-            f_prev, s_prev = ha_df.loc[i-1, "EMA_FAST"], ha_df.loc[i-1, "EMA_SLOW"]
-            if f_now > s_now and f_prev <= s_prev:
-                ha_signals.append("BUY")
-            elif f_now < s_now and f_prev >= s_prev:
-                ha_signals.append("SELL")
-            else:
-                ha_signals.append("HOLD")
-        ha_df["Signal"] = ha_signals
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric("Last Close", f"{float(raw_df['Close'].iloc[-1]):,.4g}", f"{chg_pct:+.2f}%")
+            m2.metric("Renko Bricks", len(renko_df))
+            m3.metric("Brick Size", f"{brick_size:,.4g}")
+            struct_event = latest_structure_event(renko_df, lookback=15)
+            m4.metric("Latest Structure", struct_event["label"] if struct_event else "—")
 
-        self.ha_df_cache = ha_df
-        self.ha_len = len(ha_df)
-        self.renko_len = len(renko_df)
+            render_charts(renko_df, ha_df, brick_size, current_display, ema_fast, ema_slow)
 
-        x_vals = np.arange(len(renko_df))
-        dates = renko_df["Date"]
-
-        # ==================== HEIKIN ASHI CHART ====================
-        for i in range(len(ha_df)):
-            o, c, h, l = ha_df["Open"].iloc[i], ha_df["Close"].iloc[i], ha_df["High"].iloc[i], ha_df["Low"].iloc[i]
-            x = x_vals[i]
-            candle_color = COLOR_BULL if c >= o else COLOR_BEAR
-
-            self.ax_ha.plot([x, x], [l, h], color=candle_color, linewidth=1.2, zorder=2)
-            rect = patches.Rectangle(
-                (x - 0.4, min(o, c)), 0.8,
-                max(abs(c - o), (h - l) * 0.02 if h != l else 0.0001),
-                facecolor=candle_color, edgecolor=candle_color, linewidth=0.8, zorder=3
+            last_signal = renko_df["Signal"].iloc[-1]
+            last_div = renko_df["Div_Signal"].iloc[-1]
+            badge_color = COLOR_GREEN if last_signal == "BUY" else (COLOR_RED if last_signal == "SELL" else COLOR_TEXT_MUTED)
+            st.markdown(
+                f"EMA trend signal: <span class='qfx-badge' style='background:{badge_color}22;color:{badge_color};'>{last_signal}</span>"
+                f"&nbsp;&nbsp;·&nbsp;&nbsp;Latest MACD crossover: <b>{last_div}</b>",
+                unsafe_allow_html=True,
             )
-            self.ax_ha.add_patch(rect)
 
-        self.ax_ha.plot(x_vals, ha_df["EMA_FAST"], color=COLOR_MA9, linewidth=1.5, label=f"EMA {ema_fast}", zorder=4)
-        self.ax_ha.plot(x_vals, ha_df["EMA_SLOW"], color=COLOR_MA20, linewidth=1.5, label=f"EMA {ema_slow}", zorder=4)
-
-        for i in range(len(ha_df)):
-            sig = ha_df["Signal"].iloc[i]
-            if sig == "HOLD":
-                continue
-            x, price = x_vals[i], ha_df["Close"].iloc[i]
-            if sig == "BUY":
-                self.ax_ha.text(
-                    x, price - brick_size * 0.4, "BUY",
-                    color="#FFFFFF", fontsize=7.5, ha="center", va="top",
-                    bbox=dict(boxstyle="round,pad=0.3", fc="#1E222D", ec=COLOR_GREEN, lw=1.0),
-                    zorder=5
+            if st.button("📨 Send current signal to Telegram"):
+                msg = (
+                    f"*{current_display}* ({current_symbol})\n"
+                    f"Price: {float(raw_df['Close'].iloc[-1]):,.4g}\n"
+                    f"EMA Signal: {last_signal}\n"
+                    f"MACD Cross: {last_div}\n"
+                    f"Structure: {struct_event['label'] if struct_event else '—'}"
                 )
-            elif sig == "SELL":
-                self.ax_ha.text(
-                    x, price + brick_size * 0.4, "SELL",
-                    color="#FFFFFF", fontsize=7.5, ha="center", va="bottom",
-                    bbox=dict(boxstyle="round,pad=0.3", fc="#1E222D", ec=COLOR_RED, lw=1.0),
-                    zorder=5
-                )
+                ok, m = send_telegram_alert(msg, tg_token, tg_chat)
+                st.success(m) if ok else st.error(m)
 
-        # ==================== RENKO CHART ====================
-        self.chart_title.setText(f"{self.current_display} ATR Renko × 3 + Macro EMA Cross")
+# ---- Outlook tab --------------------------------------------------------
+with tab_outlook:
+    with st.spinner("Computing 7-day outlook..."):
+        outlook = compute_7day_outlook(current_symbol, current_display, period="1y", interval="1d")
 
-        for i, row in renko_df.iterrows():
-            x = x_vals[i]
-            o, c = row["Open"], row["Close"]
-            brick_color = COLOR_BULL if row["Type"] == "up" else COLOR_BEAR
-
-            rect = patches.Rectangle(
-                (x - 0.4, min(o, c)), 0.8, abs(c - o),
-                facecolor=brick_color, edgecolor="#1E222D", linewidth=0.8, zorder=5
-            )
-            self.ax.add_patch(rect)
-
-        self.ax.plot(x_vals, renko_df["EMA_FAST"], color=COLOR_MA9, linewidth=1.5, label=f"EMA {ema_fast}")
-        self.ax.plot(x_vals, renko_df["EMA_SLOW"], color=COLOR_MA20, linewidth=1.5, label=f"EMA {ema_slow}")
-
-        for i in range(1, len(renko_df)):
-            sig = renko_df["Signal"].iloc[i]
-            if sig == "HOLD":
-                continue
-            x, price = x_vals[i], renko_df["Close"].iloc[i]
-            if sig == "BUY":
-                self.ax.text(
-                    x, price - brick_size * 0.4, "BUY",
-                    color="#FFFFFF", fontsize=7.5, ha="center", va="top",
-                    bbox=dict(boxstyle="round,pad=0.3", fc="#1E222D", ec=COLOR_GREEN, lw=1.0),
-                    zorder=6
-                )
-            elif sig == "SELL":
-                self.ax.text(
-                    x, price + brick_size * 0.4, "SELL",
-                    color="#FFFFFF", fontsize=7.5, ha="center", va="bottom",
-                    bbox=dict(boxstyle="round,pad=0.3", fc="#1E222D", ec=COLOR_RED, lw=1.0),
-                    zorder=6
-                )
-
-        # --- ALIGNED SWING MARKERS & BOS / CHoCH OVERLAYS ACROSS ALL CHARTS ---
-        if "SwingHigh" in renko_df.columns:
-            swing_high_idx = renko_df.index[renko_df["SwingHigh"]].tolist()
-            swing_low_idx = renko_df.index[renko_df["SwingLow"]].tolist()
-            
-            if swing_high_idx:
-                self.ax.scatter(
-                    [x_vals[i] for i in swing_high_idx], [renko_df["High"].iloc[i] for i in swing_high_idx],
-                    marker="v", s=26, color=COLOR_SWING_MARKER, zorder=4, alpha=0.35, edgecolors=COLOR_BG_DARK, linewidths=0.5
-                )
-                self.ax_ha.scatter(
-                    [x_vals[i] for i in swing_high_idx], [ha_df["High"].iloc[i] for i in swing_high_idx],
-                    marker="v", s=26, color=COLOR_SWING_MARKER, zorder=4, alpha=0.35, edgecolors=COLOR_BG_DARK, linewidths=0.5
-                )
-
-            if swing_low_idx:
-                self.ax.scatter(
-                    [x_vals[i] for i in swing_low_idx], [renko_df["Low"].iloc[i] for i in swing_low_idx],
-                    marker="^", s=26, color=COLOR_SWING_MARKER, zorder=4, alpha=0.35, edgecolors=COLOR_BG_DARK, linewidths=0.5
-                )
-                self.ax_ha.scatter(
-                    [x_vals[i] for i in swing_low_idx], [ha_df["Low"].iloc[i] for i in swing_low_idx],
-                    marker="^", s=26, color=COLOR_SWING_MARKER, zorder=4, alpha=0.35, edgecolors=COLOR_BG_DARK, linewidths=0.5
-                )
-
-        if "Structure" in renko_df.columns:
-            struct_style = {
-                "BOS_DEMAND": (COLOR_BOS_DEMAND, "B-S"),
-                "BOS_SUPPLY": (COLOR_BOS_SUPPLY, "B-D"),
-                "CHOCH_DEMAND": (COLOR_CHOCH_DEMAND, "CH-S"),
-                "CHOCH_SUPPLY": (COLOR_CHOCH_SUPPLY, "CH-D"),
-            }
-            has_origin = "StructureOriginIdx" in renko_df.columns
-            
-            for i in range(len(renko_df)):
-                s_type = renko_df["Structure"].iloc[i]
-                if s_type not in ["BOS_DEMAND", "BOS_SUPPLY", "CHOCH_DEMAND", "CHOCH_SUPPLY"]:
-                    continue
-                
-                color, base_label = struct_style.get(s_type, (COLOR_TEXT_MUTED, s_type))
-                s_level = renko_df["StructureLevel"].iloc[i]
-                x = x_vals[i]
-
-                origin_idx = renko_df["StructureOriginIdx"].iloc[i] if has_origin else None
-                span_start = x_vals[int(origin_idx)] if pd.notna(origin_idx) else max(x - 6, x_vals[0])
-                
-                self.ax.plot(
-                    [span_start, x], [s_level, s_level],
-                    color=color, linewidth=1.1, linestyle="--", alpha=0.45, zorder=3
-                )
-                self.ax_ha.plot(
-                    [span_start, x], [s_level, s_level],
-                    color=color, linewidth=1.1, linestyle="--", alpha=0.45, zorder=3
-                )
-
-                label = base_label
-                is_bullish = s_type in ("BOS_DEMAND", "CHOCH_DEMAND")
-                
-                y_text_renko = s_level - brick_size * 0.6 if is_bullish else s_level + brick_size * 0.6
-                self.ax.text(
-                    x, y_text_renko, label,
-                    color="#FFFFFF", fontsize=7.2, fontweight="bold", ha="center",
-                    va="top" if is_bullish else "bottom",
-                    bbox=dict(boxstyle="round,pad=0.35", fc="#1E222D", ec=color, lw=1.2),
-                    zorder=6
-                )
-
-                y_text_ha = s_level - brick_size * 0.6 if is_bullish else s_level + brick_size * 0.6
-                self.ax_ha.text(
-                    x, y_text_ha, label,
-                    color="#FFFFFF", fontsize=7.2, fontweight="bold", ha="center",
-                    va="top" if is_bullish else "bottom",
-                    bbox=dict(boxstyle="round,pad=0.35", fc="#1E222D", ec=color, lw=1.2),
-                    zorder=6
-                )
-
-                for target_ax in (self.ax_ha, self.ax, self.ax_macd, self.ax_rsi):
-                    target_ax.axvline(
-                        x=x, color=color, linestyle=":", alpha=0.4, linewidth=1.1, zorder=1
-                    )
-
-        self.ax_ha.set_title(f"{self.current_display} Heikin Ashi", fontsize=10, color=COLOR_TEXT_MUTED, loc="left")
-        self.ax_ha.yaxis.tick_right()
-        self.ax_ha.yaxis.set_label_position("right")
-        self.ax_ha.legend(loc="upper left", fontsize=8)
-        self.ax_ha.grid(alpha=0.12, color="#2A2F3A")
-        self.ax_ha.set_xlim(-1, len(renko_df) + 1)
-        plt.setp(self.ax_ha.get_xticklabels(), visible=False)
-
-        self.ax.yaxis.tick_right()
-        self.ax.yaxis.set_label_position("right")
-        self.ax.set_ylabel("Macro Price")
-        self.ax.legend(loc="upper left", fontsize=8)
-        self.ax.grid(alpha=0.12, color="#2A2F3A")
-        self.ax.set_xlim(-1, len(renko_df) + 1)
-        plt.setp(self.ax.get_xticklabels(), visible=False)
-
-        # ==================== MACD CHART WITH LINES ONLY (HISTOGRAM REMOVED) ====================
-        self.ax_macd.plot(x_vals, renko_df["MACD"], color=COLOR_MACD_LINE, linewidth=1.2, label="MACD Line", zorder=3)
-        self.ax_macd.plot(x_vals, renko_df["MACD_Signal"], color=COLOR_SIGNAL_LINE, linewidth=1.2, label="Signal Line", zorder=3)
-        self.ax_macd.axhline(0, color=COLOR_ZERO_LINE, linewidth=0.8, zorder=1)
-
-        for i in range(len(renko_df)):
-            div_sig = renko_df["Div_Signal"].iloc[i]
-            if div_sig == "BUY":
-                self.ax_macd.text(
-                    x_vals[i], renko_df["MACD"].iloc[i] - 0.2, "BUY",
-                    color="#FFFFFF", fontsize=7.5, ha="center", va="top",
-                    bbox=dict(boxstyle="round,pad=0.3", fc="#1E222D", ec=COLOR_GREEN, lw=1.0),
-                    zorder=5
-                )
-            elif div_sig == "SELL":
-                self.ax_macd.text(
-                    x_vals[i], renko_df["MACD"].iloc[i] + 0.2, "SELL",
-                    color="#FFFFFF", fontsize=7.5, ha="center", va="bottom",
-                    bbox=dict(boxstyle="round,pad=0.3", fc="#1E222D", ec=COLOR_RED, lw=1.0),
-                    zorder=5
-                )
-
-        self.ax_macd.set_title("Macro MACD Strategy", fontsize=10, color=COLOR_TEXT_MUTED, loc="left")
-        self.ax_macd.yaxis.tick_right()
-        self.ax_macd.yaxis.set_label_position("right")
-        self.ax_macd.legend(loc="upper left", fontsize=8)
-        self.ax_macd.grid(alpha=0.12, color="#2A2F3A")
-        self.ax_macd.set_xlim(-1, len(renko_df) + 1)
-        plt.setp(self.ax_macd.get_xticklabels(), visible=False)
-
-        # ==================== RSI CHART ====================
-        self.ax_rsi.plot(x_vals, renko_df["RSI"], color="#FFD700", linewidth=1.2, label="RSI")
-        self.ax_rsi.axhline(70, color=COLOR_RED, linewidth=0.8, linestyle="--")
-        self.ax_rsi.axhline(30, color=COLOR_GREEN, linewidth=0.8, linestyle="--")
-        self.ax_rsi.set_ylim(0, 100)
-        self.ax_rsi.yaxis.tick_right()
-        self.ax_rsi.yaxis.set_label_position("right")
-        self.ax_rsi.legend(loc="upper left", fontsize=8)
-        self.ax_rsi.grid(alpha=0.12, color="#2A2F3A")
-        self.ax_rsi.set_xlim(-1, len(renko_df) + 1)
-
-        step = max(len(x_vals) // 8, 1)
-        self.ax_rsi.set_xticks(x_vals[::step])
-        # Changed date format from %d-%m-%Y to %d-%m
-        self.ax_rsi.set_xticklabels(
-            [pd.Timestamp(d).strftime("%d-%m") for d in dates[::step]],
-            rotation=0, ha="center", fontsize=8
+    if outlook is None:
+        st.warning("Not enough history to compute an outlook for this symbol.")
+    else:
+        dir_color = COLOR_GREEN if outlook["direction"] == "Bullish" else (
+            COLOR_RED if outlook["direction"] == "Bearish" else COLOR_TEXT_MUTED
         )
+        st.markdown(
+            f"<span class='qfx-badge' style='background:{dir_color}22;color:{dir_color};font-size:16px;'>"
+            f"{outlook['direction']}</span>",
+            unsafe_allow_html=True,
+        )
+        st.markdown(
+            f"Projected 7-day macro range: **{outlook['range_low']:,.2f} – {outlook['range_high']:,.2f}** "
+            f"(last close: {outlook['last_close']:,.2f})"
+        )
+        if outlook["structure_event"]:
+            se = outlook["structure_event"]
+            st.caption(f"Latest structure event: {se['label']} at {se['level']:,.2f} ({se['bars_ago']} bricks ago)")
 
-        self.canvas_ha.draw_idle()
-        self.canvas_main.draw_idle()
-        self.canvas_macd.draw_idle()
-        self.canvas_rsi.draw_idle()
+        st.markdown("#### Reasoning")
+        for r in outlook["reasons"]:
+            st.markdown(f"- {r}")
 
-    def adjust_zoom(self, factor):
-        if self.renko_len <= 0:
-            return
-        xmin, xmax = self.ax.get_xlim()
-        xmid = (xmin + xmax) / 2.0
-        new_range = (xmax - xmin) * factor
-        self.sync_x_axis_and_rescale((xmid - new_range / 2.0, xmid + new_range / 2.0), self.renko_len)
+# ---- Scanner tab --------------------------------------------------------
+with tab_scanner:
+    st.caption("Runs the oracle score across a watchlist. Each symbol requires a live fetch, so keep the list short-ish.")
+    cats = st.multiselect("Watchlists to scan", list(WATCHLIST_CATEGORIES.keys()), default=["Commodities", "Forex"])
+    if st.button("▶️ Run scanner", type="primary"):
+        if not cats:
+            st.warning("Pick at least one watchlist.")
+        else:
+            df_res = run_scanner(cats)
+            st.session_state["scanner_results"] = df_res
 
-    def sync_x_axis_and_rescale(self, new_xlim, source_len):
-        if self.is_syncing_x or source_len <= 0:
-            return
-        self.is_syncing_x = True
-        try:
-            frac_min = new_xlim[0] / source_len
-            frac_max = new_xlim[1] / source_len
+    df_res = st.session_state.get("scanner_results")
+    if df_res is not None and not df_res.empty:
+        display_cols = ["Ticker", "Price", "ChangePct", "Signal", "Structure", "Score", "SL", "TP1", "TP1_PCT", "TP2"]
 
-            if self.renko_len > 0:
-                renko_xlim = (frac_min * self.renko_len, frac_max * self.renko_len)
-                self.ax.set_xlim(renko_xlim)
-                self.ax_macd.set_xlim(renko_xlim)
-                self.ax_rsi.set_xlim(renko_xlim)
-                self.ax_ha.set_xlim(renko_xlim)
+        def _row_style(row):
+            color = COLOR_GREEN if row["Signal"] == "BUY" else COLOR_RED
+            return [f"color: {color}" if col == "Signal" else "" for col in row.index]
 
-                self.canvas_ha.draw_idle()
-                self.canvas_main.draw_idle()
-                self.canvas_macd.draw_idle()
-                self.canvas_rsi.draw_idle()
-        finally:
-            self.is_syncing_x = False
-
-    def on_scroll_zoom(self, event):
-        if event.inaxes not in (self.ax_ha, self.ax, self.ax_macd, self.ax_rsi):
-            return
-        source_len = self.renko_len
-        if source_len <= 0:
-            return
-        factor = 0.8 if event.button == "up" else 1.25
-        xmin, xmax = event.inaxes.get_xlim()
-        xmid = (xmin + xmax) / 2.0
-        new_range = (xmax - xmin) * factor
-        self.sync_x_axis_and_rescale((xmid - new_range / 2.0, xmid + new_range / 2.0), source_len)
-
-    def on_mouse_press(self, event):
-        if event.inaxes in (self.ax_ha, self.ax, self.ax_macd, self.ax_rsi) and event.button == 1:
-            self.is_panning = True
-            self.pan_start_x = event.xdata
-            self.pan_source_axes = event.inaxes
-
-    def on_mouse_drag(self, event):
-        if not self.is_panning or self.pan_source_axes is None or self.pan_start_x is None:
-            return
-        if event.inaxes is not self.pan_source_axes or event.xdata is None:
-            return
-        source_len = self.renko_len
-        if source_len <= 0:
-            return
-        dx = self.pan_start_x - event.xdata
-        cur_xmin, cur_xmax = self.pan_source_axes.get_xlim()
-        self.sync_x_axis_and_rescale((cur_xmin + dx, cur_xmax + dx), source_len)
-
-    def on_mouse_release(self, event):
-        self.is_panning = False
-        self.pan_start_x = None
-        self.pan_source_axes = None
-
-    def closeEvent(self, event):
-        for worker in list(self.active_workers):
-            if worker.isRunning():
-                worker.wait(3000)
-        super().closeEvent(event)
-
-# =====================================================================
-# MAIN
-# =====================================================================
-if __name__ == "__main__":
-    app = QApplication(sys.argv)
-    terminal = QuantFXTerminal()
-    terminal.show()
-    sys.exit(app.exec())
+        st.dataframe(
+            df_res[display_cols].style.apply(_row_style, axis=1),
+            use_container_width=True, hide_index=True,
+        )
+    elif df_res is not None:
+        st.info("No results — the data source may be rate-limiting or the symbols returned no data.")

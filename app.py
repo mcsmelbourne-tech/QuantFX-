@@ -1,7 +1,7 @@
 """
-QuantFX Terminal — ATR Renko & Macro Smart Money Structure
-Streamlit rewrite with custom candle coloring, right-side axes, 
-Heikin Ashi EMAs, and targeted multi-market Telegram alerts.
+QuantFX Terminal — ATR Renko & Macro Smart Money Structure (Optimized)
+Streamlit rewrite with high-performance chart rendering, Heikin Ashi blocks,
+Telegram credential persistence, and multi-timeframe forecasting.
 """
 import numpy as np
 import pandas as pd
@@ -89,7 +89,6 @@ def send_telegram_alert(message, token, chat_id):
 # INDICATORS & HEIKIN ASHI / MACD
 # =====================================================================
 def compute_heikin_ashi(df, ema_fast=21, ema_slow=50):
-    """Standard Heiken Ashi transform with EMAs."""
     ha = pd.DataFrame(index=df.index)
     ha["Close"] = (df["Open"] + df["High"] + df["Low"] + df["Close"]) / 4.0
     ha_open = [(df["Open"].iloc[0] + df["Close"].iloc[0]) / 2.0]
@@ -356,6 +355,7 @@ def fetch_live_ohlc(symbol="GC=F", period="6mo", interval="1d"):
 
     return df
 
+@st.cache_data(ttl=300, show_spinner=False)
 def evaluate_oracle_score(symbol, display=None):
     try:
         df = fetch_live_ohlc(symbol, period="1y", interval="1d")
@@ -439,7 +439,6 @@ def evaluate_oracle_score(symbol, display=None):
         return None
 
 def compute_multitimeframe_forecast(symbol, display):
-    """Evaluates multi-timeframe indicators (HA, Renko, BOS/CHOCH, MACD) to generate forecasts and buy/sell signals."""
     timeframes = [("15m", "7d"), ("1h", "30d"), ("4h", "60d"), ("1d", "1y")]
     report_rows = []
     total_score = 0
@@ -590,8 +589,16 @@ def run_scanner(categories):
 # CHARTING (Plotly — Renko & Heikin Ashi BLOCKS with Right-Side Axes & EMAs)
 # =====================================================================
 def render_charts(renko_df, ha_df, brick_size, display, ema_fast, ema_slow):
+    # OPTIMIZATION: Slice data frames to the last 250 bars to speed up rendering instantly
+    max_bars = 250
+    if len(renko_df) > max_bars:
+        renko_df = renko_df.tail(max_bars).reset_index(drop=True)
+    if len(ha_df) > max_bars:
+        ha_df = ha_df.tail(max_bars).reset_index(drop=True)
+
     x_renko = list(range(len(renko_df)))
     x_ha = list(range(len(ha_df)))
+    
     fig = make_subplots(
         rows=4, cols=1, shared_xaxes=False,
         row_heights=[0.30, 0.32, 0.20, 0.18],
@@ -603,6 +610,7 @@ def render_charts(renko_df, ha_df, brick_size, display, ema_fast, ema_slow):
             "RSI",
         ),
     )
+    
     # --- Row 1: Heikin Ashi BLOCKS (Rectangles) + EMAs -------------------
     if len(ha_df) > 0:
         block_width = 0.72
@@ -614,15 +622,10 @@ def render_charts(renko_df, ha_df, brick_size, display, ema_fast, ema_slow):
             is_bull = ha_close >= ha_open
             block_color = COLOR_BULL if is_bull else COLOR_BEAR
 
-            # Wick line
             fig.add_shape(
-                type="line",
-                x0=x_ha[i], x1=x_ha[i],
-                y0=ha_low, y1=ha_high,
-                line=dict(color=block_color, width=1),
-                row=1, col=1,
+                type="line", x0=x_ha[i], x1=x_ha[i], y0=ha_low, y1=ha_high,
+                line=dict(color=block_color, width=1), row=1, col=1,
             )
-            # Solid block body
             body_low = min(ha_open, ha_close)
             body_high = max(ha_open, ha_close)
             if body_high == body_low:
@@ -630,14 +633,12 @@ def render_charts(renko_df, ha_df, brick_size, display, ema_fast, ema_slow):
 
             fig.add_shape(
                 type="rect",
-                x0=x_ha[i] - block_width / 2,
-                x1=x_ha[i] + block_width / 2,
-                y0=body_low,
-                y1=body_high,
-                fillcolor=block_color,
-                line=dict(color=block_color, width=1),
+                x0=x_ha[i] - block_width / 2, x1=x_ha[i] + block_width / 2,
+                y0=body_low, y1=body_high,
+                fillcolor=block_color, line=dict(color=block_color, width=1),
                 row=1, col=1,
             )
+            
     fig.add_trace(go.Scatter(
         x=x_ha, y=ha_df["EMA_FAST"], line=dict(color=COLOR_MA_FAST, width=1.5),
         name=f"HA EMA {ema_fast}",
@@ -662,6 +663,7 @@ def render_charts(renko_df, ha_df, brick_size, display, ema_fast, ema_slow):
         x=x_renko, y=renko_df["EMA_SLOW"], line=dict(color=COLOR_MA_SLOW, width=1.5),
         name=f"EMA {ema_slow}",
     ), row=2, col=1)
+    
     struct_style = {
         "BOS_DEMAND": (COLOR_BOS_DEMAND, "B-S"),
         "BOS_SUPPLY": (COLOR_BOS_SUPPLY, "B-D"),
@@ -687,6 +689,7 @@ def render_charts(renko_df, ha_df, brick_size, display, ema_fast, ema_slow):
             bordercolor=color, borderwidth=1, row=2, col=1,
             yshift=14 if s_type in ("BOS_DEMAND", "CHOCH_DEMAND") else -14,
         )
+        
     # --- Row 3: MACD -----------------------------------------------------
     fig.add_trace(go.Scatter(
         x=x_renko, y=renko_df["MACD"], line=dict(color=COLOR_MACD_LINE, width=1.6), name="MACD",
@@ -695,6 +698,7 @@ def render_charts(renko_df, ha_df, brick_size, display, ema_fast, ema_slow):
         x=x_renko, y=renko_df["MACD_Signal"], line=dict(color=COLOR_SIGNAL_LINE, width=1.6), name="Signal",
     ), row=3, col=1)
     fig.add_hline(y=0, line=dict(color=COLOR_ZERO_LINE, width=1), row=3, col=1)
+    
     buy_x = [i for i in range(len(renko_df)) if renko_df["Div_Signal"].iloc[i] == "BUY"]
     sell_x = [i for i in range(len(renko_df)) if renko_df["Div_Signal"].iloc[i] == "SELL"]
     if buy_x:
@@ -709,6 +713,7 @@ def render_charts(renko_df, ha_df, brick_size, display, ema_fast, ema_slow):
             marker=dict(color=COLOR_RED, size=9, symbol="triangle-down"),
             name="MACD Sell Cross",
         ), row=3, col=1)
+        
     # --- Row 4: RSI --------------------------------------------------------
     fig.add_trace(go.Scatter(
         x=x_renko, y=renko_df["RSI"], line=dict(color="#FFD700", width=1.5), name="RSI",
@@ -716,6 +721,7 @@ def render_charts(renko_df, ha_df, brick_size, display, ema_fast, ema_slow):
     fig.add_hline(y=70, line=dict(color=COLOR_RED, width=1, dash="dash"), row=4, col=1)
     fig.add_hline(y=30, line=dict(color=COLOR_GREEN, width=1, dash="dash"), row=4, col=1)
     fig.update_yaxes(range=[0, 100], row=4, col=1)
+    
     fig.update_layout(
         height=980,
         paper_bgcolor=COLOR_BG_DARK,
@@ -736,6 +742,7 @@ def render_charts(renko_df, ha_df, brick_size, display, ema_fast, ema_slow):
 # =====================================================================
 st.sidebar.markdown("## 📈 QuantFX Terminal")
 st.sidebar.caption("ATR Renko · Heikin Ashi Blocks · Macro Smart Money Structure")
+
 symbol_mode = st.sidebar.radio("Symbol source", ["Presets", "Custom"], horizontal=True)
 if symbol_mode == "Presets":
     preset_cat = st.sidebar.selectbox("Category", list(WATCHLIST_CATEGORIES.keys()))
@@ -745,10 +752,12 @@ if symbol_mode == "Presets":
 else:
     current_symbol = st.sidebar.text_input("Yahoo Finance symbol", value="GC=F")
     current_display = st.sidebar.text_input("Display name", value=current_symbol)
+
 interval = st.sidebar.select_slider(
     "Timeframe", options=list(TIMEFRAME_PERIODS.keys()), value="1d"
 )
 period = TIMEFRAME_PERIODS[interval]
+
 st.sidebar.markdown("---")
 c1, c2 = st.sidebar.columns(2)
 ema_fast = c1.number_input("EMA Fast", min_value=1, max_value=200, value=21)
@@ -804,13 +813,16 @@ with tab_chart:
             ha_df = compute_heikin_ashi(raw_df, ema_fast=ema_fast, ema_slow=ema_slow)
             prev_close = float(raw_df["Close"].iloc[-2]) if len(raw_df) > 1 else float(raw_df["Close"].iloc[-1])
             chg_pct = ((float(raw_df["Close"].iloc[-1]) - prev_close) / prev_close) * 100 if prev_close else 0.0
+            
             m1, m2, m3, m4 = st.columns(4)
             m1.metric("Last Close", f"{float(raw_df['Close'].iloc[-1]):,.4g}", f"{chg_pct:+.2f}%")
             m2.metric("Renko Bricks", len(renko_df))
             m3.metric("Brick Size", f"{brick_size:,.4g}")
             struct_event = latest_structure_event(renko_df, lookback=15)
             m4.metric("Latest Structure", struct_event["label"] if struct_event else "—")
+            
             render_charts(renko_df, ha_df, brick_size, current_display, ema_fast, ema_slow)
+            
             last_signal = renko_df["Signal"].iloc[-1]
             last_div = renko_df["Div_Signal"].iloc[-1]
             badge_color = COLOR_GREEN if last_signal == "BUY" else (COLOR_RED if last_signal == "SELL" else COLOR_TEXT_MUTED)

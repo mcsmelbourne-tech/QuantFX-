@@ -1,7 +1,7 @@
 """
 QuantFX Terminal — ATR Renko & Macro Smart Money Structure
 Streamlit rewrite with custom candle coloring, right-side axes, 
-Heikin Ashi EMAs, single-fire pullback signals with 1.5% font size, and targeted multi-market Telegram alerts.
+Heikin Ashi EMAs, single-fire pullback signals with blinking animation, and targeted multi-market Telegram alerts.
 """
 import numpy as np
 import pandas as pd
@@ -43,8 +43,12 @@ COLOR_BOS_SUPPLY = "#FF4F7B"
 COLOR_CHOCH_DEMAND = "#00D4FF"
 COLOR_CHOCH_SUPPLY = "#FF9900"
 
+# Unique dedicated colors for blinking signals so CSS can target them precisely
+COLOR_PB_BUY = "#00FFAA"
+COLOR_PB_SELL = "#FF2255"
+
 # =====================================================================
-# GLOBAL DARK THEME CSS
+# GLOBAL DARK THEME CSS & BLINKING ANIMATION
 # =====================================================================
 st.markdown(
     f"""
@@ -60,6 +64,23 @@ st.markdown(
     .qfx-badge {{
         display:inline-block; padding:3px 10px; border-radius:4px;
         font-weight:700; font-size:12px; letter-spacing:0.5px;
+    }}
+    
+    /* Blinking & Pulsing Animation for Buy / Sell Signals */
+    @keyframes signalBlink {{
+        0% {{ opacity: 1; transform: scale(1); }}
+        50% {{ opacity: 0.15; transform: scale(1.18); }}
+        100% {{ opacity: 1; transform: scale(1); }}
+    }}
+    
+    .js-plotly-plot svg path[fill="{COLOR_PB_BUY}"],
+    .js-plotly-plot svg path[stroke="{COLOR_PB_BUY}"],
+    .js-plotly-plot svg text[fill="{COLOR_PB_BUY}"],
+    .js-plotly-plot svg path[fill="{COLOR_PB_SELL}"],
+    .js-plotly-plot svg path[stroke="{COLOR_PB_SELL}"],
+    .js-plotly-plot svg text[fill="{COLOR_PB_SELL}"] {{
+        animation: signalBlink 1.1s infinite ease-in-out;
+        transform-origin: center;
     }}
     </style>
     """,
@@ -612,7 +633,7 @@ TIMEFRAME_PERIODS = {
 }
 
 # =====================================================================
-# CHARTING (Plotly — Renko & Heikin Ashi with Pullback Markers)
+# CHARTING (Plotly — Renko & Heikin Ashi with Blinking Pullback Markers)
 # =====================================================================
 def render_charts(renko_df, ha_df, brick_size, display, ema_fast, ema_slow):
     x_renko = list(range(len(renko_df)))
@@ -623,7 +644,7 @@ def render_charts(renko_df, ha_df, brick_size, display, ema_fast, ema_slow):
         vertical_spacing=0.035,
         subplot_titles=(
             f"{display} — Heikin Ashi (with EMA {ema_fast} & {ema_slow})",
-            f"{display} — ATR Renko & Pullback Signals (brick ≈ {brick_size:,.4g})",
+            f"{display} — ATR Renko & Blinking Pullback Signals (brick ≈ {brick_size:,.4g})",
             "MACD (real price series)",
             "RSI",
         ),
@@ -644,7 +665,7 @@ def render_charts(renko_df, ha_df, brick_size, display, ema_fast, ema_slow):
         name=f"HA EMA {ema_slow}",
     ), row=1, col=1)
 
-    # --- Row 2: ATR Renko candles + EMAs + Single-Fire Signals + Structure --
+    # --- Row 2: ATR Renko candles + EMAs + Blinking Pullback Signals + Structure --
     fig.add_trace(go.Candlestick(
         x=x_renko, open=renko_df["Open"], high=renko_df["High"], low=renko_df["Low"], close=renko_df["Close"],
         increasing_line_color=COLOR_BULL, decreasing_line_color=COLOR_BEAR,
@@ -660,7 +681,7 @@ def render_charts(renko_df, ha_df, brick_size, display, ema_fast, ema_slow):
         name=f"EMA {ema_slow}",
     ), row=2, col=1)
 
-    # Add Single-Fire Pullback Signal Markers on Renko chart (Font size updated to 1.5%)
+    # Add Blinking Pullback Signal Markers on Renko chart (Font size at 1.5% equivalent)
     pb_buy_x = [i for i in range(len(renko_df)) if renko_df["Pullback_Signal"].iloc[i] == "BUY"]
     pb_buy_y = [renko_df["Low"].iloc[i] - (brick_size * 0.5) for i in pb_buy_x]
     pb_sell_x = [i for i in range(len(renko_df)) if renko_df["Pullback_Signal"].iloc[i] == "SELL"]
@@ -669,18 +690,18 @@ def render_charts(renko_df, ha_df, brick_size, display, ema_fast, ema_slow):
     if pb_buy_x:
         fig.add_trace(go.Scatter(
             x=pb_buy_x, y=pb_buy_y, mode="markers+text",
-            marker=dict(color=COLOR_GREEN, size=12, symbol="triangle-up"),
+            marker=dict(color=COLOR_PB_BUY, size=12, symbol="triangle-up"),
             text=["BUY"] * len(pb_buy_x), textposition="bottom center",
-            textfont=dict(color=COLOR_GREEN, size=14),
+            textfont=dict(color=COLOR_PB_BUY, size=14),
             name="Pullback Buy Signal",
         ), row=2, col=1)
 
     if pb_sell_x:
         fig.add_trace(go.Scatter(
             x=pb_sell_x, y=pb_sell_y, mode="markers+text",
-            marker=dict(color=COLOR_RED, size=12, symbol="triangle-down"),
+            marker=dict(color=COLOR_PB_SELL, size=12, symbol="triangle-down"),
             text=["SELL"] * len(pb_sell_x), textposition="top center",
-            textfont=dict(color=COLOR_RED, size=14),
+            textfont=dict(color=COLOR_PB_SELL, size=14),
             name="Pullback Sell Signal",
         ), row=2, col=1)
 

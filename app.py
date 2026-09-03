@@ -794,12 +794,12 @@ def render_charts(renko_df, ha_df, brick_size, display, ema_fast, ema_slow):
     fig.update_yaxes(range=[0, 100], row=4, col=1)
 
     fig.update_layout(
-        height=980,
+        height=820,  # Reduced overall chart size/height
         paper_bgcolor=COLOR_BG_DARK,
         plot_bgcolor=COLOR_BG_DARK,
         font=dict(color=COLOR_TEXT_MUTED, size=11),
         legend=dict(orientation="h", y=1.02, x=0, bgcolor="rgba(0,0,0,0)"),
-        margin=dict(l=10, r=10, t=50, b=10),
+        margin=dict(l=10, r=60, t=50, b=10),  # Increased right margin (r) from 10 to 60 to fully display price labels
         xaxis_rangeslider_visible=False,
         xaxis2_rangeslider_visible=False,
     )

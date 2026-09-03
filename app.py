@@ -1,7 +1,7 @@
 """
 QuantFX Terminal — ATR Renko & Macro Smart Money Structure
 Streamlit rewrite with custom candle coloring, right-side axes, 
-Heikin Ashi EMAs, Pullback Signal Buttons, and targeted multi-market Telegram alerts.
+Heikin Ashi EMAs, single-fire pullback signals, and targeted multi-market Telegram alerts.
 """
 import numpy as np
 import pandas as pd
@@ -89,7 +89,6 @@ def send_telegram_alert(message, token, chat_id):
 # INDICATORS & HEIKIN ASHI / MACD
 # =====================================================================
 def compute_heikin_ashi(df, ema_fast=21, ema_slow=50):
-    """Standard Heiken Ashi transform with EMAs."""
     ha = pd.DataFrame(index=df.index)
     ha["Close"] = (df["Open"] + df["High"] + df["Low"] + df["Close"]) / 4.0
     ha_open = [(df["Open"].iloc[0] + df["Close"].iloc[0]) / 2.0]
@@ -305,40 +304,54 @@ def build_atr_renko_df(df,
 
     signals = []
     pullback_signals = []
+    pullback_fired = False
+    current_trend = None
+
     for i in range(len(renko_df)):
         if i == 0:
             signals.append("HOLD")
             pullback_signals.append("HOLD")
             continue
+            
         ema_fast_now = renko_df.loc[i, "EMA_FAST"]
         ema_slow_now = renko_df.loc[i, "EMA_SLOW"]
         ema_fast_prev = renko_df.loc[i - 1, "EMA_FAST"]
         ema_slow_prev = renko_df.loc[i - 1, "EMA_SLOW"]
         brick_type = renko_df.loc[i, "Type"]
 
+        sig = "HOLD"
+        pb_sig = "HOLD"
+
         if ema_fast_now > ema_slow_now and ema_fast_prev <= ema_slow_prev:
-            signals.append("BUY")
-            pullback_signals.append("HOLD")
+            sig = "BUY"
+            current_trend = "BUY"
+            pullback_fired = False
         elif ema_fast_now < ema_slow_now and ema_fast_prev >= ema_slow_prev:
-            signals.append("SELL")
-            pullback_signals.append("HOLD")
+            sig = "SELL"
+            current_trend = "SELL"
+            pullback_fired = False
         else:
-            signals.append("HOLD")
-            # Pullback logic after EMA cross established trend
             if ema_fast_now > ema_slow_now:
+                if current_trend != "BUY":
+                    current_trend = "BUY"
+                    pullback_fired = False
+                
                 recent_types = renko_df.loc[max(0, i-3):i-1, "Type"].values
-                if "down" in recent_types and brick_type == "up":
-                    pullback_signals.append("BUY_PULLBACK")
-                else:
-                    pullback_signals.append("HOLD")
+                if not pullback_fired and "down" in recent_types and brick_type == "up":
+                    pb_sig = "BUY"
+                    pullback_fired = True
             elif ema_fast_now < ema_slow_now:
+                if current_trend != "SELL":
+                    current_trend = "SELL"
+                    pullback_fired = False
+
                 recent_types = renko_df.loc[max(0, i-3):i-1, "Type"].values
-                if "up" in recent_types and brick_type == "down":
-                    pullback_signals.append("SELL_PULLBACK")
-                else:
-                    pullback_signals.append("HOLD")
-            else:
-                pullback_signals.append("HOLD")
+                if not pullback_fired and "up" in recent_types and brick_type == "down":
+                    pb_sig = "SELL"
+                    pullback_fired = True
+
+        signals.append(sig)
+        pullback_signals.append(pb_sig)
 
     renko_df["Signal"] = signals
     renko_df["Pullback_Signal"] = pullback_signals
@@ -466,7 +479,6 @@ def compute_7day_outlook(symbol, display, period="1y", interval="1d"):
         exp2 = close.ewm(span=26, adjust=False).mean()
         macd = exp1 - exp2
         macd_signal = macd.ewm(span=9, adjust=False).mean()
-        macd_hist = macd - macd_signal
         tr1 = high - low
         tr2 = (high - close.shift(1)).abs()
         tr3 = (low - close.shift(1)).abs()
@@ -632,7 +644,7 @@ def render_charts(renko_df, ha_df, brick_size, display, ema_fast, ema_slow):
         name=f"HA EMA {ema_slow}",
     ), row=1, col=1)
 
-    # --- Row 2: ATR Renko candles + EMAs + Pullback Signals + Structure -----
+    # --- Row 2: ATR Renko candles + EMAs + Single-Fire Signals + Structure --
     fig.add_trace(go.Candlestick(
         x=x_renko, open=renko_df["Open"], high=renko_df["High"], low=renko_df["Low"], close=renko_df["Close"],
         increasing_line_color=COLOR_BULL, decreasing_line_color=COLOR_BEAR,
@@ -648,17 +660,17 @@ def render_charts(renko_df, ha_df, brick_size, display, ema_fast, ema_slow):
         name=f"EMA {ema_slow}",
     ), row=2, col=1)
 
-    # Add Pullback Signal Markers on Renko chart
-    pb_buy_x = [i for i in range(len(renko_df)) if renko_df["Pullback_Signal"].iloc[i] == "BUY_PULLBACK"]
+    # Add Single-Fire Pullback Signal Markers on Renko chart (Label changed to BUY / SELL)
+    pb_buy_x = [i for i in range(len(renko_df)) if renko_df["Pullback_Signal"].iloc[i] == "BUY"]
     pb_buy_y = [renko_df["Low"].iloc[i] - (brick_size * 0.5) for i in pb_buy_x]
-    pb_sell_x = [i for i in range(len(renko_df)) if renko_df["Pullback_Signal"].iloc[i] == "SELL_PULLBACK"]
+    pb_sell_x = [i for i in range(len(renko_df)) if renko_df["Pullback_Signal"].iloc[i] == "SELL"]
     pb_sell_y = [renko_df["High"].iloc[i] + (brick_size * 0.5) for i in pb_sell_x]
 
     if pb_buy_x:
         fig.add_trace(go.Scatter(
             x=pb_buy_x, y=pb_buy_y, mode="markers+text",
             marker=dict(color=COLOR_GREEN, size=12, symbol="triangle-up"),
-            text=["BUY (Pullback)"] * len(pb_buy_x), textposition="bottom center",
+            text=["BUY"] * len(pb_buy_x), textposition="bottom center",
             textfont=dict(color=COLOR_GREEN, size=9),
             name="Pullback Buy Signal",
         ), row=2, col=1)
@@ -667,7 +679,7 @@ def render_charts(renko_df, ha_df, brick_size, display, ema_fast, ema_slow):
         fig.add_trace(go.Scatter(
             x=pb_sell_x, y=pb_sell_y, mode="markers+text",
             marker=dict(color=COLOR_RED, size=12, symbol="triangle-down"),
-            text=["SELL (Pullback)"] * len(pb_sell_x), textposition="top center",
+            text=["SELL"] * len(pb_sell_x), textposition="top center",
             textfont=dict(color=COLOR_RED, size=9),
             name="Pullback Sell Signal",
         ), row=2, col=1)

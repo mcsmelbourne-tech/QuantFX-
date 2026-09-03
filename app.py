@@ -1,7 +1,7 @@
 """
 QuantFX Terminal — ATR Renko & Macro Smart Money Structure
-Updated: Heikin Ashi styled as clean, solid blocks (Renko-like view) 
-with fully synchronized x-axes.
+Updated with fully synchronized x-axes (shared zoom/pan across 
+Heikin Ashi, ATR Renko, MACD, and RSI charts).
 """
 
 import numpy as np
@@ -665,46 +665,32 @@ TIMEFRAME_PERIODS = {
 
 
 # =====================================================================
-# CHARTING (Plotly — Synchronized X-Axes, Block-style Heikin Ashi)
+# CHARTING (Plotly — Synchronized X-Axes, Right-Side Values & EMAs)
 # =====================================================================
 def render_charts(renko_df, ha_df, brick_size, display, ema_fast, ema_slow):
+    # Use datetime arrays for synchronized cross-chart zooming/panning
     x_ha = ha_df.index
     x_renko = renko_df["Date"]
 
     fig = make_subplots(
-        rows=4, cols=1, shared_xaxes=True,
+        rows=4, cols=1, shared_xaxes=True,  # Synchronizes zoom/pan across all subplots
         row_heights=[0.30, 0.32, 0.20, 0.18],
         vertical_spacing=0.035,
         subplot_titles=(
-            f"{display} — Heikin Ashi (Block Style with EMA {ema_fast} & {ema_slow})",
+            f"{display} — Heikin Ashi (with EMA {ema_fast} & {ema_slow})",
             f"{display} — ATR Renko (brick ≈ {brick_size:,.4g})",
             "MACD (real price series)",
             "RSI",
         ),
     )
 
-    # --- Row 1: Heikin Ashi styled as clean blocks (Renko look, no wicks) ---
-    ha_up = ha_df["Close"] >= ha_df["Open"]
-    ha_down = ~ha_up
-
-    fig.add_trace(go.Bar(
-        x=x_ha[ha_up],
-        y=ha_df["Close"][ha_up] - ha_df["Open"][ha_up],
-        base=ha_df["Open"][ha_up],
-        marker_color=COLOR_BULL,
-        name="HA Up",
-        showlegend=False,
+    # --- Row 1: Heikin Ashi candles + EMAs -----------------------------------
+    fig.add_trace(go.Candlestick(
+        x=x_ha, open=ha_df["Open"], high=ha_df["High"], low=ha_df["Low"], close=ha_df["Close"],
+        increasing_line_color=COLOR_BULL, decreasing_line_color=COLOR_BEAR,
+        increasing_fillcolor=COLOR_BULL, decreasing_fillcolor=COLOR_BEAR,
+        name="Heikin Ashi", showlegend=False,
     ), row=1, col=1)
-
-    fig.add_trace(go.Bar(
-        x=x_ha[ha_down],
-        y=ha_df["Open"][ha_down] - ha_df["Close"][ha_down],
-        base=ha_df["Close"][ha_down],
-        marker_color=COLOR_BEAR,
-        name="HA Down",
-        showlegend=False,
-    ), row=1, col=1)
-
     fig.add_trace(go.Scatter(
         x=x_ha, y=ha_df["EMA_FAST"], line=dict(color=COLOR_MA_FAST, width=1.5),
         name=f"HA EMA {ema_fast}",
@@ -865,6 +851,7 @@ st.sidebar.markdown("### 🔔 Automated Triggers")
 if st.sidebar.button("🚀 Run Rule-Based Telegram Scan", use_container_width=True):
     triggered_messages = []
     
+    # 1. Forex & Commodities on 30m -> Trigger on CH-D, CH-S, B-S, B-D
     fx_comm_watchlist = [("Commodities", COMMODITIES), ("Forex", FOREX_PAIRS)]
     for cat_name, symbols in fx_comm_watchlist:
         for sym, disp in symbols:
@@ -879,6 +866,7 @@ if st.sidebar.button("🚀 Run Rule-Based Telegram Scan", use_container_width=Tr
             except Exception:
                 continue
 
+    # 2. US100 & Nifty200 on 4h -> Trigger on CH-S, B-S
     indices_watchlist = [("US100", WATCHLIST_CATEGORIES["US100"]), ("Nifty200", WATCHLIST_CATEGORIES["Nifty200"])]
     for cat_name, symbols in indices_watchlist:
         for sym, disp in symbols:

@@ -36,8 +36,8 @@ COLOR_GREEN = "#00FF66"
 COLOR_RED = "#FF3333"
 COLOR_MA_FAST = "#00FF66"
 COLOR_MA_SLOW = "#FF3333"
-COLOR_MACD_LINE = "#00FFCC"
-COLOR_SIGNAL_LINE = "#FF66CC"
+COLOR_MACD_LINE = "#2962FF"
+COLOR_SIGNAL_LINE = "#FF6D00"
 COLOR_ZERO_LINE = "#4C566A"
 COLOR_BOS_DEMAND = "#26FF9A"
 COLOR_BOS_SUPPLY = "#FF4F7B"
@@ -122,7 +122,6 @@ def compute_heikin_ashi(df, ema_fast=21, ema_slow=50):
     ha["EMA_FAST"] = ha["Close"].ewm(span=ema_fast, adjust=False).mean()
     ha["EMA_SLOW"] = ha["Close"].ewm(span=ema_slow, adjust=False).mean()
     
-    # Compute HA Crossover Signals for Round Dots
     ha_signals = ["HOLD"] * len(ha)
     for i in range(1, len(ha)):
         if ha["EMA_FAST"].iloc[i] > ha["EMA_SLOW"].iloc[i] and ha["EMA_FAST"].iloc[i-1] <= ha["EMA_SLOW"].iloc[i-1]:
@@ -327,6 +326,8 @@ def build_atr_renko_df(df,
         on="Date",
         direction="backward",
     )
+    renko_df["MACD_Hist"] = renko_df["MACD"] - renko_df["MACD_Signal"]
+    
     delta = r_close.diff()
     gain = (delta.where(delta > 0, 0.0)).rolling(rsi_period).mean()
     loss = (-delta.where(delta < 0, 0.0)).rolling(rsi_period).mean()
@@ -643,7 +644,7 @@ TIMEFRAME_PERIODS = {
 }
 
 # =====================================================================
-# CHARTING (Plotly — Synchronized Green/Red Coloring across Renko, HA, MACD, RSI)
+# CHARTING (TradingView Style MACD + Aligned Renko Buy/Sell Buttons)
 # =====================================================================
 def render_charts(renko_df, ha_df, brick_size, display, ema_fast, ema_slow):
     x_renko = list(range(len(renko_df)))
@@ -654,16 +655,15 @@ def render_charts(renko_df, ha_df, brick_size, display, ema_fast, ema_slow):
         vertical_spacing=0.035,
         subplot_titles=(
             f"{display} — Heikin Ashi (Green Buy / Red Sell Aligned with EMAs)",
-            f"{display} — ATR Renko & Blinking Pullback Signals (brick ≈ {brick_size:,.4g})",
-            "MACD (Green/Red Crossover Dots Aligned with Renko)",
+            f"{display} — ATR Renko & Aligned Buy/Sell Signal Buttons (brick ≈ {brick_size:,.4g})",
+            "TradingView MACD (Histogram, MACD Line & Signal Line)",
             "RSI (Synchronized Green/Red Buy & Sell Zones)",
         ),
     )
     
-    # Trend alignment arrays based on Renko Type / EMA state
     renko_trend_bull = (renko_df["EMA_FAST"] > renko_df["EMA_SLOW"]).values
 
-    # --- Row 1: Heikin Ashi candles + EMAs + Blinking Round Dot Buy/Sell Signals ---
+    # --- Row 1: Heikin Ashi candles + EMAs + Dots ---
     fig.add_trace(go.Candlestick(
         x=x_ha, open=ha_df["Open"], high=ha_df["High"], low=ha_df["Low"], close=ha_df["Close"],
         increasing_line_color=COLOR_BULL, decreasing_line_color=COLOR_BEAR,
@@ -697,7 +697,7 @@ def render_charts(renko_df, ha_df, brick_size, display, ema_fast, ema_slow):
             name="HA Sell Dot",
         ), row=1, col=1)
 
-    # --- Row 2: ATR Renko candles + EMAs + Blinking Pullback Signals + Structure --
+    # --- Row 2: ATR Renko candles + Aligned Buy / Sell Button Badges ---
     fig.add_trace(go.Candlestick(
         x=x_renko, open=renko_df["Open"], high=renko_df["High"], low=renko_df["Low"], close=renko_df["Close"],
         increasing_line_color=COLOR_BULL, decreasing_line_color=COLOR_BEAR,
@@ -713,27 +713,28 @@ def render_charts(renko_df, ha_df, brick_size, display, ema_fast, ema_slow):
         name=f"EMA {ema_slow}",
     ), row=2, col=1)
 
-    pb_buy_x = [i for i in range(len(renko_df)) if renko_df["Pullback_Signal"].iloc[i] == "BUY"]
-    pb_buy_y = [renko_df["Low"].iloc[i] - (brick_size * 0.5) for i in pb_buy_x]
-    pb_sell_x = [i for i in range(len(renko_df)) if renko_df["Pullback_Signal"].iloc[i] == "SELL"]
-    pb_sell_y = [renko_df["High"].iloc[i] + (brick_size * 0.5) for i in pb_sell_x]
+    # Aligned Buy & Sell Buttons/Markers directly tied to Renko chart triggers
+    renko_buy_x = [i for i in range(len(renko_df)) if renko_df["Signal"].iloc[i] == "BUY" or renko_df["Pullback_Signal"].iloc[i] == "BUY"]
+    renko_buy_y = [renko_df["Low"].iloc[i] - (brick_size * 0.75) for i in renko_buy_x]
+    renko_sell_x = [i for i in range(len(renko_df)) if renko_df["Signal"].iloc[i] == "SELL" or renko_df["Pullback_Signal"].iloc[i] == "SELL"]
+    renko_sell_y = [renko_df["High"].iloc[i] + (brick_size * 0.75) for i in renko_sell_x]
 
-    if pb_buy_x:
+    if renko_buy_x:
         fig.add_trace(go.Scatter(
-            x=pb_buy_x, y=pb_buy_y, mode="markers+text",
-            marker=dict(color=COLOR_PB_BUY, size=12, symbol="triangle-up"),
-            text=["BUY"] * len(pb_buy_x), textposition="bottom center",
-            textfont=dict(color=COLOR_PB_BUY, size=14),
-            name="Pullback Buy Signal",
+            x=renko_buy_x, y=renko_buy_y, mode="markers+text",
+            marker=dict(color=COLOR_BULL, size=14, symbol="triangle-up"),
+            text=["BUY"] * len(renko_buy_x), textposition="bottom center",
+            textfont=dict(color=COLOR_BULL, size=12, family="Arial Black"),
+            name="Renko BUY Button",
         ), row=2, col=1)
 
-    if pb_sell_x:
+    if renko_sell_x:
         fig.add_trace(go.Scatter(
-            x=pb_sell_x, y=pb_sell_y, mode="markers+text",
-            marker=dict(color=COLOR_PB_SELL, size=12, symbol="triangle-down"),
-            text=["SELL"] * len(pb_sell_x), textposition="top center",
-            textfont=dict(color=COLOR_PB_SELL, size=14),
-            name="Pullback Sell Signal",
+            x=renko_sell_x, y=renko_sell_y, mode="markers+text",
+            marker=dict(color=COLOR_BEAR, size=14, symbol="triangle-down"),
+            text=["SELL"] * len(renko_sell_x), textposition="top center",
+            textfont=dict(color=COLOR_BEAR, size=12, family="Arial Black"),
+            name="Renko SELL Button",
         ), row=2, col=1)
 
     struct_style = {
@@ -762,32 +763,20 @@ def render_charts(renko_df, ha_df, brick_size, display, ema_fast, ema_slow):
             yshift=14 if s_type in ("BOS_DEMAND", "CHOCH_DEMAND") else -14,
         )
 
-    # --- Row 3: MACD + Synchronized Green/Red Crossover Dots --------------
-    fig.add_trace(go.Scatter(
-        x=x_renko, y=renko_df["MACD"], line=dict(color=COLOR_MACD_LINE, width=1.6), name="MACD",
+    # --- Row 3: TradingView Style MACD (Histogram + Lines) ---
+    hist_vals = renko_df["MACD_Hist"].values
+    hist_colors = [COLOR_BULL if val >= 0 else COLOR_BEAR for val in hist_vals]
+    
+    fig.add_trace(go.Bar(
+        x=x_renko, y=hist_vals, marker_color=hist_colors, name="MACD Histogram", opacity=0.8,
     ), row=3, col=1)
     fig.add_trace(go.Scatter(
-        x=x_renko, y=renko_df["MACD_Signal"], line=dict(color=COLOR_SIGNAL_LINE, width=1.6), name="Signal",
+        x=x_renko, y=renko_df["MACD"], line=dict(color=COLOR_MACD_LINE, width=1.8), name="MACD Line",
+    ), row=3, col=1)
+    fig.add_trace(go.Scatter(
+        x=x_renko, y=renko_df["MACD_Signal"], line=dict(color=COLOR_SIGNAL_LINE, width=1.8), name="Signal Line",
     ), row=3, col=1)
     fig.add_hline(y=0, line=dict(color=COLOR_ZERO_LINE, width=1), row=3, col=1)
-
-    macd_buy_x = [i for i in range(len(renko_df)) if renko_df["Div_Signal"].iloc[i] == "BUY"]
-    macd_buy_y = [renko_df["MACD"].iloc[i] for i in macd_buy_x]
-    macd_sell_x = [i for i in range(len(renko_df)) if renko_df["Div_Signal"].iloc[i] == "SELL"]
-    macd_sell_y = [renko_df["MACD"].iloc[i] for i in macd_sell_x]
-
-    if macd_buy_x:
-        fig.add_trace(go.Scatter(
-            x=macd_buy_x, y=macd_buy_y, mode="markers",
-            marker=dict(color=COLOR_BULL, size=10, symbol="circle"),
-            name="MACD Buy (Green)",
-        ), row=3, col=1)
-    if macd_sell_x:
-        fig.add_trace(go.Scatter(
-            x=macd_sell_x, y=macd_sell_y, mode="markers",
-            marker=dict(color=COLOR_BEAR, size=10, symbol="circle"),
-            name="MACD Sell (Red)",
-        ), row=3, col=1)
 
     # --- Row 4: RSI with Split Green (Buy) / Red (Sell) Segments -----------
     rsi_vals = renko_df["RSI"].values

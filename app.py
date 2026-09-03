@@ -1,7 +1,8 @@
 """
 QuantFX Terminal — ATR Renko & Macro Smart Money Structure
 Streamlit rewrite with custom candle coloring, right-side axes, 
-Heikin Ashi EMAs, single-fire pullback signals with blinking animation, and targeted multi-market Telegram alerts.
+Heikin Ashi EMAs, single-fire pullback signals with blinking animation, 
+blinking round dot buy/sell markers on Heikin Ashi & MACD, and targeted multi-market Telegram alerts.
 """
 import numpy as np
 import pandas as pd
@@ -66,7 +67,7 @@ st.markdown(
         font-weight:700; font-size:12px; letter-spacing:0.5px;
     }}
     
-    /* Blinking & Pulsing Animation for Buy / Sell Signals */
+    /* Blinking & Pulsing Animation for Buy / Sell Signals & Dots */
     @keyframes signalBlink {{
         0% {{ opacity: 1; transform: scale(1); }}
         50% {{ opacity: 0.15; transform: scale(1.18); }}
@@ -120,6 +121,15 @@ def compute_heikin_ashi(df, ema_fast=21, ema_slow=50):
     ha["Low"] = pd.concat([df["Low"], ha["Open"], ha["Close"]], axis=1).min(axis=1)
     ha["EMA_FAST"] = ha["Close"].ewm(span=ema_fast, adjust=False).mean()
     ha["EMA_SLOW"] = ha["Close"].ewm(span=ema_slow, adjust=False).mean()
+    
+    # Compute HA Crossover Signals for Round Dots
+    ha_signals = ["HOLD"] * len(ha)
+    for i in range(1, len(ha)):
+        if ha["EMA_FAST"].iloc[i] > ha["EMA_SLOW"].iloc[i] and ha["EMA_FAST"].iloc[i-1] <= ha["EMA_SLOW"].iloc[i-1]:
+            ha_signals[i] = "BUY"
+        elif ha["EMA_FAST"].iloc[i] < ha["EMA_SLOW"].iloc[i] and ha["EMA_FAST"].iloc[i-1] >= ha["EMA_SLOW"].iloc[i-1]:
+            ha_signals[i] = "SELL"
+    ha["Signal"] = ha_signals
     return ha
 
 def detect_macd_crossovers(renko_df):
@@ -633,7 +643,7 @@ TIMEFRAME_PERIODS = {
 }
 
 # =====================================================================
-# CHARTING (Plotly — Renko & Heikin Ashi with Blinking Pullback Markers)
+# CHARTING (Plotly — Renko, Heikin Ashi with Blinking Dots & Pullback Markers)
 # =====================================================================
 def render_charts(renko_df, ha_df, brick_size, display, ema_fast, ema_slow):
     x_renko = list(range(len(renko_df)))
@@ -643,13 +653,13 @@ def render_charts(renko_df, ha_df, brick_size, display, ema_fast, ema_slow):
         row_heights=[0.30, 0.32, 0.20, 0.18],
         vertical_spacing=0.035,
         subplot_titles=(
-            f"{display} — Heikin Ashi (with EMA {ema_fast} & {ema_slow})",
+            f"{display} — Heikin Ashi (with Blinking Buy/Sell Dots & EMAs {ema_fast} & {ema_slow})",
             f"{display} — ATR Renko & Blinking Pullback Signals (brick ≈ {brick_size:,.4g})",
-            "MACD (real price series)",
+            "MACD (real price series with Blinking Crossover Dots)",
             "RSI",
         ),
     )
-    # --- Row 1: Heikin Ashi candles + EMAs -----------------------------------
+    # --- Row 1: Heikin Ashi candles + EMAs + Blinking Round Dot Buy/Sell Signals ---
     fig.add_trace(go.Candlestick(
         x=x_ha, open=ha_df["Open"], high=ha_df["High"], low=ha_df["Low"], close=ha_df["Close"],
         increasing_line_color=COLOR_BULL, decreasing_line_color=COLOR_BEAR,
@@ -664,6 +674,24 @@ def render_charts(renko_df, ha_df, brick_size, display, ema_fast, ema_slow):
         x=x_ha, y=ha_df["EMA_SLOW"], line=dict(color=COLOR_MA_SLOW, width=1.5),
         name=f"HA EMA {ema_slow}",
     ), row=1, col=1)
+
+    ha_buy_x = [i for i in range(len(ha_df)) if ha_df["Signal"].iloc[i] == "BUY"]
+    ha_buy_y = [ha_df["Low"].iloc[i] * 0.995 for i in ha_buy_x]
+    ha_sell_x = [i for i in range(len(ha_df)) if ha_df["Signal"].iloc[i] == "SELL"]
+    ha_sell_y = [ha_df["High"].iloc[i] * 1.005 for i in ha_sell_x]
+
+    if ha_buy_x:
+        fig.add_trace(go.Scatter(
+            x=ha_buy_x, y=ha_buy_y, mode="markers",
+            marker=dict(color=COLOR_PB_BUY, size=11, symbol="circle"),
+            name="HA Buy Dot",
+        ), row=1, col=1)
+    if ha_sell_x:
+        fig.add_trace(go.Scatter(
+            x=ha_sell_x, y=ha_sell_y, mode="markers",
+            marker=dict(color=COLOR_PB_SELL, size=11, symbol="circle"),
+            name="HA Sell Dot",
+        ), row=1, col=1)
 
     # --- Row 2: ATR Renko candles + EMAs + Blinking Pullback Signals + Structure --
     fig.add_trace(go.Candlestick(
@@ -681,7 +709,6 @@ def render_charts(renko_df, ha_df, brick_size, display, ema_fast, ema_slow):
         name=f"EMA {ema_slow}",
     ), row=2, col=1)
 
-    # Add Blinking Pullback Signal Markers on Renko chart (Font size at 1.5% equivalent)
     pb_buy_x = [i for i in range(len(renko_df)) if renko_df["Pullback_Signal"].iloc[i] == "BUY"]
     pb_buy_y = [renko_df["Low"].iloc[i] - (brick_size * 0.5) for i in pb_buy_x]
     pb_sell_x = [i for i in range(len(renko_df)) if renko_df["Pullback_Signal"].iloc[i] == "SELL"]
@@ -731,7 +758,7 @@ def render_charts(renko_df, ha_df, brick_size, display, ema_fast, ema_slow):
             yshift=14 if s_type in ("BOS_DEMAND", "CHOCH_DEMAND") else -14,
         )
 
-    # --- Row 3: MACD -----------------------------------------------------
+    # --- Row 3: MACD + Blinking Round Dot Crossover Signals --------------
     fig.add_trace(go.Scatter(
         x=x_renko, y=renko_df["MACD"], line=dict(color=COLOR_MACD_LINE, width=1.6), name="MACD",
     ), row=3, col=1)
@@ -739,6 +766,24 @@ def render_charts(renko_df, ha_df, brick_size, display, ema_fast, ema_slow):
         x=x_renko, y=renko_df["MACD_Signal"], line=dict(color=COLOR_SIGNAL_LINE, width=1.6), name="Signal",
     ), row=3, col=1)
     fig.add_hline(y=0, line=dict(color=COLOR_ZERO_LINE, width=1), row=3, col=1)
+
+    macd_buy_x = [i for i in range(len(renko_df)) if renko_df["Div_Signal"].iloc[i] == "BUY"]
+    macd_buy_y = [renko_df["MACD"].iloc[i] for i in macd_buy_x]
+    macd_sell_x = [i for i in range(len(renko_df)) if renko_df["Div_Signal"].iloc[i] == "SELL"]
+    macd_sell_y = [renko_df["MACD"].iloc[i] for i in macd_sell_x]
+
+    if macd_buy_x:
+        fig.add_trace(go.Scatter(
+            x=macd_buy_x, y=macd_buy_y, mode="markers",
+            marker=dict(color=COLOR_PB_BUY, size=10, symbol="circle"),
+            name="MACD Cross Up Dot",
+        ), row=3, col=1)
+    if macd_sell_x:
+        fig.add_trace(go.Scatter(
+            x=macd_sell_x, y=macd_sell_y, mode="markers",
+            marker=dict(color=COLOR_PB_SELL, size=10, symbol="circle"),
+            name="MACD Cross Down Dot",
+        ), row=3, col=1)
 
     # --- Row 4: RSI --------------------------------------------------------
     fig.add_trace(go.Scatter(

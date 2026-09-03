@@ -1,4 +1,3 @@
-
 """
 QuantFX Terminal — ATR Renko & Macro Smart Money Structure
 Streamlit rewrite with custom candle coloring, right-side axes, 
@@ -11,6 +10,7 @@ import requests
 import streamlit as st
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
+
 # =====================================================================
 # PAGE CONFIG
 # =====================================================================
@@ -20,6 +20,7 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
 )
+
 # =====================================================================
 # COLORS – TradingView-style dark + neon
 # =====================================================================
@@ -41,6 +42,7 @@ COLOR_BOS_DEMAND = "#26FF9A"
 COLOR_BOS_SUPPLY = "#FF4F7B"
 COLOR_CHOCH_DEMAND = "#00D4FF"
 COLOR_CHOCH_SUPPLY = "#FF9900"
+
 # =====================================================================
 # GLOBAL DARK THEME CSS
 # =====================================================================
@@ -63,6 +65,7 @@ st.markdown(
     """,
     unsafe_allow_html=True,
 )
+
 # =====================================================================
 # TELEGRAM
 # =====================================================================
@@ -81,6 +84,7 @@ def send_telegram_alert(message, token, chat_id):
         return False, data.get("description", "Unknown Telegram API error")
     except Exception as e:
         return False, str(e)
+
 # =====================================================================
 # INDICATORS & HEIKIN ASHI / MACD
 # =====================================================================
@@ -97,6 +101,7 @@ def compute_heikin_ashi(df, ema_fast=21, ema_slow=50):
     ha["EMA_FAST"] = ha["Close"].ewm(span=ema_fast, adjust=False).mean()
     ha["EMA_SLOW"] = ha["Close"].ewm(span=ema_slow, adjust=False).mean()
     return ha
+
 def detect_macd_crossovers(renko_df):
     macd = renko_df["MACD"].values
     signal = renko_df["MACD_Signal"].values
@@ -112,6 +117,7 @@ def detect_macd_crossovers(renko_df):
             macd_signals[i] = "SELL"
             macd_types[i] = "MACD Cross Down"
     return macd_signals, macd_types
+
 # =====================================================================
 # SMART MONEY STRUCTURE — BOS & CHoCH
 # =====================================================================
@@ -200,12 +206,14 @@ def detect_market_structure(high, low, close, swing_lookback=5, brick_type=None)
         "StructureSeq": seq_arr,
         "Trend": trend_arr,
     })
+
 STRUCTURE_LABELS = {
     "BOS_DEMAND": "B-S",
     "BOS_SUPPLY": "B-D",
     "CHOCH_DEMAND": "CH-S",
     "CHOCH_SUPPLY": "CH-D",
 }
+
 def latest_structure_event(struct_df, lookback=15):
     if struct_df is None or struct_df.empty or "Structure" not in struct_df.columns:
         return None
@@ -222,6 +230,7 @@ def latest_structure_event(struct_df, lookback=15):
         "level": float(hits["StructureLevel"].iloc[-1]),
         "bars_ago": int((len(struct_df) - 1) - last_idx),
     }
+
 def build_atr_renko_df(df,
                         atr_period=21,
                         atr_multiplier=3.0,
@@ -320,16 +329,12 @@ def build_atr_renko_df(df,
         [renko_df.reset_index(drop=True), struct_df.reset_index(drop=True)], axis=1
     )
     return renko_df, brick_size
+
 # =====================================================================
 # DATA SOURCE & OUTLOOK
 # =====================================================================
 @st.cache_data(ttl=300, show_spinner=False)
 def fetch_live_ohlc(symbol="GC=F", period="6mo", interval="1d"):
-    """Fetch OHLC data from Yahoo Finance and normalize the columns.
-
-    Yahoo Finance does not reliably provide a native 4h interval, so 4h is
-    built from 1h data when requested.
-    """
     source_interval = "1h" if interval == "4h" else interval
     df = yf.download(symbol, period=period, interval=source_interval, progress=False, auto_adjust=False)
     if df is None or df.empty:
@@ -350,6 +355,7 @@ def fetch_live_ohlc(symbol="GC=F", period="6mo", interval="1d"):
         df = df.resample("4h").agg(agg).dropna(subset=required)
 
     return df
+
 def evaluate_oracle_score(symbol, display=None):
     try:
         df = fetch_live_ohlc(symbol, period="1y", interval="1d")
@@ -431,99 +437,73 @@ def evaluate_oracle_score(symbol, display=None):
         }
     except Exception:
         return None
-def compute_7day_outlook(symbol, display, period="1y", interval="1d"):
-    try:
-        data = fetch_live_ohlc(symbol, period=period, interval=interval)
-        if data.empty or len(data) < 30:
-            return None
-        close = data["Close"]
-        high = data["High"]
-        low = data["Low"]
-        ema21 = close.ewm(span=21, adjust=False).mean()
-        ema50 = close.ewm(span=50, adjust=False).mean()
-        delta = close.diff()
-        gain = delta.where(delta > 0, 0.0).rolling(14).mean()
-        loss = (-delta.where(delta < 0, 0.0)).rolling(14).mean()
-        rs = gain / loss.replace(0, np.nan)
-        rsi = 100 - (100 / (1 + rs))
-        exp1 = close.ewm(span=12, adjust=False).mean()
-        exp2 = close.ewm(span=26, adjust=False).mean()
-        macd = exp1 - exp2
-        macd_signal = macd.ewm(span=9, adjust=False).mean()
-        macd_hist = macd - macd_signal
-        tr1 = high - low
-        tr2 = (high - close.shift(1)).abs()
-        tr3 = (low - close.shift(1)).abs()
-        tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
-        atr = tr.rolling(21).mean()
-        last_close = float(close.iloc[-1])
-        last_ema21, last_ema50 = float(ema21.iloc[-1]), float(ema50.iloc[-1])
-        prev_ema21, prev_ema50 = float(ema21.iloc[-2]), float(ema50.iloc[-2])
-        last_rsi = float(rsi.iloc[-1]) if not np.isnan(rsi.iloc[-1]) else 50.0
-        last_macd_hist = float(macd_hist.iloc[-1])
-        prev_macd_hist = float(macd_hist.iloc[-2])
-        last_atr = float(atr.iloc[-1]) if not np.isnan(atr.iloc[-1]) else last_close * 0.02
-        atr_pct = (last_atr / last_close) * 100
-        idx = data.index
-        if len(idx) > 5:
-            deltas_minutes = np.diff(idx[-30:].values).astype("timedelta64[m]").astype(float)
-            deltas_minutes = deltas_minutes[deltas_minutes > 0]
-            avg_bar_minutes = float(np.median(deltas_minutes)) if len(deltas_minutes) else 1440.0
-        else:
-            avg_bar_minutes = 1440.0
-        bars_in_7_days = max((7 * 24 * 60) / avg_bar_minutes, 1.0)
-        ema21_slope_pct = 0.0
-        if len(ema21) > 6 and float(ema21.iloc[-6]) != 0:
-            ema21_slope_pct = ((last_ema21 - float(ema21.iloc[-6])) / float(ema21.iloc[-6])) * 100
-        reasons = []
-        bias_score = 0.0
-        if last_ema21 > last_ema50:
-            bias_score += 1
-            reasons.append(f"EMA21 (${last_ema21:,.2f}) is above EMA50 (${last_ema50:,.2f}), keeping the trend bullish.")
-        else:
-            bias_score -= 1
-            reasons.append(f"EMA21 (${last_ema21:,.2f}) is below EMA50 (${last_ema50:,.2f}), keeping the trend bearish.")
-        renko_df, _ = build_atr_renko_df(
-            data, atr_period=21, atr_multiplier=3.0,
-            ema_fast=21, ema_slow=50,
-            macd_fast=12, macd_slow=26, macd_signal=9,
-            rsi_period=14
-        )
-        structure_event = None
-        structure_trend = None
-        if not renko_df.empty and "Structure" in renko_df.columns:
-            structure_trend = renko_df["Trend"].iloc[-1]
-            structure_event = latest_structure_event(renko_df, lookback=15)
-            structure_weight = {
-                "BOS_DEMAND": 1.2, "BOS_SUPPLY": -1.2,
-                "CHOCH_DEMAND": 1.8, "CHOCH_SUPPLY": -1.8,
-            }
-            if structure_event:
-                s_type = structure_event["type"]
-                s_level = structure_event["level"]
-                bars_ago = structure_event["bars_ago"]
-                bias_score += structure_weight.get(s_type, 0.0)
-                recency = "on the latest brick" if bars_ago == 0 else f"{bars_ago} bricks ago"
-                reasons.append(f"Structure {structure_event['label']} confirmed at ${s_level:,.2f} ({recency}).")
-        direction = "Bullish" if bias_score >= 2.0 else ("Bearish" if bias_score <= -2.0 else "Neutral / Consolidation")
-        weekly_move_pct = atr_pct * np.sqrt(bars_in_7_days)
-        tilt = float(np.clip(bias_score / 3.0, -1, 1))
-        center_shift_pct = weekly_move_pct * 0.35 * tilt
-        range_low = last_close * (1 - weekly_move_pct / 100 + center_shift_pct / 100)
-        range_high = last_close * (1 + weekly_move_pct / 100 + center_shift_pct / 100)
-        return {
-            "display": display,
-            "direction": direction,
-            "bias_score": bias_score,
-            "last_close": last_close,
-            "range_low": min(range_low, range_high),
-            "range_high": max(range_low, range_high),
-            "reasons": reasons,
-            "structure_event": structure_event,
-            "structure_trend": structure_trend,
-        }
-    except Exception:
-        return None
+
+def compute_multitimeframe_forecast(symbol, display):
+    """Evaluates multi-timeframe indicators (HA, Renko, BOS/CHOCH, MACD) to generate forecasts and buy/sell signals."""
+    timeframes = [("15m", "7d"), ("1h", "30d"), ("4h", "60d"), ("1d", "1y")]
+    report_rows = []
+    total_score = 0
+    reasons = []
+
+    for tf, per in timeframes:
+        try:
+            df = fetch_live_ohlc(symbol, period=per, interval=tf)
+            if df.empty or len(df) < 20:
+                continue
+            
+            ha_df = compute_heikin_ashi(df)
+            renko_df, _ = build_atr_renko_df(df)
+            struct_event = latest_structure_event(renko_df, lookback=10) if not renko_df.empty else None
+            
+            ha_bull = float(ha_df["Close"].iloc[-1]) >= float(ha_df["Open"].iloc[-1])
+            renko_bull = not renko_df.empty and renko_df["Type"].iloc[-1] == "up"
+            macd_bull = not renko_df.empty and float(renko_df["MACD"].iloc[-1]) > float(renko_df["MACD_Signal"].iloc[-1])
+            
+            struct_bias = "NEUTRAL"
+            if struct_event:
+                if struct_event["type"] in ["CHOCH_DEMAND", "BOS_DEMAND"]:
+                    struct_bias = "BULLISH"
+                elif struct_event["type"] in ["CHOCH_SUPPLY", "BOS_SUPPLY"]:
+                    struct_bias = "BEARISH"
+
+            tf_score = (1 if ha_bull else -1) + (1 if renko_bull else -1) + (1 if macd_bull else -1)
+            if struct_bias == "BULLISH":
+                tf_score += 1
+            elif struct_bias == "BEARISH":
+                tf_score -= 1
+
+            total_score += tf_score
+            signal = "BUY" if tf_score > 0 else ("SELL" if tf_score < 0 else "HOLD")
+            
+            report_rows.append({
+                "Timeframe": tf,
+                "Heikin Ashi": "Bullish Block" if ha_bull else "Bearish Block",
+                "Renko Trend": "Up Brick" if renko_bull else "Down Brick",
+                "Structure": struct_event["label"] if struct_event else "None",
+                "MACD": "Bullish Cross" if macd_bull else "Bearish Cross",
+                "TF Signal": signal
+            })
+        except Exception:
+            continue
+
+    last_close = float(yf.download(symbol, period="5d", interval="1d", progress=False)["Close"].iloc[-1]) if not yf.download(symbol, period="5d", interval="1d", progress=False).empty else 100.0
+    direction = "Bullish" if total_score > 1 else ("Bearish" if total_score < -1 else "Neutral / Consolidation")
+    
+    reasons.append(f"Combined multi-timeframe aggregate score indicates a **{direction}** outlook.")
+    if total_score > 0:
+        reasons.append("Heikin Ashi blocks and Renko bricks are predominantly favoring upside continuation.")
+    else:
+        reasons.append("Downward momentum and supply structure events dominate the lower timeframes.")
+
+    return {
+        "display": display,
+        "direction": direction,
+        "total_score": total_score,
+        "last_close": last_close,
+        "report_df": pd.DataFrame(report_rows),
+        "reasons": reasons
+    }
+
 # =====================================================================
 # WATCHLISTS
 # =====================================================================
@@ -588,11 +568,11 @@ TIMEFRAME_PERIODS = {
     "15m": "10d", "30m": "20d", "60m": "60d",
     "4h": "180d", "1d": "1y", "1wk": "5y",
 }
+
 # =====================================================================
 # SCANNER
 # =====================================================================
 def run_scanner(categories):
-    """Run the oracle score across the selected watchlist categories."""
     results = []
     for category in categories:
         for symbol, display in WATCHLIST_CATEGORIES.get(category, []):
@@ -607,7 +587,7 @@ def run_scanner(categories):
     ).reset_index(drop=True)
 
 # =====================================================================
-# CHARTING (Plotly — Renko & Heikin Ashi with Right-Side Values & EMAs)
+# CHARTING (Plotly — Renko & Heikin Ashi BLOCKS with Right-Side Axes & EMAs)
 # =====================================================================
 def render_charts(renko_df, ha_df, brick_size, display, ema_fast, ema_slow):
     x_renko = list(range(len(renko_df)))
@@ -623,9 +603,7 @@ def render_charts(renko_df, ha_df, brick_size, display, ema_fast, ema_slow):
             "RSI",
         ),
     )
-    # --- Row 1: Heikin Ashi BLOCKS + EMAs -----------------------------------
-    # Draw HA as rectangular blocks rather than Plotly candlesticks.
-    # A thin wick is kept for price context; the visible body is always a block.
+    # --- Row 1: Heikin Ashi BLOCKS (Rectangles) + EMAs -------------------
     if len(ha_df) > 0:
         block_width = 0.72
         for i in range(len(ha_df)):
@@ -636,7 +614,7 @@ def render_charts(renko_df, ha_df, brick_size, display, ema_fast, ema_slow):
             is_bull = ha_close >= ha_open
             block_color = COLOR_BULL if is_bull else COLOR_BEAR
 
-            # Wick
+            # Wick line
             fig.add_shape(
                 type="line",
                 x0=x_ha[i], x1=x_ha[i],
@@ -644,11 +622,9 @@ def render_charts(renko_df, ha_df, brick_size, display, ema_fast, ema_slow):
                 line=dict(color=block_color, width=1),
                 row=1, col=1,
             )
-
-            # HA block/body
+            # Solid block body
             body_low = min(ha_open, ha_close)
             body_high = max(ha_open, ha_close)
-            # Keep doji blocks visible even when open == close.
             if body_high == body_low:
                 body_high += max(abs(body_high) * 0.00001, 1e-10)
 
@@ -670,6 +646,7 @@ def render_charts(renko_df, ha_df, brick_size, display, ema_fast, ema_slow):
         x=x_ha, y=ha_df["EMA_SLOW"], line=dict(color=COLOR_MA_SLOW, width=1.5),
         name=f"HA EMA {ema_slow}",
     ), row=1, col=1)
+
     # --- Row 2: ATR Renko candles + EMAs + structure -------------------
     fig.add_trace(go.Candlestick(
         x=x_renko, open=renko_df["Open"], high=renko_df["High"], low=renko_df["Low"], close=renko_df["Close"],
@@ -753,6 +730,7 @@ def render_charts(renko_df, ha_df, brick_size, display, ema_fast, ema_slow):
         fig.update_xaxes(showgrid=False, row=r, col=1)
         fig.update_yaxes(gridcolor="#2A2F3A", side="right", row=r, col=1)
     st.plotly_chart(fig, use_container_width=True, theme=None)
+
 # =====================================================================
 # SIDEBAR CONTROLS
 # =====================================================================
@@ -778,67 +756,27 @@ ema_slow = c2.number_input("EMA Slow", min_value=1, max_value=200, value=50)
 c3, c4 = st.sidebar.columns(2)
 atr_period = c3.number_input("ATR Period", min_value=2, max_value=100, value=21)
 atr_multiplier = c4.number_input("ATR Mult.", min_value=0.1, max_value=10.0, value=3.0, step=0.1)
+
 st.sidebar.markdown("---")
 with st.sidebar.expander("Telegram alerts"):
     tg_token = st.text_input("Bot Token", value=st.session_state.get("tg_token", ""), type="password")
     tg_chat = st.text_input("Chat ID", value=st.session_state.get("tg_chat", ""))
-    st.session_state["tg_token"] = tg_token
-    st.session_state["tg_chat"] = tg_chat
+    
+    if st.button("💾 Save Telegram Details"):
+        st.session_state["tg_token"] = tg_token
+        st.session_state["tg_chat"] = tg_chat
+        st.success("Telegram details saved successfully!")
+
     if st.button("Send test alert"):
         ok, msg = send_telegram_alert(
             "🟢 *QuantFX Terminal Test Alert*\nConnection successfully established!", tg_token, tg_chat
         )
         st.success(msg) if ok else st.error(msg)
+
 if st.sidebar.button("🔄 Refresh data", use_container_width=True):
     st.cache_data.clear()
     st.rerun()
-# =====================================================================
-# AUTOMATED MULTI-MARKET TELEGRAM SCANNER & DISPATCHER
-# =====================================================================
-st.sidebar.markdown("---")
-st.sidebar.markdown("### 🔔 Automated Triggers")
-if st.sidebar.button("🚀 Run Rule-Based Telegram Scan", use_container_width=True):
-    triggered_messages = []
-    
-    # Rules:
-    # 1. Forex & Commodities on 30m -> Trigger on CH-D, CH-S, B-S, B-D
-    fx_comm_watchlist = [("Commodities", COMMODITIES), ("Forex", FOREX_PAIRS)]
-    for cat_name, symbols in fx_comm_watchlist:
-        for sym, disp in symbols:
-            try:
-                df = fetch_live_ohlc(sym, period="10d", interval="30m")
-                if not df.empty:
-                    renko_df, _ = build_atr_renko_df(df, atr_period=int(atr_period), atr_multiplier=float(atr_multiplier))
-                    ev = latest_structure_event(renko_df, lookback=3)
-                    if ev and ev["type"] in ["CHOCH_DEMAND", "CHOCH_SUPPLY", "BOS_DEMAND", "BOS_SUPPLY"]:
-                        if ev["bars_ago"] <= 1:  # Fresh trigger on recent bars
-                            triggered_messages.append(f"🚨 *[30m FX/Comm]* *{disp}* triggered *{ev['label']}* at `${ev['level']:,.4f}`")
-            except Exception:
-                continue
-    # 2. US100 & Nifty200 on 4h -> Trigger on CH-S, B-S
-    indices_watchlist = [("US100", WATCHLIST_CATEGORIES["US100"]), ("Nifty200", WATCHLIST_CATEGORIES["Nifty200"])]
-    for cat_name, symbols in indices_watchlist:
-        for sym, disp in symbols:
-            try:
-                df = fetch_live_ohlc(sym, period="60d", interval="1h") # Resample to 4h if interval 4h not supported natively
-                if not df.empty:
-                    df_4h = df.resample("4h").agg({"Open": "first", "High": "max", "Low": "min", "Close": "last", "Volume": "sum"}).dropna()
-                    renko_df, _ = build_atr_renko_df(df_4h, atr_period=int(atr_period), atr_multiplier=float(atr_multiplier))
-                    ev = latest_structure_event(renko_df, lookback=3)
-                    if ev and ev["type"] in ["CHOCH_DEMAND", "BOS_DEMAND"]: # CH-S & B-S triggers
-                        if ev["bars_ago"] <= 1:
-                            triggered_messages.append(f"🚨 *[4h {cat_name}]* *{disp}* triggered *{ev['label']}* at `${ev['level']:,.2f}`")
-            except Exception:
-                continue
-    if triggered_messages:
-        combined_msg = "📢 *QuantFX Automated Triggers*\n\n" + "\n".join(triggered_messages)
-        ok, m = send_telegram_alert(combined_msg, tg_token, tg_chat)
-        if ok:
-            st.sidebar.success(f"Dispatched {len(triggered_messages)} alert(s) via Telegram!")
-        else:
-            st.sidebar.error(f"Failed to send: {m}")
-    else:
-        st.sidebar.info("Scan completed: No new active triggers matching rules.")
+
 # =====================================================================
 # MAIN LAYOUT
 # =====================================================================
@@ -847,7 +785,8 @@ st.markdown(
     f"<span style='color:{COLOR_TEXT_MUTED};font-size:14px;'>({current_symbol}) · {interval}</span></h2>",
     unsafe_allow_html=True,
 )
-tab_chart, tab_outlook, tab_scanner = st.tabs(["📊 Charts", "🧭 7-Day Outlook", "🔎 Scanner"])
+tab_chart, tab_outlook, tab_scanner = st.tabs(["📊 Charts", "🧭 7-Day Forecast & Report", "🔎 Scanner"])
+
 # ---- Charts tab --------------------------------------------------------
 with tab_chart:
     with st.spinner(f"Fetching {current_display}..."):
@@ -863,8 +802,7 @@ with tab_chart:
             st.warning("Not enough data to build ATR Renko bricks for this timeframe — try a longer timeframe.")
         else:
             ha_df = compute_heikin_ashi(raw_df, ema_fast=ema_fast, ema_slow=ema_slow)
-            last_close = float(raw_df["Close"].iloc[-1])
-            prev_close = float(raw_df["Close"].iloc[-2]) if len(raw_df) > 1 else last_close
+            prev_close = float(raw_df["Close"].iloc[-2]) if len(raw_df) > 1 else float(raw_df["Close"].iloc[-1])
             chg_pct = ((float(raw_df["Close"].iloc[-1]) - prev_close) / prev_close) * 100 if prev_close else 0.0
             m1, m2, m3, m4 = st.columns(4)
             m1.metric("Last Close", f"{float(raw_df['Close'].iloc[-1]):,.4g}", f"{chg_pct:+.2f}%")
@@ -891,31 +829,31 @@ with tab_chart:
                 )
                 ok, m = send_telegram_alert(msg, tg_token, tg_chat)
                 st.success(m) if ok else st.error(m)
-# ---- Outlook tab --------------------------------------------------------
+
+# ---- Outlook / Forecast tab --------------------------------------------
 with tab_outlook:
-    with st.spinner("Computing 7-day outlook..."):
-        outlook = compute_7day_outlook(current_symbol, current_display, period="1y", interval="1d")
-    if outlook is None:
-        st.warning("Not enough history to compute an outlook for this symbol.")
+    with st.spinner("Computing multi-timeframe forecast considering Heikin Ashi, Renko, BOS/CHOCH, and MACD..."):
+        forecast = compute_multitimeframe_forecast(current_symbol, current_display)
+    if not forecast or forecast["report_df"].empty:
+        st.warning("Not enough history to compute a multi-timeframe forecast for this symbol.")
     else:
-        dir_color = COLOR_GREEN if outlook["direction"] == "Bullish" else (
-            COLOR_RED if outlook["direction"] == "Bearish" else COLOR_TEXT_MUTED
+        dir_color = COLOR_GREEN if forecast["direction"] == "Bullish" else (
+            COLOR_RED if forecast["direction"] == "Bearish" else COLOR_TEXT_MUTED
         )
         st.markdown(
             f"<span class='qfx-badge' style='background:{dir_color}22;color:{dir_color};font-size:16px;'>"
-            f"{outlook['direction']}</span>",
+            f"7-Day Forecast: {forecast['direction']}</span>",
             unsafe_allow_html=True,
         )
-        st.markdown(
-            f"Projected 7-day macro range: **{outlook['range_low']:,.2f} – {outlook['range_high']:,.2f}** "
-            f"(last close: {outlook['last_close']:,.2f})"
-        )
-        if outlook["structure_event"]:
-            se = outlook["structure_event"]
-            st.caption(f"Latest structure event: {se['label']} at {se['level']:,.2f} ({se['bars_ago']} bricks ago)")
-        st.markdown("#### Reasoning")
-        for r in outlook["reasons"]:
+        st.markdown(f"Last close reference price: **{forecast['last_close']:,.2f}**")
+        
+        st.markdown("#### Multi-Timeframe Analysis Report (HA, Renko, BOS/CHOCH, MACD)")
+        st.dataframe(forecast["report_df"], use_container_width=True, hide_index=True)
+
+        st.markdown("#### Strategic Reasoning")
+        for r in forecast["reasons"]:
             st.markdown(f"- {r}")
+
 # ---- Scanner tab --------------------------------------------------------
 with tab_scanner:
     st.caption("Runs the oracle score across a watchlist.")

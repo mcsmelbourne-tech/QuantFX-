@@ -692,56 +692,71 @@ def render_charts(renko_df, ha_df, brick_size, display, ema_fast, ema_slow):
     )
 
     # --- Row 1: Heikin Ashi candles + EMAs -----------------------------------
-   # --- Row 1: Heikin Ashi BLOCKS instead of candles -----------------------
-    # --- Row 1: Heikin Ashi BLOCKS instead of candles -----------------------
+   # --- Row 1: Heikin Ashi BLOCKS + EMAs ------------------------------------
+# Each HA candle is displayed as a solid price block.
+# Green = HA Close > HA Open
+# Red   = HA Close < HA Open
 
-    ha_colors = [
-        COLOR_BULL if ha_df["Close"].iloc[i] >= ha_df["Open"].iloc[i] else COLOR_BEAR
-        for i in range(len(ha_df))
-    ]
+for i in range(len(ha_df)):
+    ha_open = float(ha_df["Open"].iloc[i])
+    ha_close = float(ha_df["Close"].iloc[i])
 
-    # Draw HA blocks
-    for i in range(len(ha_df)):
-        o = ha_df["Open"].iloc[i]
-        c = ha_df["Close"].iloc[i]
-        h = ha_df["High"].iloc[i]
-        l = ha_df["Low"].iloc[i]
+    block_high = max(ha_open, ha_close)
+    block_low = min(ha_open, ha_close)
 
-        # Brick body (rectangle)
-        fig.add_shape(
-            type="rect",
-            x0=i - 0.45, x1=i + 0.45,
-            y0=min(o, c), y1=max(o, c),
-            fillcolor=ha_colors[i],
-            line=dict(color=ha_colors[i], width=1),
-            row=1, col=1
-        )
+    block_color = COLOR_BULL if ha_close >= ha_open else COLOR_BEAR
 
-        # Wick (vertical line)
-        fig.add_shape(
-            type="line",
-            x0=i, x1=i,
-            y0=l, y1=h,
-            line=dict(color=ha_colors[i], width=1),
-            row=1, col=1
-        )
+    # Main HA body block
+    fig.add_shape(
+        type="rect",
+        x0=i - 0.42,
+        x1=i + 0.42,
+        y0=block_low,
+        y1=block_high,
+        fillcolor=block_color,
+        line=dict(
+            color=block_color,
+            width=1
+        ),
+        opacity=0.95,
+        row=1,
+        col=1
+    )
 
-    # Add EMAs on top
-    fig.add_trace(go.Scatter(
-        x=x_ha, y=ha_df["EMA_FAST"],
-        line=dict(color=COLOR_MA_FAST, width=1.5),
-        name=f"HA EMA {ema_fast}",
-    ), row=1, col=1)
+    # Optional HA wick
+    ha_high = float(ha_df["High"].iloc[i])
+    ha_low = float(ha_df["Low"].iloc[i])
 
-    fig.add_trace(go.Scatter(
-        x=x_ha, y=ha_df["EMA_SLOW"],
-        line=dict(color=COLOR_MA_SLOW, width=1.5),
-        name=f"HA EMA {ema_slow}",
-    ), row=1, col=1)
+    fig.add_shape(
+        type="line",
+        x0=i,
+        x1=i,
+        y0=ha_low,
+        y1=ha_high,
+        line=dict(
+            color=block_color,
+            width=1
+        ),
+        row=1,
+        col=1
+    )
 
-
-
-
+# Invisible trace so "Heikin Ashi Blocks" appears in legend
+fig.add_trace(
+    go.Scatter(
+        x=[None],
+        y=[None],
+        mode="markers",
+        marker=dict(
+            size=10,
+            color=COLOR_BULL
+        ),
+        name="Heikin Ashi Blocks",
+        showlegend=True
+    ),
+    row=1,
+    col=1
+)
     # --- Row 2: ATR Renko candles + EMAs + structure -------------------
     fig.add_trace(go.Candlestick(
         x=x_renko, open=renko_df["Open"], high=renko_df["High"], low=renko_df["Low"], close=renko_df["Close"],

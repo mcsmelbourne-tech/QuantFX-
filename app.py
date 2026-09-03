@@ -1,14 +1,7 @@
 """
 QuantFX Terminal — ATR Renko & Macro Smart Money Structure
-Streamlit rewrite (the original was a PyQt6 desktop app and cannot run on
-Streamlit Cloud — no display server, no `import streamlit`, and it ended in
-`sys.exit(app.exec())` which opens a native GUI window).
-
-All analytics (ATR Renko construction, Heikin Ashi, MACD, RSI, BOS/CHoCH
-market-structure detection, the oracle score, and the 7-day outlook) are
-carried over unchanged from the original. The UI layer is new: Streamlit for
-controls/layout, Plotly for interactive (zoom/pan built in) charts instead of
-matplotlib+Qt canvases.
+Streamlit rewrite with custom candle coloring, right-side axes, 
+Heikin Ashi EMAs, and targeted multi-market Telegram alerts.
 """
 
 import numpy as np
@@ -101,10 +94,10 @@ def send_telegram_alert(message, token, chat_id):
 
 
 # =====================================================================
-# INDICATORS & MACD CROSSOVER DETECTION
+# INDICATORS & HEIKIN ASHI / MACD
 # =====================================================================
-def compute_heikin_ashi(df):
-    """Standard Heiken Ashi transform of an OHLC dataframe."""
+def compute_heikin_ashi(df, ema_fast=21, ema_slow=50):
+    """Standard Heiken Ashi transform with EMAs."""
     ha = pd.DataFrame(index=df.index)
     ha["Close"] = (df["Open"] + df["High"] + df["Low"] + df["Close"]) / 4.0
 
@@ -115,11 +108,13 @@ def compute_heikin_ashi(df):
 
     ha["High"] = pd.concat([df["High"], ha["Open"], ha["Close"]], axis=1).max(axis=1)
     ha["Low"] = pd.concat([df["Low"], ha["Open"], ha["Close"]], axis=1).min(axis=1)
+
+    ha["EMA_FAST"] = ha["Close"].ewm(span=ema_fast, adjust=False).mean()
+    ha["EMA_SLOW"] = ha["Close"].ewm(span=ema_slow, adjust=False).mean()
     return ha
 
 
 def detect_macd_crossovers(renko_df):
-    """Detects robust MACD line and Signal line crossovers for Buy/Sell triggers."""
     macd = renko_df["MACD"].values
     signal = renko_df["MACD_Signal"].values
 
@@ -329,14 +324,6 @@ def build_atr_renko_df(df,
     renko_df["EMA_FAST"] = r_close.ewm(span=ema_fast, adjust=False).mean()
     renko_df["EMA_SLOW"] = r_close.ewm(span=ema_slow, adjust=False).mean()
 
-    # ---- MACD Calculation -------------------------------------------------
-    # MACD is computed from the *real*, time-indexed close price series
-    # (df["Close"]), not from the Renko brick closes. Renko bricks collapse a
-    # whole price history down to only as many rows as there are bricks
-    # (often just a handful), which starves the 12/26/9 EMAs of data and
-    # makes MACD look flat. Computing it on the full-resolution close series
-    # lets it actually oscillate/cross, and each brick is stamped with the
-    # MACD/Signal value as of that brick's date.
     real_exp1 = closes.ewm(span=macd_fast, adjust=False).mean()
     real_exp2 = closes.ewm(span=macd_slow, adjust=False).mean()
     real_macd = real_exp1 - real_exp2
@@ -562,38 +549,9 @@ def compute_7day_outlook(symbol, display, period="1y", interval="1d"):
         if last_ema21 > last_ema50:
             bias_score += 1
             reasons.append(f"EMA21 (${last_ema21:,.2f}) is above EMA50 (${last_ema50:,.2f}), keeping the trend bullish.")
-            if prev_ema21 <= prev_ema50:
-                bias_score += 1
-                reasons.append("EMA21 just crossed above EMA50 - a fresh bullish crossover.")
         else:
             bias_score -= 1
             reasons.append(f"EMA21 (${last_ema21:,.2f}) is below EMA50 (${last_ema50:,.2f}), keeping the trend bearish.")
-            if prev_ema21 >= prev_ema50:
-                bias_score -= 1
-                reasons.append("EMA21 just crossed below EMA50 - a fresh bearish crossover.")
-
-        if ema21_slope_pct > 0.3:
-            bias_score += 1
-            reasons.append(f"Momentum is accelerating - EMA21 up {ema21_slope_pct:.1f}% over recent periods.")
-        elif ema21_slope_pct < -0.3:
-            bias_score -= 1
-            reasons.append(f"Momentum is deteriorating - EMA21 down {abs(ema21_slope_pct):.1f}% over recent periods.")
-
-        if last_rsi >= 70:
-            bias_score -= 0.5
-            reasons.append(f"RSI is elevated at {last_rsi:.0f}, cautioning potential pullbacks.")
-        elif last_rsi <= 30:
-            bias_score += 0.5
-            reasons.append(f"RSI is oversold at {last_rsi:.0f}, hinting at potential rebound support.")
-        else:
-            reasons.append(f"RSI is neutral at {last_rsi:.0f}.")
-
-        if last_macd_hist > 0 and last_macd_hist > prev_macd_hist:
-            bias_score += 1
-            reasons.append("MACD histogram is positive and expanding — macro bullish momentum building.")
-        elif last_macd_hist < 0 and last_macd_hist < prev_macd_hist:
-            bias_score -= 1
-            reasons.append("MACD histogram is negative and expanding — macro bearish momentum building.")
 
         renko_df, _ = build_atr_renko_df(
             data, atr_period=21, atr_multiplier=3.0,
@@ -601,32 +559,11 @@ def compute_7day_outlook(symbol, display, period="1y", interval="1d"):
             macd_fast=12, macd_slow=26, macd_signal=9,
             rsi_period=14
         )
-        if not renko_df.empty and len(renko_df) >= 2:
-            last_renko_type = renko_df["Type"].iloc[-1]
-            last_renko_close = float(renko_df["Close"].iloc[-1])
-            renko_fast = float(renko_df["EMA_FAST"].iloc[-1])
-            renko_slow = float(renko_df["EMA_SLOW"].iloc[-1])
-
-            if renko_fast > renko_slow:
-                bias_score += 0.5
-                reasons.append(f"ATR Renko trend is bullish - fast EMA (${renko_fast:,.2f}) > slow EMA (${renko_slow:,.2f}).")
-            else:
-                bias_score -= 0.5
-                reasons.append(f"ATR Renko trend is bearish - fast EMA (${renko_fast:,.2f}) < slow EMA (${renko_slow:,.2f}).")
-
-            if last_renko_type == "up":
-                bias_score += 0.5
-                reasons.append(f"Latest Renko brick printed up at ${last_renko_close:,.2f}.")
-            else:
-                bias_score -= 0.5
-                reasons.append(f"Latest Renko brick printed down at ${last_renko_close:,.2f}.")
-
         structure_event = None
         structure_trend = None
         if not renko_df.empty and "Structure" in renko_df.columns:
             structure_trend = renko_df["Trend"].iloc[-1]
             structure_event = latest_structure_event(renko_df, lookback=15)
-
             structure_weight = {
                 "BOS_DEMAND": 1.2, "BOS_SUPPLY": -1.2,
                 "CHOCH_DEMAND": 1.8, "CHOCH_SUPPLY": -1.8,
@@ -637,22 +574,9 @@ def compute_7day_outlook(symbol, display, period="1y", interval="1d"):
                 bars_ago = structure_event["bars_ago"]
                 bias_score += structure_weight.get(s_type, 0.0)
                 recency = "on the latest brick" if bars_ago == 0 else f"{bars_ago} bricks ago"
-                if s_type == "CHOCH_DEMAND":
-                    reasons.append(f"Bullish CH-S confirmed at ${s_level:,.2f} ({recency}) — major trend shift to demand.")
-                elif s_type == "CHOCH_SUPPLY":
-                    reasons.append(f"Bearish CH-D confirmed at ${s_level:,.2f} ({recency}) — major trend shift to supply.")
-                elif s_type == "BOS_DEMAND":
-                    reasons.append(f"Bullish B-S confirmed at ${s_level:,.2f} ({recency}) — macro demand continuation.")
-                elif s_type == "BOS_SUPPLY":
-                    reasons.append(f"Bearish B-D confirmed at ${s_level:,.2f} ({recency}) — macro supply continuation.")
+                reasons.append(f"Structure {structure_event['label']} confirmed at ${s_level:,.2f} ({recency}).")
 
-        if bias_score >= 2.0:
-            direction = "Bullish"
-        elif bias_score <= -2.0:
-            direction = "Bearish"
-        else:
-            direction = "Neutral / Consolidation"
-
+        direction = "Bullish" if bias_score >= 2.0 else ("Bearish" if bias_score <= -2.0 else "Neutral / Consolidation")
         weekly_move_pct = atr_pct * np.sqrt(bars_in_7_days)
         tilt = float(np.clip(bias_score / 3.0, -1, 1))
         center_shift_pct = weekly_move_pct * 0.35 * tilt
@@ -668,9 +592,6 @@ def compute_7day_outlook(symbol, display, period="1y", interval="1d"):
             "range_low": min(range_low, range_high),
             "range_high": max(range_low, range_high),
             "reasons": reasons,
-            "last_rsi": last_rsi,
-            "last_macd": float(macd.iloc[-1]),
-            "last_macd_signal": float(macd_signal.iloc[-1]),
             "structure_event": structure_event,
             "structure_trend": structure_trend,
         }
@@ -723,7 +644,6 @@ us100_raw = [
 
 nifty200_yf = [f"{t}.NS" for t in nifty200_raw]
 
-
 def convert_us100_symbol(t):
     if t == "NAS100":
         return "^NDX"
@@ -732,7 +652,6 @@ def convert_us100_symbol(t):
     if t == "US30":
         return "^DJI"
     return t
-
 
 us100_yf = [convert_us100_symbol(t) for t in us100_raw] + ["^IXIC"]
 
@@ -753,25 +672,8 @@ TIMEFRAME_PERIODS = {
 }
 
 
-def run_scanner(category_names):
-    """Runs the oracle score across the selected watchlist categories."""
-    tasks = []
-    for cat in category_names:
-        tasks.extend(WATCHLIST_CATEGORIES[cat])
-
-    results = []
-    progress = st.progress(0, text="Scanning...")
-    for i, (sym, disp) in enumerate(tasks):
-        res = evaluate_oracle_score(sym, display=disp)
-        if res:
-            results.append(res)
-        progress.progress((i + 1) / max(len(tasks), 1), text=f"Scanning {disp}...")
-    progress.empty()
-    return pd.DataFrame(results)
-
-
 # =====================================================================
-# CHARTING (Plotly — zoom/pan are built in)
+# CHARTING (Plotly — Renko & Heikin Ashi with Right-Side Values & EMAs)
 # =====================================================================
 def render_charts(renko_df, ha_df, brick_size, display, ema_fast, ema_slow):
     x_renko = list(range(len(renko_df)))
@@ -782,24 +684,34 @@ def render_charts(renko_df, ha_df, brick_size, display, ema_fast, ema_slow):
         row_heights=[0.30, 0.32, 0.20, 0.18],
         vertical_spacing=0.035,
         subplot_titles=(
-            f"{display} — Heikin Ashi",
+            f"{display} — Heikin Ashi (with EMA {ema_fast} & {ema_slow})",
             f"{display} — ATR Renko (brick ≈ {brick_size:,.4g})",
             "MACD (real price series)",
             "RSI",
         ),
     )
 
-    # --- Row 1: Heikin Ashi candles -----------------------------------
+    # --- Row 1: Heikin Ashi candles + EMAs -----------------------------------
     fig.add_trace(go.Candlestick(
         x=x_ha, open=ha_df["Open"], high=ha_df["High"], low=ha_df["Low"], close=ha_df["Close"],
         increasing_line_color=COLOR_BULL, decreasing_line_color=COLOR_BEAR,
+        increasing_fillcolor=COLOR_BULL, decreasing_fillcolor=COLOR_BEAR,
         name="Heikin Ashi", showlegend=False,
+    ), row=1, col=1)
+    fig.add_trace(go.Scatter(
+        x=x_ha, y=ha_df["EMA_FAST"], line=dict(color=COLOR_MA_FAST, width=1.5),
+        name=f"HA EMA {ema_fast}",
+    ), row=1, col=1)
+    fig.add_trace(go.Scatter(
+        x=x_ha, y=ha_df["EMA_SLOW"], line=dict(color=COLOR_MA_SLOW, width=1.5),
+        name=f"HA EMA {ema_slow}",
     ), row=1, col=1)
 
     # --- Row 2: ATR Renko candles + EMAs + structure -------------------
     fig.add_trace(go.Candlestick(
         x=x_renko, open=renko_df["Open"], high=renko_df["High"], low=renko_df["Low"], close=renko_df["Close"],
         increasing_line_color=COLOR_BULL, decreasing_line_color=COLOR_BEAR,
+        increasing_fillcolor=COLOR_BULL, decreasing_fillcolor=COLOR_BEAR,
         name="ATR Renko", showlegend=False,
     ), row=2, col=1)
     fig.add_trace(go.Scatter(
@@ -881,7 +793,7 @@ def render_charts(renko_df, ha_df, brick_size, display, ema_fast, ema_slow):
     )
     for r in range(1, 5):
         fig.update_xaxes(showgrid=False, row=r, col=1)
-        fig.update_yaxes(gridcolor="#2A2F3A", row=r, col=1)
+        fig.update_yaxes(gridcolor="#2A2F3A", side="right", row=r, col=1)
 
     st.plotly_chart(fig, use_container_width=True, theme=None)
 
@@ -934,6 +846,56 @@ if st.sidebar.button("🔄 Refresh data", use_container_width=True):
     st.rerun()
 
 # =====================================================================
+# AUTOMATED MULTI-MARKET TELEGRAM SCANNER & DISPATCHER
+# =====================================================================
+st.sidebar.markdown("---")
+st.sidebar.markdown("### 🔔 Automated Triggers")
+if st.sidebar.button("🚀 Run Rule-Based Telegram Scan", use_container_width=True):
+    triggered_messages = []
+    
+    # Rules:
+    # 1. Forex & Commodities on 30m -> Trigger on CH-D, CH-S, B-S, B-D
+    fx_comm_watchlist = [("Commodities", COMMODITIES), ("Forex", FOREX_PAIRS)]
+    for cat_name, symbols in fx_comm_watchlist:
+        for sym, disp in symbols:
+            try:
+                df = fetch_live_ohlc(sym, period="10d", interval="30m")
+                if not df.empty:
+                    renko_df, _ = build_atr_renko_df(df, atr_period=int(atr_period), atr_multiplier=float(atr_multiplier))
+                    ev = latest_structure_event(renko_df, lookback=3)
+                    if ev and ev["type"] in ["CHOCH_DEMAND", "CHOCH_SUPPLY", "BOS_DEMAND", "BOS_SUPPLY"]:
+                        if ev["bars_ago"] <= 1:  # Fresh trigger on recent bars
+                            triggered_messages.append(f"🚨 *[30m FX/Comm]* *{disp}* triggered *{ev['label']}* at `${ev['level']:,.4f}`")
+            except Exception:
+                continue
+
+    # 2. US100 & Nifty200 on 4h -> Trigger on CH-S, B-S
+    indices_watchlist = [("US100", WATCHLIST_CATEGORIES["US100"]), ("Nifty200", WATCHLIST_CATEGORIES["Nifty200"])]
+    for cat_name, symbols in indices_watchlist:
+        for sym, disp in symbols:
+            try:
+                df = fetch_live_ohlc(sym, period="60d", interval="1h") # Resample to 4h if interval 4h not supported natively
+                if not df.empty:
+                    df_4h = df.resample("4h").agg({"Open": "first", "High": "max", "Low": "min", "Close": "last", "Volume": "sum"}).dropna()
+                    renko_df, _ = build_atr_renko_df(df_4h, atr_period=int(atr_period), atr_multiplier=float(atr_multiplier))
+                    ev = latest_structure_event(renko_df, lookback=3)
+                    if ev and ev["type"] in ["CHOCH_DEMAND", "BOS_DEMAND"]: # CH-S & B-S triggers
+                        if ev["bars_ago"] <= 1:
+                            triggered_messages.append(f"🚨 *[4h {cat_name}]* *{disp}* triggered *{ev['label']}* at `${ev['level']:,.2f}`")
+            except Exception:
+                continue
+
+    if triggered_messages:
+        combined_msg = "📢 *QuantFX Automated Triggers*\n\n" + "\n".join(triggered_messages)
+        ok, m = send_telegram_alert(combined_msg, tg_token, tg_chat)
+        if ok:
+            st.sidebar.success(f"Dispatched {len(triggered_messages)} alert(s) via Telegram!")
+        else:
+            st.sidebar.error(f"Failed to send: {m}")
+    else:
+        st.sidebar.info("Scan completed: No new active triggers matching rules.")
+
+# =====================================================================
 # MAIN LAYOUT
 # =====================================================================
 st.markdown(
@@ -959,9 +921,9 @@ with tab_chart:
         if renko_df.empty:
             st.warning("Not enough data to build ATR Renko bricks for this timeframe — try a longer timeframe.")
         else:
-            ha_df = compute_heikin_ashi(renko_df)
+            ha_df = compute_heikin_ashi(raw_df, ema_fast=ema_fast, ema_slow=ema_slow)
 
-            last_close = float(renko_df["Close"].iloc[-1])
+            last_close = float(raw_df["Close"].iloc[-1])
             prev_close = float(raw_df["Close"].iloc[-2]) if len(raw_df) > 1 else last_close
             chg_pct = ((float(raw_df["Close"].iloc[-1]) - prev_close) / prev_close) * 100 if prev_close else 0.0
 
@@ -1024,7 +986,7 @@ with tab_outlook:
 
 # ---- Scanner tab --------------------------------------------------------
 with tab_scanner:
-    st.caption("Runs the oracle score across a watchlist. Each symbol requires a live fetch, so keep the list short-ish.")
+    st.caption("Runs the oracle score across a watchlist.")
     cats = st.multiselect("Watchlists to scan", list(WATCHLIST_CATEGORIES.keys()), default=["Commodities", "Forex"])
     if st.button("▶️ Run scanner", type="primary"):
         if not cats:

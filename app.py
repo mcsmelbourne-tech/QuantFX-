@@ -1,7 +1,7 @@
 """
 QuantFX Terminal — ATR Renko & Macro Smart Money Structure
 Streamlit rewrite with custom candle coloring, right-side axes, 
-Heikin Ashi EMAs, single-fire pullback signals, and targeted multi-market Telegram alerts.
+Heikin Ashi EMAs, single-fire pullback signals with 1.5% font size, and targeted multi-market Telegram alerts.
 """
 import numpy as np
 import pandas as pd
@@ -660,7 +660,7 @@ def render_charts(renko_df, ha_df, brick_size, display, ema_fast, ema_slow):
         name=f"EMA {ema_slow}",
     ), row=2, col=1)
 
-    # Add Single-Fire Pullback Signal Markers on Renko chart (Label changed to BUY / SELL)
+    # Add Single-Fire Pullback Signal Markers on Renko chart (Font size updated to 1.5%)
     pb_buy_x = [i for i in range(len(renko_df)) if renko_df["Pullback_Signal"].iloc[i] == "BUY"]
     pb_buy_y = [renko_df["Low"].iloc[i] - (brick_size * 0.5) for i in pb_buy_x]
     pb_sell_x = [i for i in range(len(renko_df)) if renko_df["Pullback_Signal"].iloc[i] == "SELL"]
@@ -671,7 +671,7 @@ def render_charts(renko_df, ha_df, brick_size, display, ema_fast, ema_slow):
             x=pb_buy_x, y=pb_buy_y, mode="markers+text",
             marker=dict(color=COLOR_GREEN, size=12, symbol="triangle-up"),
             text=["BUY"] * len(pb_buy_x), textposition="bottom center",
-            textfont=dict(color=COLOR_GREEN, size=9),
+            textfont=dict(color=COLOR_GREEN, size=14),
             name="Pullback Buy Signal",
         ), row=2, col=1)
 
@@ -680,7 +680,7 @@ def render_charts(renko_df, ha_df, brick_size, display, ema_fast, ema_slow):
             x=pb_sell_x, y=pb_sell_y, mode="markers+text",
             marker=dict(color=COLOR_RED, size=12, symbol="triangle-down"),
             text=["SELL"] * len(pb_sell_x), textposition="top center",
-            textfont=dict(color=COLOR_RED, size=9),
+            textfont=dict(color=COLOR_RED, size=14),
             name="Pullback Sell Signal",
         ), row=2, col=1)
 

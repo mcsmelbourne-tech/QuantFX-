@@ -691,68 +691,66 @@ def render_charts(renko_df, ha_df, brick_size, display, ema_fast, ema_slow):
         ),
     )
 
-    # --- Row 1: Heikin Ashi candles + EMAs -----------------------------------
-   # --- Row 1: Heikin Ashi BLOCKS + EMAs ------------------------------------
-# Each HA candle is displayed as a solid price block.
-# Green = HA Close > HA Open
-# Red   = HA Close < HA Open
-
+       # --- Row 1: Heikin Ashi block candles + EMAs -------------------------------
 for i in range(len(ha_df)):
-    ha_open = float(ha_df["Open"].iloc[i])
-    ha_close = float(ha_df["Close"].iloc[i])
+    row = ha_df.iloc[i]
 
-    block_high = max(ha_open, ha_close)
-    block_low = min(ha_open, ha_close)
+    body_open = float(row["Open"])
+    body_close = float(row["Close"])
+    body_high = float(row["High"])
+    body_low = float(row["Low"])
 
-    block_color = COLOR_BULL if ha_close >= ha_open else COLOR_BEAR
-
-    # Main HA body block
-    fig.add_shape(
-        type="rect",
-        x0=i - 0.42,
-        x1=i + 0.42,
-        y0=block_low,
-        y1=block_high,
-        fillcolor=block_color,
-        line=dict(
-            color=block_color,
-            width=1
-        ),
-        opacity=0.95,
-        row=1,
-        col=1
-    )
-
-    # Optional HA wick
-    ha_high = float(ha_df["High"].iloc[i])
-    ha_low = float(ha_df["Low"].iloc[i])
-
+    # Wick
     fig.add_shape(
         type="line",
-        x0=i,
-        x1=i,
-        y0=ha_low,
-        y1=ha_high,
+        x0=x_ha[i],
+        x1=x_ha[i],
+        y0=body_low,
+        y1=body_high,
         line=dict(
-            color=block_color,
+            color=COLOR_BULL if body_close >= body_open else COLOR_BEAR,
             width=1
         ),
         row=1,
         col=1
     )
 
-# Invisible trace so "Heikin Ashi Blocks" appears in legend
+    # Heikin Ashi block/body
+    fig.add_shape(
+        type="rect",
+        x0=x_ha[i] - pd.Timedelta(minutes=2),
+        x1=x_ha[i] + pd.Timedelta(minutes=2),
+        y0=min(body_open, body_close),
+        y1=max(body_open, body_close),
+        fillcolor=COLOR_BULL if body_close >= body_open else COLOR_BEAR,
+        line=dict(
+            color=COLOR_BULL if body_close >= body_open else COLOR_BEAR,
+            width=1
+        ),
+        row=1,
+        col=1
+    )
+
+# EMAs
 fig.add_trace(
     go.Scatter(
-        x=[None],
-        y=[None],
-        mode="markers",
-        marker=dict(
-            size=10,
-            color=COLOR_BULL
-        ),
-        name="Heikin Ashi Blocks",
-        showlegend=True
+        x=x_ha,
+        y=ha_df["EMA_FAST"],
+        mode="lines",
+        name="HA EMA Fast",
+        line=dict(width=1.5)
+    ),
+    row=1,
+    col=1
+)
+
+fig.add_trace(
+    go.Scatter(
+        x=x_ha,
+        y=ha_df["EMA_SLOW"],
+        mode="lines",
+        name="HA EMA Slow",
+        line=dict(width=1.5)
     ),
     row=1,
     col=1

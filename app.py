@@ -1,4 +1,3 @@
-name=gemini-code-1788433370913.py
 """
 QuantFX Terminal — ATR Renko & Macro Smart Money Structure
 Streamlit rewrite with custom candle coloring, right-side axes, 

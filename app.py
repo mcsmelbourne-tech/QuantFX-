@@ -1,3 +1,4 @@
+name=gemini-code-1788433370913.py
 """
 QuantFX Terminal — ATR Renko & Macro Smart Money Structure
 Streamlit rewrite with custom candle coloring, right-side axes, 
@@ -643,7 +644,7 @@ TIMEFRAME_PERIODS = {
 }
 
 # =====================================================================
-# CHARTING (Plotly — Renko, Heikin Ashi with Blinking Dots & Pullback Markers)
+# CHARTING (Plotly — Synchronized Green/Red Coloring across Renko, HA, MACD, RSI)
 # =====================================================================
 def render_charts(renko_df, ha_df, brick_size, display, ema_fast, ema_slow):
     x_renko = list(range(len(renko_df)))
@@ -653,12 +654,16 @@ def render_charts(renko_df, ha_df, brick_size, display, ema_fast, ema_slow):
         row_heights=[0.30, 0.32, 0.20, 0.18],
         vertical_spacing=0.035,
         subplot_titles=(
-            f"{display} — Heikin Ashi (with Blinking Buy/Sell Dots & EMAs {ema_fast} & {ema_slow})",
+            f"{display} — Heikin Ashi (Green Buy / Red Sell Aligned with EMAs)",
             f"{display} — ATR Renko & Blinking Pullback Signals (brick ≈ {brick_size:,.4g})",
-            "MACD (real price series with Blinking Crossover Dots)",
-            "RSI",
+            "MACD (Green/Red Crossover Dots Aligned with Renko)",
+            "RSI (Synchronized Green/Red Buy & Sell Zones)",
         ),
     )
+    
+    # Trend alignment arrays based on Renko Type / EMA state
+    renko_trend_bull = (renko_df["EMA_FAST"] > renko_df["EMA_SLOW"]).values
+
     # --- Row 1: Heikin Ashi candles + EMAs + Blinking Round Dot Buy/Sell Signals ---
     fig.add_trace(go.Candlestick(
         x=x_ha, open=ha_df["Open"], high=ha_df["High"], low=ha_df["Low"], close=ha_df["Close"],
@@ -758,7 +763,7 @@ def render_charts(renko_df, ha_df, brick_size, display, ema_fast, ema_slow):
             yshift=14 if s_type in ("BOS_DEMAND", "CHOCH_DEMAND") else -14,
         )
 
-    # --- Row 3: MACD + Blinking Round Dot Crossover Signals --------------
+    # --- Row 3: MACD + Synchronized Green/Red Crossover Dots --------------
     fig.add_trace(go.Scatter(
         x=x_renko, y=renko_df["MACD"], line=dict(color=COLOR_MACD_LINE, width=1.6), name="MACD",
     ), row=3, col=1)
@@ -775,20 +780,28 @@ def render_charts(renko_df, ha_df, brick_size, display, ema_fast, ema_slow):
     if macd_buy_x:
         fig.add_trace(go.Scatter(
             x=macd_buy_x, y=macd_buy_y, mode="markers",
-            marker=dict(color=COLOR_PB_BUY, size=10, symbol="circle"),
-            name="MACD Cross Up Dot",
+            marker=dict(color=COLOR_BULL, size=10, symbol="circle"),
+            name="MACD Buy (Green)",
         ), row=3, col=1)
     if macd_sell_x:
         fig.add_trace(go.Scatter(
             x=macd_sell_x, y=macd_sell_y, mode="markers",
-            marker=dict(color=COLOR_PB_SELL, size=10, symbol="circle"),
-            name="MACD Cross Down Dot",
+            marker=dict(color=COLOR_BEAR, size=10, symbol="circle"),
+            name="MACD Sell (Red)",
         ), row=3, col=1)
 
-    # --- Row 4: RSI --------------------------------------------------------
+    # --- Row 4: RSI with Split Green (Buy) / Red (Sell) Segments -----------
+    rsi_vals = renko_df["RSI"].values
+    rsi_bull_y = np.where(renko_trend_bull, rsi_vals, np.nan)
+    rsi_bear_y = np.where(~renko_trend_bull, rsi_vals, np.nan)
+
     fig.add_trace(go.Scatter(
-        x=x_renko, y=renko_df["RSI"], line=dict(color="#FFD700", width=1.5), name="RSI",
+        x=x_renko, y=rsi_bull_y, line=dict(color=COLOR_BULL, width=2.0), name="RSI Buy (Green)",
     ), row=4, col=1)
+    fig.add_trace(go.Scatter(
+        x=x_renko, y=rsi_bear_y, line=dict(color=COLOR_BEAR, width=2.0), name="RSI Sell (Red)",
+    ), row=4, col=1)
+
     fig.add_hline(y=70, line=dict(color=COLOR_RED, width=1, dash="dash"), row=4, col=1)
     fig.add_hline(y=30, line=dict(color=COLOR_GREEN, width=1, dash="dash"), row=4, col=1)
     fig.update_yaxes(range=[0, 100], row=4, col=1)

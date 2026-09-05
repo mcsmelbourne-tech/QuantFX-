@@ -985,7 +985,12 @@ def render_charts(renko_df, ha_df, brick_size, display, ema_fast, ema_slow):
     if row3_range:
         fig.update_yaxes(range=row3_range, row=3, col=1)
 
-    st.plotly_chart(fig, use_container_width=True, theme=None)
+    # Render at 85% of the available width (with a blank margin alongside)
+    # instead of stretching edge-to-edge — narrower bricks/candles read
+    # more clearly than a full-bleed chart.
+    chart_col, _spacer_col = st.columns([0.85, 0.15])
+    with chart_col:
+        st.plotly_chart(fig, use_container_width=True, theme=None)
 
 # =====================================================================
 # TOP-MOVER QUICK-GLANCE BOXES

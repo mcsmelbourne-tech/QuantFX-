@@ -2,7 +2,8 @@
 QuantFX Terminal — ATR Renko & Macro Smart Money Structure
 Streamlit rewrite with custom candle coloring, right-side axes, 
 Heikin Ashi EMAs, single-fire pullback signals with blinking animation, 
-blinking round dot buy/sell markers on Heikin Ashi & MACD, and targeted multi-market Telegram alerts.
+blinking round dot buy/sell markers on Heikin Ashi & MACD, interactive quick-glance boxes,
+and targeted multi-market Telegram alerts.
 """
 import numpy as np
 import pandas as pd
@@ -23,6 +24,12 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
 )
+
+# Initialize Session State for Active Symbol Selection
+if "selected_ticker" not in st.session_state:
+    st.session_state["selected_ticker"] = "GC=F"
+if "selected_display" not in st.session_state:
+    st.session_state["selected_display"] = "GOLD"
 
 # =====================================================================
 # COLORS – TradingView-style dark + neon
@@ -65,6 +72,22 @@ st.markdown(
     .qfx-badge {{
         display:inline-block; padding:3px 10px; border-radius:4px;
         font-weight:700; font-size:12px; letter-spacing:0.5px;
+    }}
+    
+    /* Styling for quick-glance box clickable buttons */
+    div[data-testid="stColumn"] button[kind="tertiary"] {{
+        padding: 0px 4px !important;
+        margin: 0px !important;
+        height: auto !important;
+        min-height: 0px !important;
+        font-weight: 700 !important;
+        color: {COLOR_TEXT_MAIN} !important;
+        background-color: transparent !important;
+        border: none !important;
+    }}
+    div[data-testid="stColumn"] button[kind="tertiary"]:hover {{
+        color: {COLOR_BULL} !important;
+        text-decoration: underline !important;
     }}
     
     @keyframes signalBlink {{
@@ -881,7 +904,6 @@ def render_charts(renko_df, ha_df, brick_size, display, ema_fast, ema_slow):
     fig.add_hline(y=30, line=dict(color=COLOR_GREEN, width=1, dash="dash"), row=4, col=1)
     fig.update_yaxes(range=[0, 100], row=4, col=1)
 
-    # Added right margin (r=60) so right-aligned axis labels do not get cut off
     fig.update_layout(
         height=950,
         paper_bgcolor=COLOR_BG_DARK,
@@ -938,47 +960,56 @@ def render_charts(renko_df, ha_df, brick_size, display, ema_fast, ema_slow):
     if row3_range:
         fig.update_yaxes(range=row3_range, row=3, col=1)
 
-    # Expanded width to 95% horizontally with a 5% spacer on the right
     chart_col, _spacer_col = st.columns([0.95, 0.05])
     with chart_col:
         st.plotly_chart(fig, use_container_width=True, theme=None)
 
 # =====================================================================
-# TOP-MOVER QUICK-GLANCE BOXES
+# TOP-MOVER QUICK-GLANCE INTERACTIVE BOXES
 # =====================================================================
-def render_top_box(title, movers, mode="single"):
+def render_top_box(title, movers, box_key, mode="single"):
+    st.markdown(
+        f"<div style='font-size:11px;color:{COLOR_TEXT_MUTED};font-weight:600;margin-bottom:6px;'>{title}</div>",
+        unsafe_allow_html=True
+    )
     if not movers:
-        body = f"<div style='font-size:10px;color:{COLOR_TEXT_MUTED};'>No data</div>"
-    elif mode == "single":
+        st.markdown(f"<div style='font-size:10px;color:{COLOR_TEXT_MUTED};'>No data</div>", unsafe_allow_html=True)
+        return
+
+    if mode == "single":
         best = movers[0]
         color = COLOR_GREEN if best["chg"] >= 0 else COLOR_RED
         arrow = "▲" if best["chg"] >= 0 else "▼"
         is_fx = "=X" in best["symbol"]
         price_str = f"{best['price']:,.4f}" if is_fx else f"{best['price']:,.4g}"
-        body = (
-            f"<div style='font-size:10px;font-weight:700;color:{COLOR_TEXT_MAIN};'>{best['display']}</div>"
-            f"<div style='font-size:10px;color:{COLOR_TEXT_MUTED};'>{price_str}</div>"
-            f"<div style='font-size:10px;color:{color};'>{arrow} {best['chg']:+.2f}%</div>"
-        )
+
+        btn_col, stat_col = st.columns([0.5, 0.5])
+        with btn_col:
+            if st.button(best['display'], key=f"btn_{box_key}_0", type="tertiary"):
+                st.session_state["selected_ticker"] = best['symbol']
+                st.session_state["selected_display"] = best['display']
+                st.rerun()
+        with stat_col:
+            st.markdown(
+                f"<div style='font-size:10px;color:{COLOR_TEXT_MUTED};'>{price_str}</div>"
+                f"<div style='font-size:10px;color:{color};'>{arrow} {best['chg']:+.2f}%</div>",
+                unsafe_allow_html=True
+            )
     else:
-        rows_html = []
         for idx, m in enumerate(movers, start=1):
             color = COLOR_GREEN if m["chg"] >= 0 else COLOR_RED
             arrow = "▲" if m["chg"] >= 0 else "▼"
-            rows_html.append(
-                "<div style='font-size:10px;display:flex;justify-content:space-between;"
-                f"gap:10px;color:{COLOR_TEXT_MAIN};padding:1px 0;'>"
-                f"<span>{idx}. {m['display']}</span>"
-                f"<span style='color:{color};white-space:nowrap;'>{arrow} {m['chg']:+.2f}%</span>"
-                f"</div>"
-            )
-        body = "".join(rows_html)
-    return (
-        f"<div style='background-color:{COLOR_PANEL_BG};border:1px solid {COLOR_BORDER};"
-        f"border-radius:6px;padding:10px 14px;'>"
-        f"<div style='font-size:10px;color:{COLOR_TEXT_MUTED};margin-bottom:4px;'>{title}</div>"
-        f"{body}</div>"
-    )
+
+            col_num, col_btn, col_chg = st.columns([0.15, 0.5, 0.35])
+            with col_num:
+                st.markdown(f"<span style='font-size:10px;color:{COLOR_TEXT_MUTED};'>{idx}.</span>", unsafe_allow_html=True)
+            with col_btn:
+                if st.button(m['display'], key=f"btn_{box_key}_{idx}", type="tertiary"):
+                    st.session_state["selected_ticker"] = m['symbol']
+                    st.session_state["selected_display"] = m['display']
+                    st.rerun()
+            with col_chg:
+                st.markdown(f"<div style='font-size:10px;color:{color};text-align:right;'>{arrow} {m['chg']:+.2f}%</div>", unsafe_allow_html=True)
 
 # =====================================================================
 # SIDEBAR CONTROLS
@@ -990,10 +1021,17 @@ if symbol_mode == "Presets":
     preset_cat = st.sidebar.selectbox("Category", list(WATCHLIST_CATEGORIES.keys()))
     options = WATCHLIST_CATEGORIES[preset_cat]
     choice = st.sidebar.selectbox("Symbol", options, format_func=lambda t: t[1])
-    current_symbol, current_display = choice
+    if choice[0] != st.session_state["selected_ticker"] and choice[1] != st.session_state["selected_display"]:
+        st.session_state["selected_ticker"], st.session_state["selected_display"] = choice
 else:
-    current_symbol = st.sidebar.text_input("Yahoo Finance symbol", value="GC=F")
-    current_display = st.sidebar.text_input("Display name", value=current_symbol)
+    custom_sym = st.sidebar.text_input("Yahoo Finance symbol", value=st.session_state["selected_ticker"])
+    custom_disp = st.sidebar.text_input("Display name", value=st.session_state["selected_display"])
+    st.session_state["selected_ticker"] = custom_sym
+    st.session_state["selected_display"] = custom_disp
+
+current_symbol = st.session_state["selected_ticker"]
+current_display = st.session_state["selected_display"]
+
 interval = st.sidebar.select_slider(
     "Timeframe", options=list(TIMEFRAME_PERIODS.keys()), value="1d"
 )
@@ -1067,7 +1105,6 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# Added toggle switch state to hide/show the chart canvas
 if "show_chart" not in st.session_state:
     st.session_state["show_chart"] = True
 
@@ -1095,16 +1132,28 @@ with tab_chart:
                 prev_close = float(raw_df["Close"].iloc[-2]) if len(raw_df) > 1 else last_close
                 chg_pct = ((float(raw_df["Close"].iloc[-1]) - prev_close) / prev_close) * 100 if prev_close else 0.0
                 struct_event = latest_structure_event(renko_df, lookback=15)
+                
+                # Interactive Top-Mover Quick Glance Panel
                 m1, m2, m3, m4 = st.columns(4)
                 with st.spinner("Scanning watchlists for top movers..."):
                     top_commodity = fetch_top_n_movers(tuple(COMMODITIES), n=1)
                     top_forex = fetch_top_n_movers(tuple(FOREX_PAIRS), n=1)
                     top_us100 = fetch_top_n_movers(tuple(zip(us100_yf, us100_raw + ["IXIC"])), n=5)
                     top_nifty200 = fetch_top_n_movers(tuple(zip(nifty200_yf, nifty200_raw)), n=5)
-                m1.markdown(render_top_box("Top Commodity", top_commodity, mode="single"), unsafe_allow_html=True)
-                m2.markdown(render_top_box("Top Forex", top_forex, mode="single"), unsafe_allow_html=True)
-                m3.markdown(render_top_box("Top 5 US100", top_us100, mode="lines"), unsafe_allow_html=True)
-                m4.markdown(render_top_box("Top 5 Nifty200", top_nifty200, mode="lines"), unsafe_allow_html=True)
+
+                with m1:
+                    with st.container(border=True):
+                        render_top_box("Top Commodity", top_commodity, box_key="comm", mode="single")
+                with m2:
+                    with st.container(border=True):
+                        render_top_box("Top Forex", top_forex, box_key="forex", mode="single")
+                with m3:
+                    with st.container(border=True):
+                        render_top_box("Top 5 US100", top_us100, box_key="us100", mode="lines")
+                with m4:
+                    with st.container(border=True):
+                        render_top_box("Top 5 Nifty200", top_nifty200, box_key="nifty", mode="lines")
+
                 render_charts(renko_df, ha_df, brick_size, current_display, ema_fast, ema_slow)
                 
                 last_signal = renko_df["Signal"].iloc[-1]

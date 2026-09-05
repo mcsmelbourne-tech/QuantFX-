@@ -458,6 +458,37 @@ def fetch_live_ohlc(symbol="GC=F", period="6mo", interval="1d"):
         df.columns = df.columns.get_level_values(0)
     return df
 
+@st.cache_data(ttl=300, show_spinner=False)
+def fetch_top_mover(symbols_tuple):
+    """Batch-download the last 2 daily closes for every symbol in a watchlist
+    and return the single best % gainer, for the quick-glance top boxes."""
+    symbols = list(symbols_tuple)
+    tickers = [s for s, _ in symbols]
+    if not tickers:
+        return None
+    try:
+        data = yf.download(tickers, period="5d", interval="1d", group_by="ticker",
+                            progress=False, threads=True)
+    except Exception:
+        return None
+    best = None
+    for sym, disp in symbols:
+        try:
+            sub = data[sym] if len(tickers) > 1 else data
+            closes = sub["Close"].dropna()
+            if len(closes) < 2:
+                continue
+            last_price = float(closes.iloc[-1])
+            prev_price = float(closes.iloc[-2])
+            if prev_price == 0:
+                continue
+            chg = (last_price - prev_price) / prev_price * 100
+            if best is None or chg > best["chg"]:
+                best = {"symbol": sym, "display": disp, "price": last_price, "chg": chg}
+        except Exception:
+            continue
+    return best
+
 def evaluate_oracle_score(symbol, display=None):
     try:
         df = fetch_live_ohlc(symbol, period="1y", interval="1d")
@@ -911,6 +942,29 @@ def render_charts(renko_df, ha_df, brick_size, display, ema_fast, ema_slow):
     st.plotly_chart(fig, use_container_width=True, theme=None)
 
 # =====================================================================
+# TOP-MOVER QUICK-GLANCE BOXES
+# =====================================================================
+def render_top_box(title, best):
+    if best is None:
+        body = "<div style='font-size:8px;color:{muted};'>No data</div>".format(muted=COLOR_TEXT_MUTED)
+    else:
+        color = COLOR_GREEN if best["chg"] >= 0 else COLOR_RED
+        arrow = "▲" if best["chg"] >= 0 else "▼"
+        is_fx = "=X" in best["symbol"]
+        price_str = f"{best['price']:,.4f}" if is_fx else f"{best['price']:,.4g}"
+        body = (
+            f"<div style='font-size:8px;font-weight:700;color:{COLOR_TEXT_MAIN};'>{best['display']}</div>"
+            f"<div style='font-size:8px;color:{COLOR_TEXT_MUTED};'>{price_str}</div>"
+            f"<div style='font-size:8px;color:{color};'>{arrow} {best['chg']:+.2f}%</div>"
+        )
+    return (
+        f"<div style='background-color:{COLOR_PANEL_BG};border:1px solid {COLOR_BORDER};"
+        f"border-radius:6px;padding:10px 14px;'>"
+        f"<div style='font-size:8px;color:{COLOR_TEXT_MUTED};margin-bottom:4px;'>{title}</div>"
+        f"{body}</div>"
+    )
+
+# =====================================================================
 # SIDEBAR CONTROLS
 # =====================================================================
 st.sidebar.markdown("## 📈 QuantFX Terminal")
@@ -1024,12 +1078,17 @@ with tab_chart:
             last_close = float(raw_df["Close"].iloc[-1])
             prev_close = float(raw_df["Close"].iloc[-2]) if len(raw_df) > 1 else last_close
             chg_pct = ((float(raw_df["Close"].iloc[-1]) - prev_close) / prev_close) * 100 if prev_close else 0.0
-            m1, m2, m3, m4 = st.columns(4)
-            m1.metric("Last Close", f"{float(raw_df['Close'].iloc[-1]):,.4g}", f"{chg_pct:+.2f}%")
-            m2.metric("Renko Bricks", len(renko_df))
-            m3.metric("Brick Size", f"{brick_size:,.4g}")
             struct_event = latest_structure_event(renko_df, lookback=15)
-            m4.metric("Latest Structure", struct_event["label"] if struct_event else "—")
+            m1, m2, m3, m4 = st.columns(4)
+            with st.spinner("Scanning watchlists for top movers..."):
+                top_commodity = fetch_top_mover(tuple(COMMODITIES))
+                top_forex = fetch_top_mover(tuple(FOREX_PAIRS))
+                top_us100 = fetch_top_mover(tuple(zip(us100_yf, us100_raw + ["IXIC"])))
+                top_nifty200 = fetch_top_mover(tuple(zip(nifty200_yf, nifty200_raw)))
+            m1.markdown(render_top_box("Top Commodity", top_commodity), unsafe_allow_html=True)
+            m2.markdown(render_top_box("Top Forex", top_forex), unsafe_allow_html=True)
+            m3.markdown(render_top_box("Top US100", top_us100), unsafe_allow_html=True)
+            m4.markdown(render_top_box("Top Nifty200", top_nifty200), unsafe_allow_html=True)
             render_charts(renko_df, ha_df, brick_size, current_display, ema_fast, ema_slow)
             
             last_signal = renko_df["Signal"].iloc[-1]

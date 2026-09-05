@@ -91,6 +91,29 @@ st.markdown(
 # =====================================================================
 # TELEGRAM
 # =====================================================================
+import json
+import os
+
+TG_CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".qfx_telegram_config.json")
+
+def load_telegram_config():
+    try:
+        if os.path.exists(TG_CONFIG_PATH):
+            with open(TG_CONFIG_PATH, "r") as f:
+                data = json.load(f)
+            return data.get("tg_token", ""), data.get("tg_chat", "")
+    except Exception:
+        pass
+    return "", ""
+
+def save_telegram_config(token, chat_id):
+    try:
+        with open(TG_CONFIG_PATH, "w") as f:
+            json.dump({"tg_token": token, "tg_chat": chat_id}, f)
+        return True, "Saved."
+    except Exception as e:
+        return False, str(e)
+
 def send_telegram_alert(message, token, chat_id):
     token = (token or "").strip()
     chat_id = (chat_id or "").strip()
@@ -647,12 +670,14 @@ TIMEFRAME_PERIODS = {
 # CHARTING (TradingView Style MACD + Aligned Renko Buy/Sell Buttons)
 # =====================================================================
 def render_charts(renko_df, ha_df, brick_size, display, ema_fast, ema_slow):
+    # ha_df is now built directly from renko_df, so both panels — plus MACD and
+    # RSI, which are already renko-aligned — share one common x-axis (brick index).
     x_renko = list(range(len(renko_df)))
-    x_ha = list(range(len(ha_df)))
+    x_ha = x_renko
     fig = make_subplots(
-        rows=4, cols=1, shared_xaxes=False,
-        row_heights=[0.30, 0.32, 0.20, 0.18],
-        vertical_spacing=0.035,
+        rows=4, cols=1, shared_xaxes=True,
+        row_heights=[0.42, 0.42, 0.09, 0.07],
+        vertical_spacing=0.05,
         subplot_titles=(
             f"{display} — Heikin Ashi (Green Buy / Red Sell Aligned with EMAs)",
             f"{display} — ATR Renko & Aligned Buy/Sell Signal Buttons (brick ≈ {brick_size:,.4g})",
@@ -737,31 +762,34 @@ def render_charts(renko_df, ha_df, brick_size, display, ema_fast, ema_slow):
             name="Renko SELL Button",
         ), row=2, col=1)
 
+    # Only the most recent structure event (BOS/CHoCH) is drawn, instead of every
+    # historical one, to keep the Renko panel readable.
     struct_style = {
         "BOS_DEMAND": (COLOR_BOS_DEMAND, "B-S"),
         "BOS_SUPPLY": (COLOR_BOS_SUPPLY, "B-D"),
         "CHOCH_DEMAND": (COLOR_CHOCH_DEMAND, "CH-S"),
         "CHOCH_SUPPLY": (COLOR_CHOCH_SUPPLY, "CH-D"),
     }
-    for i in range(len(renko_df)):
-        s_type = renko_df["Structure"].iloc[i]
-        if s_type not in struct_style:
-            continue
-        color, label = struct_style[s_type]
-        s_level = renko_df["StructureLevel"].iloc[i]
-        origin_idx = renko_df["StructureOriginIdx"].iloc[i]
-        span_start = int(origin_idx) if pd.notna(origin_idx) else max(i - 6, 0)
-        fig.add_shape(
-            type="line", x0=span_start, x1=i, y0=s_level, y1=s_level,
-            line=dict(color=color, width=1.5, dash="dash"), opacity=0.6,
-            row=2, col=1,
-        )
-        fig.add_annotation(
-            x=i, y=s_level, text=label, showarrow=False,
-            font=dict(color="#FFFFFF", size=10), bgcolor="#1E222D",
-            bordercolor=color, borderwidth=1, row=2, col=1,
-            yshift=14 if s_type in ("BOS_DEMAND", "CHOCH_DEMAND") else -14,
-        )
+    last_struct_event = latest_structure_event(renko_df, lookback=len(renko_df))
+    if last_struct_event is not None:
+        s_type = last_struct_event["type"]
+        if s_type in struct_style:
+            color, label = struct_style[s_type]
+            s_level = last_struct_event["level"]
+            i = len(renko_df) - 1 - last_struct_event["bars_ago"]
+            origin_idx = renko_df["StructureOriginIdx"].iloc[i]
+            span_start = int(origin_idx) if pd.notna(origin_idx) else max(i - 6, 0)
+            fig.add_shape(
+                type="line", x0=span_start, x1=len(renko_df) - 1, y0=s_level, y1=s_level,
+                line=dict(color=color, width=1.5, dash="dash"), opacity=0.6,
+                row=2, col=1,
+            )
+            fig.add_annotation(
+                x=i, y=s_level, text=label, showarrow=False,
+                font=dict(color="#FFFFFF", size=10), bgcolor="#1E222D",
+                bordercolor=color, borderwidth=1, row=2, col=1,
+                yshift=14 if s_type in ("BOS_DEMAND", "CHOCH_DEMAND") else -14,
+            )
 
     # --- Row 3: TradingView Style MACD (Histogram + Lines) ---
     hist_vals = renko_df["MACD_Hist"].values
@@ -795,7 +823,7 @@ def render_charts(renko_df, ha_df, brick_size, display, ema_fast, ema_slow):
     fig.update_yaxes(range=[0, 100], row=4, col=1)
 
     fig.update_layout(
-        height=980,
+        height=1150,
         paper_bgcolor=COLOR_BG_DARK,
         plot_bgcolor=COLOR_BG_DARK,
         font=dict(color=COLOR_TEXT_MUTED, size=11),
@@ -805,7 +833,7 @@ def render_charts(renko_df, ha_df, brick_size, display, ema_fast, ema_slow):
         xaxis2_rangeslider_visible=False,
     )
     for r in range(1, 5):
-        fig.update_xaxes(showgrid=False, row=r, col=1)
+        fig.update_xaxes(showgrid=False, row=r, col=1, matches="x")
         fig.update_yaxes(gridcolor="#2A2F3A", side="right", row=r, col=1)
     st.plotly_chart(fig, use_container_width=True, theme=None)
 
@@ -839,11 +867,19 @@ atr_multiplier = c4.number_input("ATR Mult.", min_value=0.1, max_value=10.0, val
 
 st.sidebar.markdown("---")
 with st.sidebar.expander("Telegram alerts"):
+    if "tg_token" not in st.session_state or "tg_chat" not in st.session_state:
+        saved_token, saved_chat = load_telegram_config()
+        st.session_state["tg_token"] = saved_token
+        st.session_state["tg_chat"] = saved_chat
     tg_token = st.text_input("Bot Token", value=st.session_state.get("tg_token", ""), type="password")
     tg_chat = st.text_input("Chat ID", value=st.session_state.get("tg_chat", ""))
     st.session_state["tg_token"] = tg_token
     st.session_state["tg_chat"] = tg_chat
-    if st.button("Send test alert"):
+    tcol1, tcol2 = st.columns(2)
+    if tcol1.button("💾 Save login", use_container_width=True):
+        ok, msg = save_telegram_config(tg_token, tg_chat)
+        st.success("Telegram login saved.") if ok else st.error(f"Could not save: {msg}")
+    if tcol2.button("Send test alert", use_container_width=True):
         ok, msg = send_telegram_alert(
             "🟢 *QuantFX Terminal Test Alert*\nConnection successfully established!", tg_token, tg_chat
         )
@@ -908,7 +944,10 @@ with tab_chart:
         if renko_df.empty:
             st.warning("Not enough data to build ATR Renko bricks for this timeframe — try a longer timeframe.")
         else:
-            ha_df = compute_heikin_ashi(raw_df, ema_fast=ema_fast, ema_slow=ema_slow)
+            # Heikin Ashi is built from the ATR Renko bricks themselves (not the raw
+            # price bars) so it shares the exact same x-axis / bar count as the
+            # Renko, MACD and RSI panels below and everything lines up together.
+            ha_df = compute_heikin_ashi(renko_df, ema_fast=ema_fast, ema_slow=ema_slow)
             last_close = float(raw_df["Close"].iloc[-1])
             prev_close = float(raw_df["Close"].iloc[-2]) if len(raw_df) > 1 else last_close
             chg_pct = ((float(raw_df["Close"].iloc[-1]) - prev_close) / prev_close) * 100 if prev_close else 0.0

@@ -459,19 +459,19 @@ def fetch_live_ohlc(symbol="GC=F", period="6mo", interval="1d"):
     return df
 
 @st.cache_data(ttl=300, show_spinner=False)
-def fetch_top_mover(symbols_tuple):
+def fetch_top_n_movers(symbols_tuple, n=1):
     """Batch-download the last 2 daily closes for every symbol in a watchlist
-    and return the single best % gainer, for the quick-glance top boxes."""
+    and return the top-n % gainers (descending), for the quick-glance boxes."""
     symbols = list(symbols_tuple)
     tickers = [s for s, _ in symbols]
     if not tickers:
-        return None
+        return []
     try:
         data = yf.download(tickers, period="5d", interval="1d", group_by="ticker",
                             progress=False, threads=True)
     except Exception:
-        return None
-    best = None
+        return []
+    results = []
     for sym, disp in symbols:
         try:
             sub = data[sym] if len(tickers) > 1 else data
@@ -483,11 +483,11 @@ def fetch_top_mover(symbols_tuple):
             if prev_price == 0:
                 continue
             chg = (last_price - prev_price) / prev_price * 100
-            if best is None or chg > best["chg"]:
-                best = {"symbol": sym, "display": disp, "price": last_price, "chg": chg}
+            results.append({"symbol": sym, "display": disp, "price": last_price, "chg": chg})
         except Exception:
             continue
-    return best
+    results.sort(key=lambda r: r["chg"], reverse=True)
+    return results[:n]
 
 def evaluate_oracle_score(symbol, display=None):
     try:
@@ -935,32 +935,95 @@ def render_charts(renko_df, ha_df, brick_size, display, ema_fast, ema_slow):
     for r in range(1, 5):
         fig.update_xaxes(showgrid=False, row=r, col=1, matches="x")
         fig.update_yaxes(gridcolor="#2A2F3A", side="right", row=r, col=1)
-    # Extra headroom on the two price panels so candles/buttons are never
-    # flush against the panel edge and stay fully visible.
-    fig.update_yaxes(autorange=True, rangemode="normal", row=1, col=1)
-    fig.update_yaxes(autorange=True, rangemode="normal", row=2, col=1)
+
+    # Explicit padded y-ranges (instead of relying on Plotly's default
+    # autorange) for every price/indicator row, computed from ALL the values
+    # actually drawn in that row — candles, EMAs, and buy/sell button
+    # markers — so nothing (wicks, buttons, bars) ever sits flush against
+    # the panel edge and gets visually clipped.
+    def _padded_range(value_lists, pad_frac=0.12):
+        chunks = []
+        for vals in value_lists:
+            if vals is None or len(vals) == 0:
+                continue
+            arr = np.asarray(vals, dtype=float)
+            arr = arr[~np.isnan(arr)]
+            if arr.size:
+                chunks.append(arr)
+        if not chunks:
+            return None
+        combined = np.concatenate(chunks)
+        lo, hi = float(combined.min()), float(combined.max())
+        span = hi - lo
+        if span == 0:
+            span = abs(hi) if hi != 0 else 1.0
+        pad = span * pad_frac
+        return [lo - pad, hi + pad]
+
+    row1_range = _padded_range([
+        ha_df["High"].values, ha_df["Low"].values,
+        ha_df["EMA_FAST"].values, ha_df["EMA_SLOW"].values,
+        ha_buy_y, ha_sell_y, ha_buy_btn_y, ha_sell_btn_y,
+    ])
+    if row1_range:
+        fig.update_yaxes(range=row1_range, row=1, col=1)
+
+    row2_extra = [renko_buy_y, renko_sell_y]
+    if last_struct_event is not None:
+        row2_extra.append([last_struct_event["level"]])
+    row2_range = _padded_range([
+        renko_df["High"].values, renko_df["Low"].values,
+        renko_df["EMA_FAST"].values, renko_df["EMA_SLOW"].values,
+    ] + row2_extra)
+    if row2_range:
+        fig.update_yaxes(range=row2_range, row=2, col=1)
+
+    row3_range = _padded_range([
+        hist_vals, renko_df["MACD"].values, renko_df["MACD_Signal"].values,
+        macd_buy_y, macd_sell_y,
+    ])
+    if row3_range:
+        fig.update_yaxes(range=row3_range, row=3, col=1)
+
     st.plotly_chart(fig, use_container_width=True, theme=None)
 
 # =====================================================================
 # TOP-MOVER QUICK-GLANCE BOXES
 # =====================================================================
-def render_top_box(title, best):
-    if best is None:
-        body = "<div style='font-size:8px;color:{muted};'>No data</div>".format(muted=COLOR_TEXT_MUTED)
-    else:
+def render_top_box(title, movers, mode="single"):
+    """movers is a list of top-mover dicts (highest chg first).
+    mode='single' shows just the #1 mover; mode='lines' shows every
+    mover passed in, one compact ranked line each."""
+    if not movers:
+        body = f"<div style='font-size:10px;color:{COLOR_TEXT_MUTED};'>No data</div>"
+    elif mode == "single":
+        best = movers[0]
         color = COLOR_GREEN if best["chg"] >= 0 else COLOR_RED
         arrow = "▲" if best["chg"] >= 0 else "▼"
         is_fx = "=X" in best["symbol"]
         price_str = f"{best['price']:,.4f}" if is_fx else f"{best['price']:,.4g}"
         body = (
-            f"<div style='font-size:8px;font-weight:700;color:{COLOR_TEXT_MAIN};'>{best['display']}</div>"
-            f"<div style='font-size:8px;color:{COLOR_TEXT_MUTED};'>{price_str}</div>"
-            f"<div style='font-size:8px;color:{color};'>{arrow} {best['chg']:+.2f}%</div>"
+            f"<div style='font-size:10px;font-weight:700;color:{COLOR_TEXT_MAIN};'>{best['display']}</div>"
+            f"<div style='font-size:10px;color:{COLOR_TEXT_MUTED};'>{price_str}</div>"
+            f"<div style='font-size:10px;color:{color};'>{arrow} {best['chg']:+.2f}%</div>"
         )
+    else:
+        rows_html = []
+        for idx, m in enumerate(movers, start=1):
+            color = COLOR_GREEN if m["chg"] >= 0 else COLOR_RED
+            arrow = "▲" if m["chg"] >= 0 else "▼"
+            rows_html.append(
+                "<div style='font-size:10px;display:flex;justify-content:space-between;"
+                f"gap:10px;color:{COLOR_TEXT_MAIN};padding:1px 0;'>"
+                f"<span>{idx}. {m['display']}</span>"
+                f"<span style='color:{color};white-space:nowrap;'>{arrow} {m['chg']:+.2f}%</span>"
+                f"</div>"
+            )
+        body = "".join(rows_html)
     return (
         f"<div style='background-color:{COLOR_PANEL_BG};border:1px solid {COLOR_BORDER};"
         f"border-radius:6px;padding:10px 14px;'>"
-        f"<div style='font-size:8px;color:{COLOR_TEXT_MUTED};margin-bottom:4px;'>{title}</div>"
+        f"<div style='font-size:10px;color:{COLOR_TEXT_MUTED};margin-bottom:4px;'>{title}</div>"
         f"{body}</div>"
     )
 
@@ -1081,14 +1144,14 @@ with tab_chart:
             struct_event = latest_structure_event(renko_df, lookback=15)
             m1, m2, m3, m4 = st.columns(4)
             with st.spinner("Scanning watchlists for top movers..."):
-                top_commodity = fetch_top_mover(tuple(COMMODITIES))
-                top_forex = fetch_top_mover(tuple(FOREX_PAIRS))
-                top_us100 = fetch_top_mover(tuple(zip(us100_yf, us100_raw + ["IXIC"])))
-                top_nifty200 = fetch_top_mover(tuple(zip(nifty200_yf, nifty200_raw)))
-            m1.markdown(render_top_box("Top Commodity", top_commodity), unsafe_allow_html=True)
-            m2.markdown(render_top_box("Top Forex", top_forex), unsafe_allow_html=True)
-            m3.markdown(render_top_box("Top US100", top_us100), unsafe_allow_html=True)
-            m4.markdown(render_top_box("Top Nifty200", top_nifty200), unsafe_allow_html=True)
+                top_commodity = fetch_top_n_movers(tuple(COMMODITIES), n=1)
+                top_forex = fetch_top_n_movers(tuple(FOREX_PAIRS), n=1)
+                top_us100 = fetch_top_n_movers(tuple(zip(us100_yf, us100_raw + ["IXIC"])), n=5)
+                top_nifty200 = fetch_top_n_movers(tuple(zip(nifty200_yf, nifty200_raw)), n=5)
+            m1.markdown(render_top_box("Top Commodity", top_commodity, mode="single"), unsafe_allow_html=True)
+            m2.markdown(render_top_box("Top Forex", top_forex, mode="single"), unsafe_allow_html=True)
+            m3.markdown(render_top_box("Top 5 US100", top_us100, mode="lines"), unsafe_allow_html=True)
+            m4.markdown(render_top_box("Top 5 Nifty200", top_nifty200, mode="lines"), unsafe_allow_html=True)
             render_charts(renko_df, ha_df, brick_size, current_display, ema_fast, ema_slow)
             
             last_signal = renko_df["Signal"].iloc[-1]

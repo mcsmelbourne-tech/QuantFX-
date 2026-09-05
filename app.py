@@ -727,6 +727,18 @@ TIMEFRAME_PERIODS = {
     "4h": "180d", "1d": "1y", "1wk": "5y",
 }
 
+# Helper to change active asset from quick-glance buttons
+def switch_active_symbol(symbol, display, category=None):
+    st.session_state["selected_ticker"] = symbol
+    st.session_state["selected_display"] = display
+    if category and category in WATCHLIST_CATEGORIES:
+        st.session_state["preset_category"] = category
+        for pair in WATCHLIST_CATEGORIES[category]:
+            if pair[0] == symbol:
+                st.session_state["preset_symbol"] = pair
+                break
+    st.rerun()
+
 # =====================================================================
 # CHARTING (TradingView Style MACD + Aligned Renko Buy/Sell Buttons)
 # =====================================================================
@@ -967,7 +979,7 @@ def render_charts(renko_df, ha_df, brick_size, display, ema_fast, ema_slow):
 # =====================================================================
 # TOP-MOVER QUICK-GLANCE INTERACTIVE BOXES
 # =====================================================================
-def render_top_box(title, movers, box_key, mode="single"):
+def render_top_box(title, movers, box_key, category, mode="single"):
     st.markdown(
         f"<div style='font-size:11px;color:{COLOR_TEXT_MUTED};font-weight:600;margin-bottom:6px;'>{title}</div>",
         unsafe_allow_html=True
@@ -986,9 +998,7 @@ def render_top_box(title, movers, box_key, mode="single"):
         btn_col, stat_col = st.columns([0.5, 0.5])
         with btn_col:
             if st.button(best['display'], key=f"btn_{box_key}_0", type="tertiary"):
-                st.session_state["selected_ticker"] = best['symbol']
-                st.session_state["selected_display"] = best['display']
-                st.rerun()
+                switch_active_symbol(best['symbol'], best['display'], category)
         with stat_col:
             st.markdown(
                 f"<div style='font-size:10px;color:{COLOR_TEXT_MUTED};'>{price_str}</div>"
@@ -1005,9 +1015,7 @@ def render_top_box(title, movers, box_key, mode="single"):
                 st.markdown(f"<span style='font-size:10px;color:{COLOR_TEXT_MUTED};'>{idx}.</span>", unsafe_allow_html=True)
             with col_btn:
                 if st.button(m['display'], key=f"btn_{box_key}_{idx}", type="tertiary"):
-                    st.session_state["selected_ticker"] = m['symbol']
-                    st.session_state["selected_display"] = m['display']
-                    st.rerun()
+                    switch_active_symbol(m['symbol'], m['display'], category)
             with col_chg:
                 st.markdown(f"<div style='font-size:10px;color:{color};text-align:right;'>{arrow} {m['chg']:+.2f}%</div>", unsafe_allow_html=True)
 
@@ -1017,12 +1025,27 @@ def render_top_box(title, movers, box_key, mode="single"):
 st.sidebar.markdown("## 📈 QuantFX Terminal")
 st.sidebar.caption("ATR Renko · Heikin Ashi · Pullback Signals")
 symbol_mode = st.sidebar.radio("Symbol source", ["Presets", "Custom"], horizontal=True)
+
 if symbol_mode == "Presets":
-    preset_cat = st.sidebar.selectbox("Category", list(WATCHLIST_CATEGORIES.keys()))
+    default_cat_idx = 0
+    cat_keys = list(WATCHLIST_CATEGORIES.keys())
+    if "preset_category" in st.session_state and st.session_state["preset_category"] in cat_keys:
+        default_cat_idx = cat_keys.index(st.session_state["preset_category"])
+        
+    preset_cat = st.sidebar.selectbox("Category", cat_keys, index=default_cat_idx, key="preset_category")
     options = WATCHLIST_CATEGORIES[preset_cat]
-    choice = st.sidebar.selectbox("Symbol", options, format_func=lambda t: t[1])
-    if choice[0] != st.session_state["selected_ticker"] and choice[1] != st.session_state["selected_display"]:
-        st.session_state["selected_ticker"], st.session_state["selected_display"] = choice
+    
+    default_sym_idx = 0
+    if "preset_symbol" in st.session_state and st.session_state["preset_symbol"] in options:
+        default_sym_idx = options.index(st.session_state["preset_symbol"])
+    else:
+        for idx, pair in enumerate(options):
+            if pair[0] == st.session_state["selected_ticker"]:
+                default_sym_idx = idx
+                break
+
+    choice = st.sidebar.selectbox("Symbol", options, index=default_sym_idx, format_func=lambda t: t[1], key="preset_symbol")
+    st.session_state["selected_ticker"], st.session_state["selected_display"] = choice
 else:
     custom_sym = st.sidebar.text_input("Yahoo Finance symbol", value=st.session_state["selected_ticker"])
     custom_disp = st.sidebar.text_input("Display name", value=st.session_state["selected_display"])
@@ -1143,16 +1166,16 @@ with tab_chart:
 
                 with m1:
                     with st.container(border=True):
-                        render_top_box("Top Commodity", top_commodity, box_key="comm", mode="single")
+                        render_top_box("Top Commodity", top_commodity, box_key="comm", category="Commodities", mode="single")
                 with m2:
                     with st.container(border=True):
-                        render_top_box("Top Forex", top_forex, box_key="forex", mode="single")
+                        render_top_box("Top Forex", top_forex, box_key="forex", category="Forex", mode="single")
                 with m3:
                     with st.container(border=True):
-                        render_top_box("Top 5 US100", top_us100, box_key="us100", mode="lines")
+                        render_top_box("Top 5 US100", top_us100, box_key="us100", category="US100", mode="lines")
                 with m4:
                     with st.container(border=True):
-                        render_top_box("Top 5 Nifty200", top_nifty200, box_key="nifty", mode="lines")
+                        render_top_box("Top 5 Nifty200", top_nifty200, box_key="nifty", category="Nifty200", mode="lines")
 
                 render_charts(renko_df, ha_df, brick_size, current_display, ema_fast, ema_slow)
                 

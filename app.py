@@ -411,6 +411,31 @@ def build_atr_renko_df(df,
     renko_df["Signal"] = signals
     renko_df["Pullback_Signal"] = pullback_signals
 
+    # --- Confirmed Buy/Sell for more accurate chart buttons -----------------
+    # The raw EMA-cross "Signal" already marks a genuine trend change, so it is
+    # always confirmed. A "Pullback_Signal", however, can fire on noise inside
+    # a weak or fading trend — it is only confirmed here when MACD momentum
+    # agrees with the pullback direction and RSI isn't already extended
+    # against it, which cuts down on false/whipsaw buttons.
+    confirmed_signals = []
+    for i in range(len(renko_df)):
+        sig = renko_df.loc[i, "Signal"]
+        pb = renko_df.loc[i, "Pullback_Signal"]
+        macd_v = renko_df.loc[i, "MACD"]
+        macd_s = renko_df.loc[i, "MACD_Signal"]
+        rsi_v = renko_df.loc[i, "RSI"] if "RSI" in renko_df.columns else np.nan
+        c = "HOLD"
+        if sig == "BUY":
+            c = "BUY"
+        elif sig == "SELL":
+            c = "SELL"
+        elif pb == "BUY" and pd.notna(macd_v) and pd.notna(macd_s) and macd_v > macd_s and (pd.isna(rsi_v) or rsi_v < 75):
+            c = "BUY"
+        elif pb == "SELL" and pd.notna(macd_v) and pd.notna(macd_s) and macd_v < macd_s and (pd.isna(rsi_v) or rsi_v > 25):
+            c = "SELL"
+        confirmed_signals.append(c)
+    renko_df["Confirmed_Signal"] = confirmed_signals
+
     macd_sigs, macd_types = detect_macd_crossovers(renko_df)
     renko_df["Div_Signal"] = macd_sigs
     renko_df["Div_Type"] = macd_types
@@ -676,7 +701,7 @@ def render_charts(renko_df, ha_df, brick_size, display, ema_fast, ema_slow):
     x_ha = x_renko
     fig = make_subplots(
         rows=4, cols=1, shared_xaxes=True,
-        row_heights=[0.42, 0.42, 0.09, 0.07],
+        row_heights=[0.33, 0.33, 0.165, 0.165],
         vertical_spacing=0.05,
         subplot_titles=(
             f"{display} — Heikin Ashi (Green Buy / Red Sell Aligned with EMAs)",
@@ -722,6 +747,26 @@ def render_charts(renko_df, ha_df, brick_size, display, ema_fast, ema_slow):
             name="HA Sell Dot",
         ), row=1, col=1)
 
+    # Aligned BUY/SELL button badges on Heikin Ashi, matching the Renko style
+    ha_buy_btn_y = [ha_df["Low"].iloc[i] - (brick_size * 0.30) for i in ha_buy_x]
+    ha_sell_btn_y = [ha_df["High"].iloc[i] + (brick_size * 0.30) for i in ha_sell_x]
+    if ha_buy_x:
+        fig.add_trace(go.Scatter(
+            x=ha_buy_x, y=ha_buy_btn_y, mode="markers+text",
+            marker=dict(color=COLOR_BULL, size=13, symbol="triangle-up"),
+            text=["BUY"] * len(ha_buy_x), textposition="bottom center",
+            textfont=dict(color=COLOR_BULL, size=11, family="Arial Black"),
+            name="HA BUY Button",
+        ), row=1, col=1)
+    if ha_sell_x:
+        fig.add_trace(go.Scatter(
+            x=ha_sell_x, y=ha_sell_btn_y, mode="markers+text",
+            marker=dict(color=COLOR_BEAR, size=13, symbol="triangle-down"),
+            text=["SELL"] * len(ha_sell_x), textposition="top center",
+            textfont=dict(color=COLOR_BEAR, size=11, family="Arial Black"),
+            name="HA SELL Button",
+        ), row=1, col=1)
+
     # --- Row 2: ATR Renko candles + Aligned Buy / Sell Button Badges ---
     fig.add_trace(go.Candlestick(
         x=x_renko, open=renko_df["Open"], high=renko_df["High"], low=renko_df["Low"], close=renko_df["Close"],
@@ -738,11 +783,13 @@ def render_charts(renko_df, ha_df, brick_size, display, ema_fast, ema_slow):
         name=f"EMA {ema_slow}",
     ), row=2, col=1)
 
-    # Aligned Buy & Sell Buttons/Markers directly tied to Renko chart triggers
-    renko_buy_x = [i for i in range(len(renko_df)) if renko_df["Signal"].iloc[i] == "BUY" or renko_df["Pullback_Signal"].iloc[i] == "BUY"]
-    renko_buy_y = [renko_df["Low"].iloc[i] - (brick_size * 0.75) for i in renko_buy_x]
-    renko_sell_x = [i for i in range(len(renko_df)) if renko_df["Signal"].iloc[i] == "SELL" or renko_df["Pullback_Signal"].iloc[i] == "SELL"]
-    renko_sell_y = [renko_df["High"].iloc[i] + (brick_size * 0.75) for i in renko_sell_x]
+    # Aligned Buy & Sell Buttons — driven by Confirmed_Signal, which only lets a
+    # pullback fire when MACD momentum and RSI agree with it, so these buttons
+    # skip weaker/false pullback triggers instead of showing every raw one.
+    renko_buy_x = [i for i in range(len(renko_df)) if renko_df["Confirmed_Signal"].iloc[i] == "BUY"]
+    renko_buy_y = [renko_df["Low"].iloc[i] - (brick_size * 0.30) for i in renko_buy_x]
+    renko_sell_x = [i for i in range(len(renko_df)) if renko_df["Confirmed_Signal"].iloc[i] == "SELL"]
+    renko_sell_y = [renko_df["High"].iloc[i] + (brick_size * 0.30) for i in renko_sell_x]
 
     if renko_buy_x:
         fig.add_trace(go.Scatter(
@@ -806,6 +853,28 @@ def render_charts(renko_df, ha_df, brick_size, display, ema_fast, ema_slow):
     ), row=3, col=1)
     fig.add_hline(y=0, line=dict(color=COLOR_ZERO_LINE, width=1), row=3, col=1)
 
+    # BUY/SELL buttons at each MACD/Signal-line crossover (Div_Signal)
+    macd_buy_x = [i for i in range(len(renko_df)) if renko_df["Div_Signal"].iloc[i] == "BUY"]
+    macd_buy_y = [renko_df["MACD"].iloc[i] - abs(renko_df["MACD_Hist"]).max() * 0.15 for i in macd_buy_x]
+    macd_sell_x = [i for i in range(len(renko_df)) if renko_df["Div_Signal"].iloc[i] == "SELL"]
+    macd_sell_y = [renko_df["MACD"].iloc[i] + abs(renko_df["MACD_Hist"]).max() * 0.15 for i in macd_sell_x]
+    if macd_buy_x:
+        fig.add_trace(go.Scatter(
+            x=macd_buy_x, y=macd_buy_y, mode="markers+text",
+            marker=dict(color=COLOR_BULL, size=11, symbol="triangle-up"),
+            text=["BUY"] * len(macd_buy_x), textposition="bottom center",
+            textfont=dict(color=COLOR_BULL, size=9, family="Arial Black"),
+            name="MACD BUY Button",
+        ), row=3, col=1)
+    if macd_sell_x:
+        fig.add_trace(go.Scatter(
+            x=macd_sell_x, y=macd_sell_y, mode="markers+text",
+            marker=dict(color=COLOR_BEAR, size=11, symbol="triangle-down"),
+            text=["SELL"] * len(macd_sell_x), textposition="top center",
+            textfont=dict(color=COLOR_BEAR, size=9, family="Arial Black"),
+            name="MACD SELL Button",
+        ), row=3, col=1)
+
     # --- Row 4: RSI with Split Green (Buy) / Red (Sell) Segments -----------
     rsi_vals = renko_df["RSI"].values
     rsi_bull_y = np.where(renko_trend_bull, rsi_vals, np.nan)
@@ -823,7 +892,7 @@ def render_charts(renko_df, ha_df, brick_size, display, ema_fast, ema_slow):
     fig.update_yaxes(range=[0, 100], row=4, col=1)
 
     fig.update_layout(
-        height=1150,
+        height=950,
         paper_bgcolor=COLOR_BG_DARK,
         plot_bgcolor=COLOR_BG_DARK,
         font=dict(color=COLOR_TEXT_MUTED, size=11),
@@ -835,6 +904,10 @@ def render_charts(renko_df, ha_df, brick_size, display, ema_fast, ema_slow):
     for r in range(1, 5):
         fig.update_xaxes(showgrid=False, row=r, col=1, matches="x")
         fig.update_yaxes(gridcolor="#2A2F3A", side="right", row=r, col=1)
+    # Extra headroom on the two price panels so candles/buttons are never
+    # flush against the panel edge and stay fully visible.
+    fig.update_yaxes(autorange=True, rangemode="normal", row=1, col=1)
+    fig.update_yaxes(autorange=True, rangemode="normal", row=2, col=1)
     st.plotly_chart(fig, use_container_width=True, theme=None)
 
 # =====================================================================
@@ -961,17 +1034,20 @@ with tab_chart:
             
             last_signal = renko_df["Signal"].iloc[-1]
             last_pullback = renko_df["Pullback_Signal"].iloc[-1]
-            badge_color = COLOR_GREEN if "BUY" in last_signal or "BUY" in last_pullback else (COLOR_RED if "SELL" in last_signal or "SELL" in last_pullback else COLOR_TEXT_MUTED)
+            last_confirmed = renko_df["Confirmed_Signal"].iloc[-1]
+            badge_color = COLOR_GREEN if last_confirmed == "BUY" else (COLOR_RED if last_confirmed == "SELL" else COLOR_TEXT_MUTED)
             
             st.markdown(
-                f"EMA trend signal: <span class='qfx-badge' style='background:{badge_color}22;color:{badge_color};'>{last_signal}</span>"
-                f"&nbsp;&nbsp;·&nbsp;&nbsp;Pullback Signal: <b>{last_pullback}</b>",
+                f"Confirmed signal: <span class='qfx-badge' style='background:{badge_color}22;color:{badge_color};'>{last_confirmed}</span>"
+                f"&nbsp;&nbsp;·&nbsp;&nbsp;EMA trend: <b>{last_signal}</b>"
+                f"&nbsp;&nbsp;·&nbsp;&nbsp;Raw pullback: <b>{last_pullback}</b>",
                 unsafe_allow_html=True,
             )
             if st.button("📨 Send current signal to Telegram"):
                 msg = (
                     f"*{current_display}* ({current_symbol})\n"
                     f"Price: {float(raw_df['Close'].iloc[-1]):,.4g}\n"
+                    f"Confirmed Signal: {last_confirmed}\n"
                     f"EMA Signal: {last_signal}\n"
                     f"Pullback Signal: {last_pullback}\n"
                     f"Structure: {struct_event['label'] if struct_event else '—'}"

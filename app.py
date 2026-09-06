@@ -537,6 +537,48 @@ def fetch_top_n_movers(symbols_tuple, n=1):
     results.sort(key=lambda r: r["chg"], reverse=True)
     return results[:n]
 
+@st.cache_data(ttl=300, show_spinner=False)
+def compute_rsi(close_series, period=14):
+    """Standard Wilder-style RSI (simple rolling mean version, matching the
+    RSI already used elsewhere in this file) computed on a raw close series."""
+    delta = close_series.diff()
+    gain = delta.where(delta > 0, 0.0).rolling(period).mean()
+    loss = (-delta.where(delta < 0, 0.0)).rolling(period).mean()
+    rs = gain / loss.replace(0, np.nan)
+    return 100 - (100 / (1 + rs))
+
+@st.cache_data(ttl=300, show_spinner=False)
+def scan_ema9_cross20_rsi_above(symbols_tuple, ema_fast=9, ema_slow=20,
+                                 rsi_threshold=51.0, lookback=1, max_results=8):
+    """Scan a watchlist for symbols where EMA9 has just crossed above EMA20
+    (bullish cross within `lookback` bars) AND the current RSI(14) is above
+    `rsi_threshold`. Used to feed the right-panel 'EMA9/20 + RSI>51' box."""
+    results = []
+    for sym, disp in symbols_tuple:
+        try:
+            df = fetch_live_ohlc(sym, period="1mo", interval="1d")
+            if df.empty or len(df) < ema_slow + 5:
+                continue
+            close = df["Close"]
+            cross = detect_ema_cross_signal(close, fast=ema_fast, slow=ema_slow, lookback=lookback)
+            if not cross or cross["direction"] != "BUY":
+                continue
+            rsi_series = compute_rsi(close, period=14)
+            last_rsi = float(rsi_series.iloc[-1])
+            if np.isnan(last_rsi) or last_rsi <= rsi_threshold:
+                continue
+            last_price = float(close.iloc[-1])
+            prev_price = float(close.iloc[-2]) if len(close) > 1 else last_price
+            chg = ((last_price - prev_price) / prev_price) * 100 if prev_price else 0.0
+            results.append({
+                "symbol": sym, "display": disp, "price": last_price,
+                "chg": chg, "rsi": last_rsi, "bars_ago": cross["bars_ago"],
+            })
+        except Exception:
+            continue
+    results.sort(key=lambda r: r["rsi"], reverse=True)
+    return results[:max_results]
+
 def evaluate_oracle_score(symbol, display=None):
     try:
         df = fetch_live_ohlc(symbol, period="1y", interval="1d")
@@ -977,11 +1019,12 @@ def create_chart_figure(renko_df, ha_df, brick_size, display, ema_fast, ema_slow
         xaxis_rangeslider_visible=False,
         xaxis2_rangeslider_visible=False,
     )
-    
+
     for r in range(1, 5):
         fig.update_xaxes(showgrid=False, row=r, col=1, matches="x", tickfont=dict(size=10))
-        fig.update_yaxes(gridcolor="#2A2F3A", side="right", row=r, col=1, tickformat=".2f", hoverformat=".2f", tickfont=dict(size=10))
-        
+        # Format y-axes to display full price without scientific truncation
+        fig.update_yaxes(gridcolor="#2A2F3A", side="right", row=r, col=1, tickformat="f", hoverformat="f", tickfont=dict(size=10))
+
     def _padded_range(value_lists, pad_frac=0.12):
         chunks = []
         for vals in value_lists:
@@ -1087,40 +1130,115 @@ def render_zoomable_chart(fig, key, height=950):
     components.html(html, height=height + 70, scrolling=True)
 
 # =====================================================================
-# TOP-MOVER QUICK-GLANCE BOXES (FONT SIZE 11)
+# TOP-MOVER QUICK-GLANCE BOXES (FONT SIZE 11) — FULLY CLICKABLE CARDS
 # =====================================================================
-def render_top_box(title, movers, mode="single"):
-    if not movers:
-        body = f"<div style='font-size:11px;color:{COLOR_TEXT_MUTED};'>No data</div>"
-    elif mode == "single":
-        best = movers[0]
-        color = COLOR_GREEN if best["chg"] >= 0 else COLOR_RED
-        arrow = "▲" if best["chg"] >= 0 else "▼"
-        price_str = f"${format_price(best['price'])}"
-        body = (
-            f"<div style='font-size:11px;font-weight:700;color:{COLOR_TEXT_MAIN};'>{best['display']}</div>"
-            f"<div style='font-size:11px;color:{COLOR_TEXT_MUTED};'>{price_str}</div>"
-            f"<div style='font-size:11px;color:{color};'>{arrow} {best['chg']:+.2f}%</div>"
-        )
-    else:
-        rows_html = []
-        for idx, m in enumerate(movers, start=1):
-            color = COLOR_GREEN if m["chg"] >= 0 else COLOR_RED
-            arrow = "▲" if m["chg"] >= 0 else "▼"
-            rows_html.append(
-                "<div style='font-size:11px;display:flex;justify-content:space-between;"
-                f"gap:10px;color:{COLOR_TEXT_MAIN};padding:2px 0;'>"
-                f"<span>{idx}. {m['display']}</span>"
-                f"<span style='color:{color};white-space:nowrap;'>{arrow} {m['chg']:+.2f}%</span>"
-                f"</div>"
-            )
-        body = "".join(rows_html)
-    return (
-        f"<div style='background-color:{COLOR_PANEL_BG};border:1px solid {COLOR_BORDER};"
-        f"border-radius:6px;padding:10px 14px;margin-bottom:12px;'>"
-        f"<div style='font-size:11px;color:{COLOR_TEXT_MUTED};margin-bottom:6px;font-weight:600;'>{title}</div>"
-        f"{body}</div>"
+# These boxes no longer have a separate "Open XYZ" button underneath them.
+# Instead, the whole card (or, in list boxes, each row) IS the click
+# target. This is done by layering a fully-transparent Streamlit button
+# directly on top of the rendered HTML card using a small CSS negative
+# margin, keyed to a unique marker class on the card. Clicking anywhere
+# on the card fires the same on_click as the old button used to.
+_QFX_SINGLE_CARD_HEIGHT = 94   # px — header + name + price + change line
+_QFX_ROW_HEIGHT = 32           # px — one "N. TICKER   ▲ x.xx%" row
+
+def _render_clickable_html(marker, inner_html, height_px, extra_style=""):
+    """Render one HTML block tagged with `marker`, then inject the CSS that
+    overlays the very next Streamlit button on top of it."""
+    st.markdown(
+        f"<div class='{marker}' style='cursor:pointer;{extra_style}'>{inner_html}</div>",
+        unsafe_allow_html=True,
     )
+    st.markdown(
+        f"""<style>
+        .{marker}:hover {{ border-color: {COLOR_TEXT_MUTED} !important; }}
+        div[data-testid="stMarkdown"]:has(.{marker}) + div[data-testid="stButton"] {{
+            margin-top: -{height_px}px;
+            margin-bottom: 0px;
+        }}
+        div[data-testid="stMarkdown"]:has(.{marker}) + div[data-testid="stButton"] > button {{
+            height: {height_px}px;
+            width: 100%;
+            opacity: 0;
+            cursor: pointer;
+        }}
+        </style>""",
+        unsafe_allow_html=True,
+    )
+
+def render_clickable_single_box(title, movers, key_prefix, on_click):
+    """'Top Commodity' / 'Top Forex' style box: one card, whole card clicks
+    through to that symbol's chart — no button underneath it."""
+    if not movers:
+        st.markdown(
+            f"<div style='background-color:{COLOR_PANEL_BG};border:1px solid {COLOR_BORDER};"
+            f"border-radius:6px;padding:10px 14px;margin-bottom:12px;'>"
+            f"<div style='font-size:11px;color:{COLOR_TEXT_MUTED};margin-bottom:6px;font-weight:600;'>{title}</div>"
+            f"<div style='font-size:11px;color:{COLOR_TEXT_MUTED};'>No data</div></div>",
+            unsafe_allow_html=True,
+        )
+        return
+    best = movers[0]
+    color = COLOR_GREEN if best["chg"] >= 0 else COLOR_RED
+    arrow = "▲" if best["chg"] >= 0 else "▼"
+    price_str = f"${format_price(best['price'])}"
+    inner = (
+        f"<div style='font-size:11px;color:{COLOR_TEXT_MUTED};margin-bottom:6px;font-weight:600;'>{title}</div>"
+        f"<div style='font-size:11px;font-weight:700;color:{COLOR_TEXT_MAIN};'>{best['display']}</div>"
+        f"<div style='font-size:11px;color:{COLOR_TEXT_MUTED};'>{price_str}</div>"
+        f"<div style='font-size:11px;color:{color};'>{arrow} {best['chg']:+.2f}%</div>"
+    )
+    marker = f"qfx-hit-{key_prefix}"
+    _render_clickable_html(
+        marker, inner, _QFX_SINGLE_CARD_HEIGHT,
+        extra_style=(
+            f"background-color:{COLOR_PANEL_BG};border:1px solid {COLOR_BORDER};"
+            f"border-radius:6px;padding:10px 14px;margin-bottom:12px;"
+        ),
+    )
+    st.button(" ", key=f"{key_prefix}_btn", on_click=on_click, args=(best["symbol"], best["display"]))
+
+def render_clickable_list_box(title, movers, key_prefix, on_click, value_key="chg", value_fmt=None):
+    """'Top 5 US100' / 'Top 5 Nifty200' / scanner-style box: a static
+    header followed by one clickable row per entry — clicking a row opens
+    that ticker's chart directly, with no separate button beside it."""
+    st.markdown(
+        f"<div style='background-color:{COLOR_PANEL_BG};border:1px solid {COLOR_BORDER};"
+        f"border-radius:6px 6px 0 0;padding:8px 14px 6px 14px;margin-bottom:0px;'>"
+        f"<div style='font-size:11px;color:{COLOR_TEXT_MUTED};font-weight:600;'>{title}</div></div>",
+        unsafe_allow_html=True,
+    )
+    if not movers:
+        st.markdown(
+            f"<div style='background-color:{COLOR_PANEL_BG};border:1px solid {COLOR_BORDER};"
+            f"border-top:none;border-radius:0 0 6px 6px;padding:8px 14px;margin-bottom:12px;"
+            f"font-size:11px;color:{COLOR_TEXT_MUTED};'>No data</div>",
+            unsafe_allow_html=True,
+        )
+        return
+    n = len(movers)
+    for idx, m in enumerate(movers, start=1):
+        is_last = idx == n
+        color = COLOR_GREEN if m["chg"] >= 0 else COLOR_RED
+        arrow = "▲" if m["chg"] >= 0 else "▼"
+        if value_fmt:
+            value_html = value_fmt(m)
+        else:
+            value_html = f"<span style='color:{color};white-space:nowrap;'>{arrow} {m['chg']:+.2f}%</span>"
+        inner = (
+            f"<div style='font-size:11px;display:flex;justify-content:space-between;gap:10px;color:{COLOR_TEXT_MAIN};'>"
+            f"<span>{idx}. {m['display']}</span>{value_html}</div>"
+        )
+        radius = "0 0 6px 6px" if is_last else "0"
+        margin = "12px" if is_last else "0px"
+        marker = f"qfx-hit-{key_prefix}-{idx}"
+        _render_clickable_html(
+            marker, inner, _QFX_ROW_HEIGHT,
+            extra_style=(
+                f"background-color:{COLOR_PANEL_BG};border:1px solid {COLOR_BORDER};border-top:none;"
+                f"border-radius:{radius};padding:6px 14px;margin-bottom:{margin};"
+            ),
+        )
+        st.button(" ", key=f"{key_prefix}_{idx}_btn", on_click=on_click, args=(m["symbol"], m["display"]))
 
 # =====================================================================
 # SIDEBAR CONTROLS
@@ -1302,6 +1420,13 @@ if active_view == "📊 Charts":
                 top_forex = fetch_top_n_movers(tuple(FOREX_PAIRS), n=1)
                 top_us100 = fetch_top_n_movers(tuple(zip(us100_yf, us100_raw + ["IXIC"])), n=5)
                 top_nifty200 = fetch_top_n_movers(tuple(zip(nifty200_yf, nifty200_raw)), n=5)
+                ema9_20_rsi_watchlist = tuple(
+                    list(zip(us100_yf, us100_raw + ["IXIC"])) + list(zip(nifty200_yf, nifty200_raw))
+                )
+                ema9_20_rsi_hits = scan_ema9_cross20_rsi_above(
+                    ema9_20_rsi_watchlist, ema_fast=9, ema_slow=20,
+                    rsi_threshold=51.0, lookback=1, max_results=8,
+                )
 
             fig = create_chart_figure(renko_df, ha_df, brick_size, chart_display, ema_fast, ema_slow)
 
@@ -1335,35 +1460,34 @@ if active_view == "📊 Charts":
                     st.success(m) if ok else st.error(m)
 
             with right_panel_col:
-                st.markdown(render_top_box("Top Commodity", top_commodity, mode="single"), unsafe_allow_html=True)
-                if top_commodity:
-                    m = top_commodity[0]
-                    st.button(
-                        f"📈 Open {m['display']}", key="open_top_commodity", use_container_width=True,
-                        on_click=go_to_chart, args=(m["symbol"], m["display"]),
+                # --- NEW: EMA9/20 bullish cross + RSI>51 scanner box, top of panel ---
+                def _rsi_value_html(m):
+                    color = COLOR_GREEN if m["chg"] >= 0 else COLOR_RED
+                    arrow = "▲" if m["chg"] >= 0 else "▼"
+                    return (
+                        f"<span style='white-space:nowrap;'>"
+                        f"<span style='color:{color};'>{arrow} {m['chg']:+.2f}%</span>"
+                        f"<span style='color:{COLOR_TEXT_MUTED};'> · RSI {m['rsi']:.1f}</span></span>"
                     )
+                render_clickable_list_box(
+                    "⚡ EMA9↗20 Cross + RSI>51", ema9_20_rsi_hits,
+                    key_prefix="ema920rsi", on_click=go_to_chart, value_fmt=_rsi_value_html,
+                )
 
-                st.markdown(render_top_box("Top Forex", top_forex, mode="single"), unsafe_allow_html=True)
-                if top_forex:
-                    m = top_forex[0]
-                    st.button(
-                        f"📈 Open {m['display']}", key="open_top_forex", use_container_width=True,
-                        on_click=go_to_chart, args=(m["symbol"], m["display"]),
-                    )
-
-                st.markdown(render_top_box("Top 5 US100", top_us100, mode="lines"), unsafe_allow_html=True)
-                for m in top_us100:
-                    st.button(
-                        f"📈 {m['display']}", key=f"open_us100_{m['symbol']}", use_container_width=True,
-                        on_click=go_to_chart, args=(m["symbol"], m["display"]),
-                    )
-
-                st.markdown(render_top_box("Top 5 Nifty200", top_nifty200, mode="lines"), unsafe_allow_html=True)
-                for m in top_nifty200:
-                    st.button(
-                        f"📈 {m['display']}", key=f"open_nifty_{m['symbol']}", use_container_width=True,
-                        on_click=go_to_chart, args=(m["symbol"], m["display"]),
-                    )
+                # --- Existing top-mover boxes — now the whole card/row is
+                # the click target, with no separate "Open" button below it ---
+                render_clickable_single_box(
+                    "Top Commodity", top_commodity, key_prefix="open_top_commodity", on_click=go_to_chart,
+                )
+                render_clickable_single_box(
+                    "Top Forex", top_forex, key_prefix="open_top_forex", on_click=go_to_chart,
+                )
+                render_clickable_list_box(
+                    "Top 5 US100", top_us100, key_prefix="open_us100", on_click=go_to_chart,
+                )
+                render_clickable_list_box(
+                    "Top 5 Nifty200", top_nifty200, key_prefix="open_nifty", on_click=go_to_chart,
+                )
 
 
 # ---- 7-Day Outlook view --------------------------------------------------

@@ -3,7 +3,7 @@ QuantFX Terminal — ATR Renko & Macro Smart Money Structure
 Streamlit rewrite with custom candle coloring, right-side axes, 
 Heikin Ashi EMAs, single-fire pullback signals with blinking animation, 
 blinking round dot buy/sell markers on Heikin Ashi & MACD, targeted multi-market Telegram alerts,
-full share price display, 95% wide charts, and font size 10.
+full share price display, 95% wide charts, font size 10, and right-side top mover cards.
 """
 import numpy as np
 import pandas as pd
@@ -717,7 +717,7 @@ TIMEFRAME_PERIODS = {
 # =====================================================================
 # CHARTING
 # =====================================================================
-def render_charts(renko_df, ha_df, brick_size, display, ema_fast, ema_slow):
+def create_chart_figure(renko_df, ha_df, brick_size, display, ema_fast, ema_slow):
     x_renko = list(range(len(renko_df)))
     x_ha = x_renko
     fig = make_subplots(
@@ -960,10 +960,7 @@ def render_charts(renko_df, ha_df, brick_size, display, ema_fast, ema_slow):
     if row3_range:
         fig.update_yaxes(range=row3_range, row=3, col=1)
 
-    # Expanded to 95% width layout
-    chart_col, _spacer_col = st.columns([0.95, 0.05])
-    with chart_col:
-        st.plotly_chart(fig, use_container_width=True, theme=None)
+    return fig
 
 # =====================================================================
 # TOP-MOVER QUICK-GLANCE BOXES
@@ -988,7 +985,7 @@ def render_top_box(title, movers, mode="single"):
             arrow = "▲" if m["chg"] >= 0 else "▼"
             rows_html.append(
                 "<div style='font-size:10px;display:flex;justify-content:space-between;"
-                f"gap:10px;color:{COLOR_TEXT_MAIN};padding:1px 0;'>"
+                f"gap:10px;color:{COLOR_TEXT_MAIN};padding:2px 0;'>"
                 f"<span>{idx}. {m['display']}</span>"
                 f"<span style='color:{color};white-space:nowrap;'>{arrow} {m['chg']:+.2f}%</span>"
                 f"</div>"
@@ -996,8 +993,8 @@ def render_top_box(title, movers, mode="single"):
         body = "".join(rows_html)
     return (
         f"<div style='background-color:{COLOR_PANEL_BG};border:1px solid {COLOR_BORDER};"
-        f"border-radius:6px;padding:10px 14px;'>"
-        f"<div style='font-size:10px;color:{COLOR_TEXT_MUTED};margin-bottom:4px;'>{title}</div>"
+        f"border-radius:6px;padding:10px 14px;margin-bottom:12px;'>"
+        f"<div style='font-size:10px;color:{COLOR_TEXT_MUTED};margin-bottom:6px;font-weight:600;'>{title}</div>"
         f"{body}</div>"
     )
 
@@ -1108,40 +1105,50 @@ with tab_chart:
             prev_close = float(raw_df["Close"].iloc[-2]) if len(raw_df) > 1 else last_close
             chg_pct = ((float(raw_df["Close"].iloc[-1]) - prev_close) / prev_close) * 100 if prev_close else 0.0
             struct_event = latest_structure_event(renko_df, lookback=15)
-            m1, m2, m3, m4 = st.columns(4)
+            
+            # Fetch top movers for the side panel
             with st.spinner("Scanning watchlists for top movers..."):
                 top_commodity = fetch_top_n_movers(tuple(COMMODITIES), n=1)
                 top_forex = fetch_top_n_movers(tuple(FOREX_PAIRS), n=1)
                 top_us100 = fetch_top_n_movers(tuple(zip(us100_yf, us100_raw + ["IXIC"])), n=5)
                 top_nifty200 = fetch_top_n_movers(tuple(zip(nifty200_yf, nifty200_raw)), n=5)
-            m1.markdown(render_top_box("Top Commodity", top_commodity, mode="single"), unsafe_allow_html=True)
-            m2.markdown(render_top_box("Top Forex", top_forex, mode="single"), unsafe_allow_html=True)
-            m3.markdown(render_top_box("Top 5 US100", top_us100, mode="lines"), unsafe_allow_html=True)
-            m4.markdown(render_top_box("Top 5 Nifty200", top_nifty200, mode="lines"), unsafe_allow_html=True)
-            render_charts(renko_df, ha_df, brick_size, current_display, ema_fast, ema_slow)
+                
+            fig = create_chart_figure(renko_df, ha_df, brick_size, current_display, ema_fast, ema_slow)
+
+            # Split layout into Main Chart (left) and Top Mover Cards (right)
+            chart_col, right_panel_col = st.columns([0.80, 0.20])
             
-            last_signal = renko_df["Signal"].iloc[-1]
-            last_pullback = renko_df["Pullback_Signal"].iloc[-1]
-            last_confirmed = renko_df["Confirmed_Signal"].iloc[-1]
-            badge_color = COLOR_GREEN if last_confirmed == "BUY" else (COLOR_RED if last_confirmed == "SELL" else COLOR_TEXT_MUTED)
-            
-            st.markdown(
-                f"Confirmed signal: <span class='qfx-badge' style='background:{badge_color}22;color:{badge_color};'>{last_confirmed}</span>"
-                f"&nbsp;&nbsp;·&nbsp;&nbsp;EMA trend: <b>{last_signal}</b>"
-                f"&nbsp;&nbsp;·&nbsp;&nbsp;Raw pullback: <b>{last_pullback}</b>",
-                unsafe_allow_html=True,
-            )
-            if st.button("📨 Send current signal to Telegram"):
-                msg = (
-                    f"*{current_display}* ({current_symbol})\n"
-                    f"Price: ${float(raw_df['Close'].iloc[-1]):f}\n"
-                    f"Confirmed Signal: {last_confirmed}\n"
-                    f"EMA Signal: {last_signal}\n"
-                    f"Pullback Signal: {last_pullback}\n"
-                    f"Structure: {struct_event['label'] if struct_event else '—'}"
+            with chart_col:
+                st.plotly_chart(fig, use_container_width=True, theme=None)
+                
+                last_signal = renko_df["Signal"].iloc[-1]
+                last_pullback = renko_df["Pullback_Signal"].iloc[-1]
+                last_confirmed = renko_df["Confirmed_Signal"].iloc[-1]
+                badge_color = COLOR_GREEN if last_confirmed == "BUY" else (COLOR_RED if last_confirmed == "SELL" else COLOR_TEXT_MUTED)
+                
+                st.markdown(
+                    f"Confirmed signal: <span class='qfx-badge' style='background:{badge_color}22;color:{badge_color};'>{last_confirmed}</span>"
+                    f"&nbsp;&nbsp;·&nbsp;&nbsp;EMA trend: <b>{last_signal}</b>"
+                    f"&nbsp;&nbsp;·&nbsp;&nbsp;Raw pullback: <b>{last_pullback}</b>",
+                    unsafe_allow_html=True,
                 )
-                ok, m = send_telegram_alert(msg, tg_token, tg_chat)
-                st.success(m) if ok else st.error(m)
+                if st.button("📨 Send current signal to Telegram"):
+                    msg = (
+                        f"*{current_display}* ({current_symbol})\n"
+                        f"Price: ${float(raw_df['Close'].iloc[-1]):f}\n"
+                        f"Confirmed Signal: {last_confirmed}\n"
+                        f"EMA Signal: {last_signal}\n"
+                        f"Pullback Signal: {last_pullback}\n"
+                        f"Structure: {struct_event['label'] if struct_event else '—'}"
+                    )
+                    ok, m = send_telegram_alert(msg, tg_token, tg_chat)
+                    st.success(m) if ok else st.error(m)
+
+            with right_panel_col:
+                st.markdown(render_top_box("Top Commodity", top_commodity, mode="single"), unsafe_allow_html=True)
+                st.markdown(render_top_box("Top Forex", top_forex, mode="single"), unsafe_allow_html=True)
+                st.markdown(render_top_box("Top 5 US100", top_us100, mode="lines"), unsafe_allow_html=True)
+                st.markdown(render_top_box("Top 5 Nifty200", top_nifty200, mode="lines"), unsafe_allow_html=True)
 
 # ---- Outlook tab --------------------------------------------------------
 with tab_outlook:

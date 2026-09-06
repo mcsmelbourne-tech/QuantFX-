@@ -1,9 +1,10 @@
 """
 QuantFX Terminal — ATR Renko & Macro Smart Money Structure
-EMA(9)/EMA(20) rewrite, Heikin Ashi, MACD, RSI, Smart Money Structure,
-US100 + Nifty200 screener on the right, click-to-chart navigation.
+Streamlit rewrite with custom candle coloring, right-side axes, 
+Heikin Ashi EMAs, single-fire pullback signals with blinking animation, 
+blinking round dot buy/sell markers on Heikin Ashi & MACD, targeted multi-market Telegram alerts,
+full share price display, 95% wide charts, font size 10, and right-side top mover cards (font size 11).
 """
-
 import numpy as np
 import pandas as pd
 import yfinance as yf
@@ -18,7 +19,6 @@ import os
 # =====================================================================
 # PAGE CONFIG
 # =====================================================================
-
 st.set_page_config(
     page_title="QuantFX Terminal",
     page_icon="📈",
@@ -29,94 +29,82 @@ st.set_page_config(
 # =====================================================================
 # COLORS – TradingView-style dark + neon
 # =====================================================================
-
 COLOR_BG_DARK = "#0B0E11"
 COLOR_PANEL_BG = "#11151C"
 COLOR_BORDER = "#202635"
 COLOR_TEXT_MAIN = "#E5E9F0"
 COLOR_TEXT_MUTED = "#9FA8C3"
-
 COLOR_BULL = "#26FF9A"
 COLOR_BEAR = "#FF4F7B"
-
 COLOR_GREEN = "#00FF66"
 COLOR_RED = "#FF3333"
-
 COLOR_MA_FAST = "#00FF66"
 COLOR_MA_SLOW = "#FF3333"
-
 COLOR_MACD_LINE = "#2962FF"
 COLOR_SIGNAL_LINE = "#FF6D00"
 COLOR_ZERO_LINE = "#4C566A"
-
 COLOR_BOS_DEMAND = "#26FF9A"
 COLOR_BOS_SUPPLY = "#FF4F7B"
 COLOR_CHOCH_DEMAND = "#00D4FF"
 COLOR_CHOCH_SUPPLY = "#FF9900"
-
 COLOR_PB_BUY = "#00FFAA"
 COLOR_PB_SELL = "#FF2255"
 
 # =====================================================================
 # GLOBAL DARK THEME CSS & BLINKING ANIMATION
 # =====================================================================
-
 st.markdown(
     f"""
-<style>
-.stApp {{ background-color: {COLOR_BG_DARK}; }}
-section[data-testid="stSidebar"] {{ background-color: {COLOR_PANEL_BG}; }}
-
-div[data-testid="stMetric"] {{
-    background-color: {COLOR_PANEL_BG};
-    border: 1px solid {COLOR_BORDER};
-    border-radius: 6px;
-    padding: 10px 14px;
-}}
-
-.qfx-badge {{
-    display:inline-block; padding:3px 10px; border-radius:4px;
-    font-weight:700; font-size:10px; letter-spacing:0.5px;
-}}
-
-/* Font size 10 override for chart labels & text elements */
-.js-plotly-plot .plotly .gtitle,
-.js-plotly-plot .plotly .xtitle,
-.js-plotly-plot .plotly .ytitle,
-.js-plotly-plot .plotly .legendtext,
-.js-plotly-plot .plotly .xtick text,
-.js-plotly-plot .plotly .ytick text,
-.js-plotly-plot .plotly .annotation text {{
-    font-size: 10px !important;
-}}
-
-/* Blinking & Pulsing Animation for Buy / Sell Signals & Dots */
-@keyframes signalBlink {{
-    0% {{ opacity: 1; transform: scale(1); }}
-    50% {{ opacity: 0.15; transform: scale(1.18); }}
-    100% {{ opacity: 1; transform: scale(1); }}
-}}
-
-.js-plotly-plot svg path[fill="{COLOR_PB_BUY}"],
-.js-plotly-plot svg path[stroke="{COLOR_PB_BUY}"],
-.js-plotly-plot svg text[fill="{COLOR_PB_BUY}"],
-.js-plotly-plot svg path[fill="{COLOR_PB_SELL}"],
-.js-plotly-plot svg path[stroke="{COLOR_PB_SELL}"],
-.js-plotly-plot svg text[fill="{COLOR_PB_SELL}"] {{
-    animation: signalBlink 1.1s infinite ease-in-out;
-    transform-origin: center;
-}}
-</style>
-""",
+    <style>
+    .stApp {{ background-color: {COLOR_BG_DARK}; }}
+    section[data-testid="stSidebar"] {{ background-color: {COLOR_PANEL_BG}; }}
+    div[data-testid="stMetric"] {{
+        background-color: {COLOR_PANEL_BG};
+        border: 1px solid {COLOR_BORDER};
+        border-radius: 6px;
+        padding: 10px 14px;
+    }}
+    .qfx-badge {{
+        display:inline-block; padding:3px 10px; border-radius:4px;
+        font-weight:700; font-size:10px; letter-spacing:0.5px;
+    }}
+    
+    /* Font size 10 override for chart labels & text elements */
+    .js-plotly-plot .plotly .gtitle,
+    .js-plotly-plot .plotly .xtitle,
+    .js-plotly-plot .plotly .ytitle,
+    .js-plotly-plot .plotly .legendtext,
+    .js-plotly-plot .plotly .xtick text,
+    .js-plotly-plot .plotly .ytick text,
+    .js-plotly-plot .plotly .annotation text {{
+        font-size: 10px !important;
+    }}
+    
+    /* Blinking & Pulsing Animation for Buy / Sell Signals & Dots */
+    @keyframes signalBlink {{
+        0% {{ opacity: 1; transform: scale(1); }}
+        50% {{ opacity: 0.15; transform: scale(1.18); }}
+        100% {{ opacity: 1; transform: scale(1); }}
+    }}
+    
+    .js-plotly-plot svg path[fill="{COLOR_PB_BUY}"],
+    .js-plotly-plot svg path[stroke="{COLOR_PB_BUY}"],
+    .js-plotly-plot svg text[fill="{COLOR_PB_BUY}"],
+    .js-plotly-plot svg path[fill="{COLOR_PB_SELL}"],
+    .js-plotly-plot svg path[stroke="{COLOR_PB_SELL}"],
+    .js-plotly-plot svg text[fill="{COLOR_PB_SELL}"] {{
+        animation: signalBlink 1.1s infinite ease-in-out;
+        transform-origin: center;
+    }}
+    </style>
+    """,
     unsafe_allow_html=True,
 )
 
 # =====================================================================
 # TELEGRAM
 # =====================================================================
-
 TG_CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".qfx_telegram_config.json")
-
 
 def load_telegram_config():
     try:
@@ -128,7 +116,6 @@ def load_telegram_config():
         pass
     return "", ""
 
-
 def save_telegram_config(token, chat_id):
     try:
         with open(TG_CONFIG_PATH, "w") as f:
@@ -137,16 +124,13 @@ def save_telegram_config(token, chat_id):
     except Exception as e:
         return False, str(e)
 
-
 def send_telegram_alert(message, token, chat_id):
     token = (token or "").strip()
     chat_id = (chat_id or "").strip()
     if not token or not chat_id:
         return False, "Bot Token or Chat ID is missing."
-
     url = f"https://api.telegram.org/bot{token}/sendMessage"
     payload = {"chat_id": chat_id, "text": message, "parse_mode": "Markdown"}
-
     try:
         response = requests.post(url, json=payload, timeout=10)
         data = response.json()
@@ -157,21 +141,60 @@ def send_telegram_alert(message, token, chat_id):
         return False, str(e)
 
 # =====================================================================
+# INDICATORS & HEIKIN ASHI / MACD
+# =====================================================================
+def compute_heikin_ashi(df, ema_fast=21, ema_slow=50):
+    ha = pd.DataFrame(index=df.index)
+    ha["Close"] = (df["Open"] + df["High"] + df["Low"] + df["Close"]) / 4.0
+    ha_open = [(df["Open"].iloc[0] + df["Close"].iloc[0]) / 2.0]
+    for i in range(1, len(df)):
+        ha_open.append((ha_open[i - 1] + ha["Close"].iloc[i - 1]) / 2.0)
+    ha["Open"] = ha_open
+    ha["High"] = pd.concat([df["High"], ha["Open"], ha["Close"]], axis=1).max(axis=1)
+    ha["Low"] = pd.concat([df["High"], ha["Open"], ha["Close"]], axis=1).min(axis=1)
+    ha["EMA_FAST"] = ha["Close"].ewm(span=ema_fast, adjust=False).mean()
+    ha["EMA_SLOW"] = ha["Close"].ewm(span=ema_slow, adjust=False).mean()
+    
+    ha_signals = ["HOLD"] * len(ha)
+    for i in range(1, len(ha)):
+        if ha["EMA_FAST"].iloc[i] > ha["EMA_SLOW"].iloc[i] and ha["EMA_FAST"].iloc[i-1] <= ha["EMA_SLOW"].iloc[i-1]:
+            ha_signals[i] = "BUY"
+        elif ha["EMA_FAST"].iloc[i] < ha["EMA_SLOW"].iloc[i] and ha["EMA_FAST"].iloc[i-1] >= ha["EMA_SLOW"].iloc[i-1]:
+            ha_signals[i] = "SELL"
+    ha["Signal"] = ha_signals
+    return ha
+
+def detect_macd_crossovers(renko_df):
+    macd = renko_df["MACD"].values
+    signal = renko_df["MACD_Signal"].values
+    macd_signals = ["HOLD"] * len(renko_df)
+    macd_types = [None] * len(renko_df)
+    if len(renko_df) < 2:
+        return macd_signals, macd_types
+    for i in range(1, len(renko_df)):
+        if macd[i] > signal[i] and macd[i - 1] <= signal[i - 1]:
+            macd_signals[i] = "BUY"
+            macd_types[i] = "MACD Cross Up"
+        elif macd[i] < signal[i] and macd[i - 1] >= signal[i - 1]:
+            macd_signals[i] = "SELL"
+            macd_types[i] = "MACD Cross Down"
+    return macd_signals, macd_types
+
+# =====================================================================
 # FULL-PRECISION PRICE FORMATTING
 # =====================================================================
-
-
 def format_price(value):
+    """Format a price with enough decimals to never truncate small values
+    (e.g. FX pairs) while trimming meaningless trailing zeros. Replaces the
+    old ':f' + rstrip('0') pattern, which could still read as only 2-3
+    significant digits for very small quotes."""
     try:
         value = float(value)
     except (TypeError, ValueError):
         return str(value)
-
-    if value != value:
+    if value != value:  # NaN check
         return "—"
-
     abs_val = abs(value)
-
     if abs_val == 0:
         decimals = 2
     elif abs_val >= 1000:
@@ -182,77 +205,45 @@ def format_price(value):
         decimals = 5
     else:
         decimals = 8
-
     s = f"{value:.{decimals}f}"
     if "." in s:
         s = s.rstrip("0").rstrip(".")
     return s
 
 # =====================================================================
-# INDICATORS & HEIKIN ASHI / MACD
+# EMA CROSSOVER DETECTION (both bullish & bearish — "both sides")
 # =====================================================================
-
-
-def compute_heikin_ashi(df, ema_fast=9, ema_slow=20):
-    ha = pd.DataFrame(index=df.index)
-    ha["Close"] = (df["Open"] + df["High"] + df["Low"] + df["Close"]) / 4.0
-
-    ha_open = [(df["Open"].iloc[0] + df["Close"].iloc[0]) / 2.0]
-    for i in range(1, len(df)):
-        ha_open.append((ha_open[i - 1] + ha["Close"].iloc[i - 1]) / 2.0)
-
-    ha["Open"] = ha_open
-    ha["High"] = pd.concat([df["High"], ha["Open"], ha["Close"]], axis=1).max(axis=1)
-    ha["Low"] = pd.concat([df["High"], ha["Open"], ha["Close"]], axis=1).min(axis=1)
-
-    ha["EMA_FAST"] = ha["Close"].ewm(span=ema_fast, adjust=False).mean()
-    ha["EMA_SLOW"] = ha["Close"].ewm(span=ema_slow, adjust=False).mean()
-
-    ha_signals = ["HOLD"] * len(ha)
-    for i in range(1, len(ha)):
-        if ha["EMA_FAST"].iloc[i] > ha["EMA_SLOW"].iloc[i] and ha["EMA_FAST"].iloc[i - 1] <= ha["EMA_SLOW"].iloc[i - 1]:
-            ha_signals[i] = "BUY"
-        elif ha["EMA_FAST"].iloc[i] < ha["EMA_SLOW"].iloc[i] and ha["EMA_FAST"].iloc[i - 1] >= ha["EMA_SLOW"].iloc[i - 1]:
-            ha_signals[i] = "SELL"
-
-    ha["Signal"] = ha_signals
-    return ha
-
-
-def detect_macd_crossovers(renko_df):
-    macd = renko_df["MACD"].values
-    signal = renko_df["MACD_Signal"].values
-
-    macd_signals = ["HOLD"] * len(renko_df)
-    macd_types = [None] * len(renko_df)
-
-    if len(renko_df) < 2:
-        return macd_signals, macd_types
-
-    for i in range(1, len(renko_df)):
-        if macd[i] > signal[i] and macd[i - 1] <= signal[i - 1]:
-            macd_signals[i] = "BUY"
-            macd_types[i] = "MACD Cross Up"
-        elif macd[i] < signal[i] and macd[i - 1] >= signal[i - 1]:
-            macd_signals[i] = "SELL"
-            macd_types[i] = "MACD Cross Down"
-
-    return macd_signals, macd_types
+def detect_ema_cross_signal(close_series, fast=21, slow=50, lookback=1):
+    """Detect the most recent EMA fast/slow crossover in either direction
+    (bullish golden cross OR bearish death cross) within the last
+    `lookback` bars. Returns None if no cross occurred in that window."""
+    if close_series is None or len(close_series) < slow + 2:
+        return None
+    ema_fast_s = close_series.ewm(span=fast, adjust=False).mean()
+    ema_slow_s = close_series.ewm(span=slow, adjust=False).mean()
+    n = len(close_series)
+    earliest = max(n - 1 - lookback, 1)
+    for i in range(n - 1, earliest - 1, -1):
+        f_now, s_now = ema_fast_s.iloc[i], ema_slow_s.iloc[i]
+        f_prev, s_prev = ema_fast_s.iloc[i - 1], ema_slow_s.iloc[i - 1]
+        if f_now > s_now and f_prev <= s_prev:
+            return {"direction": "BUY", "bars_ago": n - 1 - i,
+                    "fast": float(f_now), "slow": float(s_now)}
+        if f_now < s_now and f_prev >= s_prev:
+            return {"direction": "SELL", "bars_ago": n - 1 - i,
+                    "fast": float(f_now), "slow": float(s_now)}
+    return None
 
 # =====================================================================
 # SMART MONEY STRUCTURE — BOS & CHoCH
 # =====================================================================
-
-
 def detect_market_structure(high, low, close, swing_lookback=5, brick_type=None):
     high = pd.Series(high).reset_index(drop=True)
     low = pd.Series(low).reset_index(drop=True)
     close = pd.Series(close).reset_index(drop=True)
-
     n = len(close)
     is_high = [False] * n
     is_low = [False] * n
-
     if brick_type is not None:
         bt = list(brick_type)
         for i in range(n - 1):
@@ -269,24 +260,19 @@ def detect_market_structure(high, low, close, swing_lookback=5, brick_type=None)
                 is_high[i] = True
             if low.iloc[i] == window_l.min():
                 is_low[i] = True
-
     structure = [None] * n
     level = [np.nan] * n
     trend_arr = [None] * n
     trend = None
-
     pending_high = None
     pending_high_idx = None
     pending_low = None
     pending_low_idx = None
-
     origin = [None] * n
     seq_arr = [None] * n
     seq = 0
-
     for i in range(n):
         c = float(close.iloc[i])
-
         broke_up = (
             pending_high is not None and pending_high_idx is not None
             and i > pending_high_idx and c > pending_high
@@ -295,13 +281,11 @@ def detect_market_structure(high, low, close, swing_lookback=5, brick_type=None)
             pending_low is not None and pending_low_idx is not None
             and i > pending_low_idx and c < pending_low
         )
-
         if broke_up and broke_down:
             if abs(c - pending_high) <= abs(c - pending_low):
                 broke_down = False
             else:
                 broke_up = False
-
         if broke_up:
             is_choch = trend == "down"
             structure[i] = "CHOCH_DEMAND" if is_choch else "BOS_DEMAND"
@@ -312,7 +296,6 @@ def detect_market_structure(high, low, close, swing_lookback=5, brick_type=None)
             trend = "up"
             pending_high = None
             pending_high_idx = None
-
         elif broke_down:
             is_choch = trend == "up"
             structure[i] = "CHOCH_SUPPLY" if is_choch else "BOS_SUPPLY"
@@ -323,17 +306,13 @@ def detect_market_structure(high, low, close, swing_lookback=5, brick_type=None)
             trend = "down"
             pending_low = None
             pending_low_idx = None
-
         if is_high[i]:
             pending_high = float(high.iloc[i])
             pending_high_idx = i
-
         if is_low[i]:
             pending_low = float(low.iloc[i])
             pending_low_idx = i
-
         trend_arr[i] = trend
-
     return pd.DataFrame({
         "SwingHigh": is_high,
         "SwingLow": is_low,
@@ -344,7 +323,6 @@ def detect_market_structure(high, low, close, swing_lookback=5, brick_type=None)
         "Trend": trend_arr,
     })
 
-
 STRUCTURE_LABELS = {
     "BOS_DEMAND": "B-S",
     "BOS_SUPPLY": "B-D",
@@ -352,21 +330,16 @@ STRUCTURE_LABELS = {
     "CHOCH_SUPPLY": "CH-D",
 }
 
-
 def latest_structure_event(struct_df, lookback=15):
     if struct_df is None or struct_df.empty or "Structure" not in struct_df.columns:
         return None
-
     tail = struct_df.tail(lookback)
     hits = tail[tail["Structure"].isin(["BOS_DEMAND", "BOS_SUPPLY", "CHOCH_DEMAND", "CHOCH_SUPPLY"])]
-
     if hits.empty:
         return None
-
     last_idx = hits.index[-1]
     s_type = hits["Structure"].iloc[-1]
     base_label = STRUCTURE_LABELS.get(s_type, s_type)
-
     return {
         "type": s_type,
         "label": base_label,
@@ -374,53 +347,39 @@ def latest_structure_event(struct_df, lookback=15):
         "bars_ago": int((len(struct_df) - 1) - last_idx),
     }
 
-# =====================================================================
-# ATR RENKO (EMA9/20 for FX & Commodities)
-# =====================================================================
-
-
 def build_atr_renko_df(df,
-                       atr_period=21,
-                       atr_multiplier=3.0,
-                       ema_fast=9,
-                       ema_slow=20,
-                       macd_fast=12,
-                       macd_slow=26,
-                       macd_signal=9,
-                       rsi_period=14):
+                        atr_period=21,
+                        atr_multiplier=3.0,
+                        ema_fast=21,
+                        ema_slow=50,
+                        macd_fast=12,
+                        macd_slow=26,
+                        macd_signal=9,
+                        rsi_period=14):
     if df.empty or len(df) < atr_period + 5:
         return pd.DataFrame(), 1.0
-
     closes = df["Close"]
     highs = df["High"]
     lows = df["Low"]
     dates = df.index
-
     tr1 = highs - lows
     tr2 = (highs - closes.shift(1)).abs()
     tr3 = (lows - closes.shift(1)).abs()
     tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
-
     atr = tr.rolling(atr_period).mean()
     last_atr = atr.iloc[-1]
-
     if np.isnan(last_atr) or last_atr <= 0:
         last_atr = closes.iloc[-1] * 0.01
-
     brick_size = last_atr * atr_multiplier
-
     renko_rows = []
     current_brick_val = closes.iloc[0]
-
     for i in range(len(closes)):
         price = closes.iloc[i]
         dt = dates[i]
         diff = price - current_brick_val
-
         if abs(diff) >= brick_size:
             num_bricks = int(abs(diff) // brick_size)
             direction = 1 if diff > 0 else -1
-
             for _ in range(num_bricks):
                 next_val = current_brick_val + direction * brick_size
                 renko_rows.append({
@@ -432,64 +391,52 @@ def build_atr_renko_df(df,
                     "Type": "up" if direction > 0 else "down"
                 })
                 current_brick_val = next_val
-
     if not renko_rows:
         return pd.DataFrame(), brick_size
-
     renko_df = pd.DataFrame(renko_rows)
     renko_df.reset_index(drop=True, inplace=True)
-
     r_close = renko_df["Close"]
-
     renko_df["EMA_FAST"] = r_close.ewm(span=ema_fast, adjust=False).mean()
     renko_df["EMA_SLOW"] = r_close.ewm(span=ema_slow, adjust=False).mean()
-
     real_exp1 = closes.ewm(span=macd_fast, adjust=False).mean()
     real_exp2 = closes.ewm(span=macd_slow, adjust=False).mean()
     real_macd = real_exp1 - real_exp2
     real_macd_signal = real_macd.ewm(span=macd_signal, adjust=False).mean()
-
     macd_lookup = pd.DataFrame({
         "Date": dates,
         "MACD": real_macd.values,
         "MACD_Signal": real_macd_signal.values,
     }).sort_values("Date")
-
     renko_df = pd.merge_asof(
         renko_df.sort_values("Date").reset_index(drop=True),
         macd_lookup,
         on="Date",
         direction="backward",
     )
-
     renko_df["MACD_Hist"] = renko_df["MACD"] - renko_df["MACD_Signal"]
-
+    
     delta = r_close.diff()
     gain = (delta.where(delta > 0, 0.0)).rolling(rsi_period).mean()
     loss = (-delta.where(delta < 0, 0.0)).rolling(rsi_period).mean()
     rs = gain / loss.replace(0, np.nan)
     renko_df["RSI"] = 100 - (100 / (1 + rs))
-
     signals = []
     pullback_signals = []
     pullback_fired = False
     current_trend = None
-
     for i in range(len(renko_df)):
         if i == 0:
             signals.append("HOLD")
             pullback_signals.append("HOLD")
             continue
-
+            
         ema_fast_now = renko_df.loc[i, "EMA_FAST"]
         ema_slow_now = renko_df.loc[i, "EMA_SLOW"]
         ema_fast_prev = renko_df.loc[i - 1, "EMA_FAST"]
         ema_slow_prev = renko_df.loc[i - 1, "EMA_SLOW"]
         brick_type = renko_df.loc[i, "Type"]
-
         sig = "HOLD"
         pb_sig = "HOLD"
-
         if ema_fast_now > ema_slow_now and ema_fast_prev <= ema_slow_prev:
             sig = "BUY"
             current_trend = "BUY"
@@ -503,25 +450,21 @@ def build_atr_renko_df(df,
                 if current_trend != "BUY":
                     current_trend = "BUY"
                     pullback_fired = False
-
-                recent_types = renko_df.loc[max(0, i - 3):i - 1, "Type"].values
+                
+                recent_types = renko_df.loc[max(0, i-3):i-1, "Type"].values
                 if not pullback_fired and "down" in recent_types and brick_type == "up":
                     pb_sig = "BUY"
                     pullback_fired = True
-
             elif ema_fast_now < ema_slow_now:
                 if current_trend != "SELL":
                     current_trend = "SELL"
                     pullback_fired = False
-
-                recent_types = renko_df.loc[max(0, i - 3):i - 1, "Type"].values
+                recent_types = renko_df.loc[max(0, i-3):i-1, "Type"].values
                 if not pullback_fired and "up" in recent_types and brick_type == "down":
                     pb_sig = "SELL"
                     pullback_fired = True
-
         signals.append(sig)
         pullback_signals.append(pb_sig)
-
     renko_df["Signal"] = signals
     renko_df["Pullback_Signal"] = pullback_signals
 
@@ -532,7 +475,6 @@ def build_atr_renko_df(df,
         macd_v = renko_df.loc[i, "MACD"]
         macd_s = renko_df.loc[i, "MACD_Signal"]
         rsi_v = renko_df.loc[i, "RSI"] if "RSI" in renko_df.columns else np.nan
-
         c = "HOLD"
         if sig == "BUY":
             c = "BUY"
@@ -542,31 +484,23 @@ def build_atr_renko_df(df,
             c = "BUY"
         elif pb == "SELL" and pd.notna(macd_v) and pd.notna(macd_s) and macd_v < macd_s and (pd.isna(rsi_v) or rsi_v > 25):
             c = "SELL"
-
         confirmed_signals.append(c)
-
     renko_df["Confirmed_Signal"] = confirmed_signals
-
     macd_sigs, macd_types = detect_macd_crossovers(renko_df)
     renko_df["Div_Signal"] = macd_sigs
     renko_df["Div_Type"] = macd_types
-
     struct_df = detect_market_structure(
         renko_df["High"], renko_df["Low"], renko_df["Close"],
         swing_lookback=5, brick_type=renko_df["Type"]
     )
-
     renko_df = pd.concat(
         [renko_df.reset_index(drop=True), struct_df.reset_index(drop=True)], axis=1
     )
-
     return renko_df, brick_size
 
 # =====================================================================
 # DATA SOURCE & OUTLOOK
 # =====================================================================
-
-
 @st.cache_data(ttl=300, show_spinner=False)
 def fetch_live_ohlc(symbol="GC=F", period="6mo", interval="1d"):
     df = yf.download(symbol, period=period, interval=interval, progress=False)
@@ -574,138 +508,94 @@ def fetch_live_ohlc(symbol="GC=F", period="6mo", interval="1d"):
         df.columns = df.columns.get_level_values(0)
     return df
 
-
 @st.cache_data(ttl=300, show_spinner=False)
 def fetch_top_n_movers(symbols_tuple, n=1):
     symbols = list(symbols_tuple)
     tickers = [s for s, _ in symbols]
-
     if not tickers:
         return []
-
     try:
-        data = yf.download(
-            tickers,
-            period="5d",
-            interval="1d",
-            group_by="ticker",
-            progress=False,
-            threads=True,
-        )
+        data = yf.download(tickers, period="5d", interval="1d", group_by="ticker",
+                            progress=False, threads=True)
     except Exception:
         return []
-
     results = []
-
     for sym, disp in symbols:
         try:
             sub = data[sym] if len(tickers) > 1 else data
             closes = sub["Close"].dropna()
-
             if len(closes) < 2:
                 continue
-
             last_price = float(closes.iloc[-1])
             prev_price = float(closes.iloc[-2])
-
             if prev_price == 0:
                 continue
-
             chg = (last_price - prev_price) / prev_price * 100
-
             results.append({"symbol": sym, "display": disp, "price": last_price, "chg": chg})
         except Exception:
             continue
-
     results.sort(key=lambda r: r["chg"], reverse=True)
     return results[:n]
-
 
 def evaluate_oracle_score(symbol, display=None):
     try:
         df = fetch_live_ohlc(symbol, period="1y", interval="1d")
         if df.empty:
             return None
-
         last_close = float(df["Close"].iloc[-1])
         prev_close = float(df["Close"].iloc[-2]) if len(df) > 1 else last_close
         chg = ((last_close - prev_close) / prev_close) * 100
-
         recent = df.tail(30) if len(df) >= 30 else df
         high = float(recent["High"].max())
         low = float(recent["Low"].min())
-
         daily = df.resample("1D").agg({
-            "Open": "first",
-            "High": "max",
-            "Low": "min",
-            "Close": "last"
+            "Open": "first", "High": "max", "Low": "min", "Close": "last"
         }).dropna()
-
         atr_source = daily if len(daily) >= 21 else df
-
         tr1 = atr_source["High"] - atr_source["Low"]
         tr2 = (atr_source["High"] - atr_source["Close"].shift(1)).abs()
         tr3 = (atr_source["Low"] - atr_source["Close"].shift(1)).abs()
         tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
-
         atr = tr.rolling(21).mean().iloc[-1]
         if np.isnan(atr) or atr <= 0:
             atr = last_close * 0.02
-
         atr_pct = (atr / last_close) * 100
-
         if "Volume" in df.columns and df["Volume"].notna().any():
             vol_series = df["Volume"].replace(0, np.nan)
             vol_avg = vol_series.rolling(20, min_periods=5).mean().iloc[-1]
             last_vol = vol_series.iloc[-1]
-
             if np.isnan(last_vol):
                 last_vol = vol_avg
-
             vol_ratio = (last_vol / vol_avg) if vol_avg and not np.isnan(vol_avg) and vol_avg > 0 else 1.0
         else:
             vol_ratio = 1.0
-
         vol_ratio = min(max(float(vol_ratio), 0.5), 3.0)
-
         sig = "BUY" if chg >= 0 else "SELL"
-
         momentum_ratio = min(abs(chg) / max(atr_pct, 0.01), 2.0)
-
         expansion = 1.0 + (vol_ratio - 1.0) * 0.4 + momentum_ratio * 0.25
         expansion = min(max(expansion, 0.7), 2.2)
-
         tp1_mult = 2.0 * expansion
         tp2_mult = 4.0 * expansion
-
         sl = low * 0.98 if sig == "BUY" else high * 1.02
         tp1 = last_close + tp1_mult * atr if sig == "BUY" else last_close - tp1_mult * atr
         tp2 = last_close + tp2_mult * atr if sig == "BUY" else last_close - tp2_mult * atr
-
         tp1_pct = abs((tp1 - last_close) / last_close) * 100
         tp2_pct = abs((tp2 - last_close) / last_close) * 100
-
         momentum_score = min(momentum_ratio / 2.0, 1.0) * 40
         reward_score = min(tp1_pct / 8.0, 1.0) * 40
         volume_score = min(vol_ratio / 2.0, 1.0) * 20
-
         score_val = min(max(momentum_score + reward_score + volume_score, 0), 100)
         score_str = f"{score_val:.1f}%"
-
-        renko_df, _ = build_atr_renko_df(df, atr_period=21, atr_multiplier=3.0,
-                                         ema_fast=9, ema_slow=20,
-                                         macd_fast=12, macd_slow=26, macd_signal=9,
-                                         rsi_period=14)
-
+        renko_df, _ = build_atr_renko_df(df, atr_period=21, atr_multiplier=3.0)
         structure_event = latest_structure_event(renko_df, lookback=15)
         structure_label = structure_event["label"] if structure_event else "—"
         structure_type = structure_event["type"] if structure_event else None
-
+        
+        # Display full share price without rounding cutoff
         price_fmt = format_price(last_close)
         high_fmt = format_price(high)
         low_fmt = format_price(low)
-
+        
         return {
             "Ticker": display or symbol,
             "RawSymbol": symbol,
@@ -721,116 +611,83 @@ def evaluate_oracle_score(symbol, display=None):
             "SL": f"${format_price(sl)}",
             "TP1": f"${format_price(tp1)}",
             "TP1_PCT": f"{tp1_pct:.2f}%",
-            "TP2": f"${format_price(tp2)}",
+            "TP2": f"${format_price(tp2)}"
         }
-
     except Exception:
         return None
-
 
 def compute_7day_outlook(symbol, display, period="1y", interval="1d"):
     try:
         data = fetch_live_ohlc(symbol, period=period, interval=interval)
         if data.empty or len(data) < 30:
             return None
-
         close = data["Close"]
         high = data["High"]
         low = data["Low"]
-
-        ema9 = close.ewm(span=9, adjust=False).mean()
-        ema20 = close.ewm(span=20, adjust=False).mean()
-
+        ema21 = close.ewm(span=21, adjust=False).mean()
+        ema50 = close.ewm(span=50, adjust=False).mean()
         delta = close.diff()
         gain = delta.where(delta > 0, 0.0).rolling(14).mean()
         loss = (-delta.where(delta < 0, 0.0)).rolling(14).mean()
         rs = gain / loss.replace(0, np.nan)
         rsi = 100 - (100 / (1 + rs))
-
         exp1 = close.ewm(span=12, adjust=False).mean()
         exp2 = close.ewm(span=26, adjust=False).mean()
         macd = exp1 - exp2
         macd_signal = macd.ewm(span=9, adjust=False).mean()
-
         tr1 = high - low
         tr2 = (high - close.shift(1)).abs()
         tr3 = (low - close.shift(1)).abs()
         tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
-
         atr = tr.rolling(21).mean()
-
         last_close = float(close.iloc[-1])
-        last_ema9 = float(ema9.iloc[-1])
-        last_ema20 = float(ema20.iloc[-1])
-
+        last_ema21, last_ema50 = float(ema21.iloc[-1]), float(ema50.iloc[-1])
         last_atr = float(atr.iloc[-1]) if not np.isnan(atr.iloc[-1]) else last_close * 0.02
         atr_pct = (last_atr / last_close) * 100
-
         idx = data.index
-
         if len(idx) > 5:
             deltas_minutes = np.diff(idx[-30:].values).astype("timedelta64[m]").astype(float)
             deltas_minutes = deltas_minutes[deltas_minutes > 0]
             avg_bar_minutes = float(np.median(deltas_minutes)) if len(deltas_minutes) else 1440.0
         else:
             avg_bar_minutes = 1440.0
-
         bars_in_7_days = max((7 * 24 * 60) / avg_bar_minutes, 1.0)
-
         reasons = []
         bias_score = 0.0
-
-        if last_ema9 > last_ema20:
+        if last_ema21 > last_ema50:
             bias_score += 1
-            reasons.append(f"EMA9 (${format_price(last_ema9)}) is above EMA20 (${format_price(last_ema20)}), trend bullish.")
+            reasons.append(f"EMA21 (${format_price(last_ema21)}) is above EMA50 (${format_price(last_ema50)}), keeping the trend bullish.")
         else:
             bias_score -= 1
-            reasons.append(f"EMA9 (${format_price(last_ema9)}) is below EMA20 (${format_price(last_ema20)}), trend bearish.")
-
+            reasons.append(f"EMA21 (${format_price(last_ema21)}) is below EMA50 (${format_price(last_ema50)}), keeping the trend bearish.")
         renko_df, _ = build_atr_renko_df(
             data, atr_period=21, atr_multiplier=3.0,
-            ema_fast=9, ema_slow=20,
+            ema_fast=21, ema_slow=50,
             macd_fast=12, macd_slow=26, macd_signal=9,
             rsi_period=14
         )
-
         structure_event = None
         structure_trend = None
-
         if not renko_df.empty and "Structure" in renko_df.columns:
             structure_trend = renko_df["Trend"].iloc[-1]
             structure_event = latest_structure_event(renko_df, lookback=15)
-
             structure_weight = {
-                "BOS_DEMAND": 1.2,
-                "BOS_SUPPLY": -1.2,
-                "CHOCH_DEMAND": 1.8,
-                "CHOCH_SUPPLY": -1.8,
+                "BOS_DEMAND": 1.2, "BOS_SUPPLY": -1.2,
+                "CHOCH_DEMAND": 1.8, "CHOCH_SUPPLY": -1.8,
             }
-
             if structure_event:
                 s_type = structure_event["type"]
                 s_level = structure_event["level"]
                 bars_ago = structure_event["bars_ago"]
-
                 bias_score += structure_weight.get(s_type, 0.0)
-
                 recency = "on the latest brick" if bars_ago == 0 else f"{bars_ago} bricks ago"
                 reasons.append(f"Structure {structure_event['label']} confirmed at ${format_price(s_level)} ({recency}).")
-
-        direction = (
-            "Bullish" if bias_score >= 2.0
-            else "Bearish" if bias_score <= -2.0
-            else "Neutral / Consolidation"
-        )
-
+        direction = "Bullish" if bias_score >= 2.0 else ("Bearish" if bias_score <= -2.0 else "Neutral / Consolidation")
         weekly_move_pct = atr_pct * np.sqrt(bars_in_7_days)
         tilt = float(np.clip(bias_score / 3.0, -1, 1))
         center_shift_pct = weekly_move_pct * 0.35 * tilt
-
         range_low = last_close * (1 - weekly_move_pct / 100 + center_shift_pct / 100)
         range_high = last_close * (1 + weekly_move_pct / 100 + center_shift_pct / 100)
-
         return {
             "display": display,
             "direction": direction,
@@ -842,56 +699,51 @@ def compute_7day_outlook(symbol, display, period="1y", interval="1d"):
             "structure_event": structure_event,
             "structure_trend": structure_trend,
         }
-
     except Exception:
         return None
 
 # =====================================================================
 # WATCHLISTS
 # =====================================================================
-
 nifty200_raw = [
-    "ABB","ABFRL","ACC","ADANIENSOL","ADANIENT","ADANIGREEN","ADANIPORTS","ADANIPOWER",
-    "AFFLE","ALKEM","AMBER","APLAPOLLO","APOLLOHOSP","APOLLOTYRE","ASIANPAINT","ASTRAL",
-    "AUBANK","AXISBANK","BAJAJFINSV","BAJAJHFL","BAJAJHLDNG","BAJAJ_AUTO","BAJFINANCE",
-    "BANDHANBNK","BANKBARODA","BANKINDIA","BATAINDIA","BERGEPAINT","BHARATFORG",
-    "BHARTIARTL","BHEL","BIOCON","BOSCHLTD","BPCL","BRITANNIA","BSE","CANBK","CANFINHOME",
-    "CDSL","CEATLTD","CGPOWER","CHOLAFIN","CIPLA","CNX200","COALINDIA","COCHINSHIP",
-    "COFORGE","COLPAL","CONCOR","COROMANDEL","CUMMINSIND","DALBHARAT","DEEPAKNTR",
-    "DIVISLAB","DIXON","DLF","DMART","DRREDDY","EICHERMOT","ESCORTS","EVEREADY",
-    "EXIDEIND","FACT","FEDERALBNK","FLUOROCHEM","FORTIS","GLENMARK","GODREJCP",
-    "GODREJPROP","GOLDBEES","GRASIM","HAL","HAVELLS","HCLTECH","HDFCAMC","HDFCBANK",
-    "HDFCGOLD","HDFCLIFE","HDFCSILVER","HEROMOTOCO","HINDALCO","HINDPETRO","ICICIBANK",
-    "ICICIGI","ICICIPRULI","IDFCFIRSTB","IEX","IGL","INDHOTEL","INDIANB","INDIGO",
-    "INDUSINDBK","INDUSTOWER","INFY","IOC","IPCALAB","IRCTC","IREDA","IRFC","ITC",
-    "JINDALSTEL","JIOFIN","JKCEMENT","JSWENERGY","JSWSTEEL","JUBLFOOD","KOTAKBANK",
-    "KPITTECH","LALPATHLAB","LAURUSLABS","LICHSGFIN","LICI","LINDEINDIA","LODHA","LT",
-    "LTIM","LTTS","LUPIN","M&M","M&MFIN","MARICO","MARUTI","MAXHEALTH","MAZDOCK","MCX",
-    "MFSL","MOTHERSON","MPHASIS","MRF","MSUMI","MUTHOOTFIN","NATIONALUM","NAUKRI",
-    "NAVINFLUOR","NELCO","NESTLEIND","NHPC","NIFTY","NMDC","NTPC","OBEROIRLTY","OIL",
-    "ONGC","PAGEIND","PATANJALI","PAYTM","PERSISTENT","PETRONET","PFC","PGHH",
-    "PIDILITIND","PIIND","PNB","PNBHOUSING","POLICYBZR","POLYCAB","POONAWALLA",
-    "POWERGRID","POWERINDIA","PRESTIGE","RAILTEL","RAMCOCEM","RECLTD","RELIANCE",
-    "ROUTE","RVNL","SAIL","SBICARD","SBILIFE","SBIN","SHREECEM","SHRIRAMFIN","SIEMENS",
-    "SONACOMS","SRF","SUNPHARMA","SUNTV","SYNGENE","TANLA","TATACHEM","TATACOMM",
-    "TATACONSUM","TATAELXSI","TATAPOWER","TATASTEEL","TATATECH","TCS","TECHM",
-    "TEJASNET","TIINDIA","TITAN","TMPV","TORNTPHARM","TORNTPOWER","TRENT","TVSMOTOR",
-    "UBL","ULTRACEMCO","UNITDSPR","VBL","VEDL","VOLTAS","HINDCOPPER","NDIA"
+"ABB","ABFRL","ACC","ADANIENSOL","ADANIENT","ADANIGREEN","ADANIPORTS","ADANIPOWER",
+"AFFLE","ALKEM","AMBER","APLAPOLLO","APOLLOHOSP","APOLLOTYRE","ASIANPAINT","ASTRAL",
+"AUBANK","AXISBANK","BAJAJFINSV","BAJAJHFL","BAJAJHLDNG","BAJAJ_AUTO","BAJFINANCE",
+"BANDHANBNK","BANKBARODA","BANKINDIA","BATAINDIA","BERGEPAINT","BHARATFORG",
+"BHARTIARTL","BHEL","BIOCON","BOSCHLTD","BPCL","BRITANNIA","BSE","CANBK","CANFINHOME",
+"CDSL","CEATLTD","CGPOWER","CHOLAFIN","CIPLA","CNX200","COALINDIA","COCHINSHIP",
+"COFORGE","COLPAL","CONCOR","COROMANDEL","CUMMINSIND","DALBHARAT","DEEPAKNTR",
+"DIVISLAB","DIXON","DLF","DMART","DRREDDY","EICHERMOT","ESCORTS","EVEREADY",
+"EXIDEIND","FACT","FEDERALBNK","FLUOROCHEM","FORTIS","GLENMARK","GODREJCP",
+"GODREJPROP","GOLDBEES","GRASIM","HAL","HAVELLS","HCLTECH","HDFCAMC","HDFCBANK",
+"HDFCGOLD","HDFCLIFE","HDFCSILVER","HEROMOTOCO","HINDALCO","HINDPETRO","ICICIBANK",
+"ICICIGI","ICICIPRULI","IDFCFIRSTB","IEX","IGL","INDHOTEL","INDIANB","INDIGO",
+"INDUSINDBK","INDUSTOWER","INFY","IOC","IPCALAB","IRCTC","IREDA","IRFC","ITC",
+"JINDALSTEL","JIOFIN","JKCEMENT","JSWENERGY","JSWSTEEL","JUBLFOOD","KOTAKBANK",
+"KPITTECH","LALPATHLAB","LAURUSLABS","LICHSGFIN","LICI","LINDEINDIA","LODHA","LT",
+"LTIM","LTTS","LUPIN","M&M","M&MFIN","MARICO","MARUTI","MAXHEALTH","MAZDOCK","MCX",
+"MFSL","MOTHERSON","MPHASIS","MRF","MSUMI","MUTHOOTFIN","NATIONALUM","NAUKRI",
+"NAVINFLUOR","NELCO","NESTLEIND","NHPC","NIFTY","NMDC","NTPC","OBEROIRLTY","OIL",
+"ONGC","PAGEIND","PATANJALI","PAYTM","PERSISTENT","PETRONET","PFC","PGHH",
+"PIDILITIND","PIIND","PNB","PNBHOUSING","POLICYBZR","POLYCAB","POONAWALLA",
+"POWERGRID","POWERINDIA","PRESTIGE","RAILTEL","RAMCOCEM","RECLTD","RELIANCE",
+"ROUTE","RVNL","SAIL","SBICARD","SBILIFE","SBIN","SHREECEM","SHRIRAMFIN","SIEMENS",
+"SONACOMS","SRF","SUNPHARMA","SUNTV","SYNGENE","TANLA","TATACHEM","TATACOMM",
+"TATACONSUM","TATAELXSI","TATAPOWER","TATASTEEL","TATATECH","TCS","TECHM",
+"TEJASNET","TIINDIA","TITAN","TMPV","TORNTPHARM","TORNTPOWER","TRENT","TVSMOTOR",
+"UBL","ULTRACEMCO","UNITDSPR","VBL","VEDL","VOLTAS","HINDCOPPER","NDIA"
 ]
-
 us100_raw = [
-    "PLTR","ARM","INTC","AMD","MU","QCOM","LRCX","MCHP","AVGO","AMAT","GFS","TXN",
-    "IDXX","DDOG","ZS","TRI","CSCO","ADI","PANW","ORCL","AXON","CRWD","ASML","SLV",
-    "CHTR","TTD","SHOP","NAS100","APP","BIIB","FUTU","PCAR","NVDA","FTNT","MSFT",
-    "FAST","VRTX","US30","WDAY","CDNS","SPX","ORLY","ON","CSX","TSLA","AAPL","SBUX",
-    "GLD","ADBE","PDD","LIN","BKR","GOOGL","HON","PYPL","INTU","ADSK","CMCSA","DASH",
-    "ROST","GILD","KHC","CTAS","AEP","EA","DXCM","XEL","GEHC","BKNG","MDLZ","EXC",
-    "WBD","MNST","LULU","TMUS","PEP","ADP","NFLX","ABNB","COST","CTSH","MELI","TTWO",
-    "META","CSGP","CEG","AMZN","ISRG","CCEP","FANG"
+"PLTR","ARM","INTC","AMD","MU","QCOM","LRCX","MCHP","AVGO","AMAT","GFS","TXN",
+"IDXX","DDOG","ZS","TRI","CSCO","ADI","PANW","ORCL","AXON","CRWD","ASML","SLV",
+"CHTR","TTD","SHOP","NAS100","APP","BIIB","FUTU","PCAR","NVDA","FTNT","MSFT",
+"FAST","VRTX","US30","WDAY","CDNS","SPX","ORLY","ON","CSX","TSLA","AAPL","SBUX",
+"GLD","ADBE","PDD","LIN","BKR","GOOGL","HON","PYPL","INTU","ADSK","CMCSA","DASH",
+"ROST","GILD","KHC","CTAS","AEP","EA","DXCM","XEL","GEHC","BKNG","MDLZ","EXC",
+"WBD","MNST","LULU","TMUS","PEP","ADP","NFLX","ABNB","COST","CTSH","MELI","TTWO",
+"META","CSGP","CEG","AMZN","ISRG","CCEP","FANG"
 ]
-
 nifty200_yf = [f"{t}.NS" for t in nifty200_raw]
-
 
 def convert_us100_symbol(t):
     if t == "NAS100":
@@ -902,13 +754,10 @@ def convert_us100_symbol(t):
         return "^DJI"
     return t
 
-
 us100_yf = [convert_us100_symbol(t) for t in us100_raw] + ["^IXIC"]
-
 COMMODITIES = [("GC=F", "GOLD"), ("SI=F", "SILVER"), ("KC=F", "COFFEE"), ("CL=F", "CRUDE"), ("NG=F", "GAS"), ("^VIX", "VIX")]
 FOREX_PAIRS = [("EURUSD=X", "EUR/USD"), ("GBPUSD=X", "GBP/USD"), ("USDJPY=X", "USD/JPY"),
                ("AUDUSD=X", "AUD/USD"), ("USDCAD=X", "USD/CAD")]
-
 WATCHLIST_CATEGORIES = {
     "Commodities": COMMODITIES,
     "Forex": FOREX_PAIRS,
@@ -916,416 +765,744 @@ WATCHLIST_CATEGORIES = {
     "US100": list(zip(us100_yf, us100_raw + ["IXIC"])),
 }
 
+# Reverse lookup (display name -> Yahoo Finance symbol) so any ticker shown
+# in a scanner table, top-mover box, or EMA-cross result can be resolved
+# back to a tradable symbol when clicked.
 DISPLAY_TO_SYMBOL = {}
 for _cat_symbols in WATCHLIST_CATEGORIES.values():
     for _sym, _disp in _cat_symbols:
         DISPLAY_TO_SYMBOL[_disp] = _sym
 
+# Names of the three main sections, used by both the click-to-navigate
+# helper (go_to_chart) and the radio-based tab switcher in MAIN LAYOUT.
 VIEWS = ["📊 Charts", "🧭 7-Day Outlook", "🔎 Scanner"]
-
 TIMEFRAME_PERIODS = {
     "15m": "10d", "30m": "20d", "60m": "60d",
     "4h": "180d", "1d": "1y", "1wk": "5y",
 }
 
 # =====================================================================
-# SCREENER LOGIC (US100 + Nifty200 BUY ONLY)
+# CHARTING
 # =====================================================================
-
-
-def passes_quantfx_screener(df):
-    if df is None or df.empty or len(df) < 200:
-        return False
-
-    close = df["Close"]
-    high = df["High"]
-    low = df["Low"]
-    vol = df["Volume"]
-
-    ema9 = close.ewm(span=9, adjust=False).mean()
-    ema20 = close.ewm(span=20, adjust=False).mean()
-    sma200 = close.rolling(200).mean()
-
-    if not (ema9.iloc[-1] > ema20.iloc[-1] and ema9.iloc[-2] <= ema20.iloc[-2]):
-        return False
-
-    exp1 = close.ewm(span=12, adjust=False).mean()
-    exp2 = close.ewm(span=26, adjust=False).mean()
-    macd = exp1 - exp2
-    macd_signal = macd.ewm(span=9, adjust=False).mean()
-
-    if not (macd.iloc[-1] > macd_signal.iloc[-1] and macd.iloc[-2] <= macd_signal.iloc[-2]):
-        return False
-
-    delta = close.diff()
-    gain = delta.where(delta > 0, 0).rolling(14).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
-    rs = gain / loss.replace(0, np.nan)
-    rsi = 100 - (100 / (1 + rs))
-
-    if not (25 < rsi.iloc[-1] < 75):
-        return False
-
-    if not (close.iloc[-1] > high.shift(20).iloc[-1]):
-        return False
-
-    if not (close.iloc[-1] > ema9.iloc[-1] and close.iloc[-1] > ema20.iloc[-1] and close.iloc[-1] > sma200.iloc[-1]):
-        return False
-
-    if not (vol.iloc[-1] > vol.rolling(20).mean().iloc[-1]):
-        return False
-
-    if ((high.iloc[-1] - low.iloc[-1]) / close.iloc[-1]) * 100 >= 5:
-        return False
-
-    return True
-
-
-def run_us100_nifty200_screener():
-    results = []
-    watchlist = WATCHLIST_CATEGORIES["US100"] + WATCHLIST_CATEGORIES["Nifty200"]
-
-    for symbol, display in watchlist:
-        df = fetch_live_ohlc(symbol, period="6mo", interval="1d")
-        if df is None or df.empty:
-            continue
-
-        if passes_quantfx_screener(df):
-            last_price = format_price(df["Close"].iloc[-1])
-            results.append({
-                "display": display,
-                "symbol": symbol,
-                "price": last_price
-            })
-
-    return results
-
-# =====================================================================
-# CLICK-TO-CHART NAVIGATION + RIGHT-SIDE SCREENER BOXES
-# =====================================================================
-
-
-def go_to_chart(symbol):
-    st.session_state["selected_symbol"] = symbol
-    st.session_state["view"] = "📊 Charts"
-
-
-def render_screener_sidebar():
-    st.markdown("### 🔍 Screener Matches (US100 + Nifty200)")
-    st.markdown("<div style='margin-bottom:10px'></div>", unsafe_allow_html=True)
-
-    results = run_us100_nifty200_screener()
-
-    if not results:
-        st.markdown(
-            "<span style='color:#9FA8C3; font-size:12px;'>No matches found.</span>",
-            unsafe_allow_html=True
-        )
-        return
-
-    for item in results:
-        display = item["display"]
-        symbol = item["symbol"]
-        price = item["price"]
-
-        box_html = f"""
-        <div style="
-            padding:12px;
-            margin-bottom:10px;
-            border:1px solid #202635;
-            border-radius:6px;
-            background:#11151C;
-            cursor:pointer;
-        "
-        onclick="window.location.href='/?symbol={symbol}&view=📊 Charts'">
-
-            <div style="font-size:13px; font-weight:700; color:#E5E9F0;">
-                {display}
-            </div>
-
-            <div style="font-size:11px; color:#9FA8C3;">
-                Price: {price}
-            </div>
-        </div>
-        """
-
-        st.markdown(box_html, unsafe_allow_html=True)
-
-# =====================================================================
-# CHART FIGURE (EMA9/20 + Renko + HA + MACD + RSI)
-# =====================================================================
-
-
-def create_chart_figure(renko_df, ha_df, brick_size, display, ema_fast=9, ema_slow=20):
-    x = list(range(len(renko_df)))
-
+def create_chart_figure(renko_df, ha_df, brick_size, display, ema_fast, ema_slow):
+    x_renko = list(range(len(renko_df)))
+    x_ha = x_renko
     fig = make_subplots(
         rows=4, cols=1, shared_xaxes=True,
         row_heights=[0.33, 0.33, 0.165, 0.165],
         vertical_spacing=0.05,
         subplot_titles=(
-            f"{display} — Heikin Ashi (EMA9/20)",
-            f"{display} — ATR Renko (brick ≈ {format_price(brick_size)})",
-            "MACD",
-            "RSI",
+            f"{display} — Heikin Ashi (Green Buy / Red Sell Aligned with EMAs)",
+            f"{display} — ATR Renko & Aligned Buy/Sell Signal Buttons (brick ≈ {format_price(brick_size)})",
+            "TradingView MACD (Histogram, MACD Line & Signal Line)",
+            "RSI (Synchronized Green/Red Buy & Sell Zones)",
         ),
     )
-
+    
+    renko_trend_bull = (renko_df["EMA_FAST"] > renko_df["EMA_SLOW"]).values
+    
+    # --- Row 1: Heikin Ashi ---
     fig.add_trace(go.Candlestick(
-        x=x,
-        open=ha_df["Open"], high=ha_df["High"],
-        low=ha_df["Low"], close=ha_df["Close"],
-        increasing_line_color=COLOR_BULL,
-        decreasing_line_color=COLOR_BEAR,
-        increasing_fillcolor=COLOR_BULL,
-        decreasing_fillcolor=COLOR_BEAR,
-        name="Heikin Ashi",
-        showlegend=False
+        x=x_ha, open=ha_df["Open"], high=ha_df["High"], low=ha_df["Low"], close=ha_df["Close"],
+        increasing_line_color=COLOR_BULL, decreasing_line_color=COLOR_BEAR,
+        increasing_fillcolor=COLOR_BULL, decreasing_fillcolor=COLOR_BEAR,
+        name="Heikin Ashi", showlegend=False,
     ), row=1, col=1)
-
     fig.add_trace(go.Scatter(
-        x=x, y=ha_df["EMA_FAST"],
-        line=dict(color=COLOR_MA_FAST, width=1.5),
-        name=f"EMA {ema_fast}"
+        x=x_ha, y=ha_df["EMA_FAST"], line=dict(color=COLOR_MA_FAST, width=1.5),
+        name=f"HA EMA {ema_fast}",
     ), row=1, col=1)
-
     fig.add_trace(go.Scatter(
-        x=x, y=ha_df["EMA_SLOW"],
-        line=dict(color=COLOR_MA_SLOW, width=1.5),
-        name=f"EMA {ema_slow}"
+        x=x_ha, y=ha_df["EMA_SLOW"], line=dict(color=COLOR_MA_SLOW, width=1.5),
+        name=f"HA EMA {ema_slow}",
     ), row=1, col=1)
-
-    ha_buy = [i for i in x if ha_df["Signal"].iloc[i] == "BUY"]
-    ha_sell = [i for i in x if ha_df["Signal"].iloc[i] == "SELL"]
-
-    if ha_buy:
+    
+    ha_buy_x = [i for i in range(len(ha_df)) if ha_df["Signal"].iloc[i] == "BUY"]
+    ha_buy_y = [ha_df["Low"].iloc[i] * 0.995 for i in ha_buy_x]
+    ha_sell_x = [i for i in range(len(ha_df)) if ha_df["Signal"].iloc[i] == "SELL"]
+    ha_sell_y = [ha_df["High"].iloc[i] * 1.005 for i in ha_sell_x]
+    if ha_buy_x:
         fig.add_trace(go.Scatter(
-            x=ha_buy,
-            y=[ha_df["Low"].iloc[i] * 0.995 for i in ha_buy],
-            mode="markers",
-            marker=dict(color=COLOR_PB_BUY, size=10, symbol="circle"),
-            name="HA BUY"
+            x=ha_buy_x, y=ha_buy_y, mode="markers",
+            marker=dict(color=COLOR_PB_BUY, size=11, symbol="circle"),
+            name="HA Buy Dot",
+        ), row=1, col=1)
+    if ha_sell_x:
+        fig.add_trace(go.Scatter(
+            x=ha_sell_x, y=ha_sell_y, mode="markers",
+            marker=dict(color=COLOR_PB_SELL, size=11, symbol="circle"),
+            name="HA Sell Dot",
+        ), row=1, col=1)
+        
+    ha_buy_btn_y = [ha_df["Low"].iloc[i] - (brick_size * 0.30) for i in ha_buy_x]
+    ha_sell_btn_y = [ha_df["High"].iloc[i] + (brick_size * 0.30) for i in ha_sell_x]
+    if ha_buy_x:
+        fig.add_trace(go.Scatter(
+            x=ha_buy_x, y=ha_buy_btn_y, mode="markers+text",
+            marker=dict(color=COLOR_BULL, size=13, symbol="triangle-up"),
+            text=["BUY"] * len(ha_buy_x), textposition="bottom center",
+            textfont=dict(color=COLOR_BULL, size=10, family="Arial Black"),
+            name="HA BUY Button",
+        ), row=1, col=1)
+    if ha_sell_x:
+        fig.add_trace(go.Scatter(
+            x=ha_sell_x, y=ha_sell_btn_y, mode="markers+text",
+            marker=dict(color=COLOR_BEAR, size=13, symbol="triangle-down"),
+            text=["SELL"] * len(ha_sell_x), textposition="top center",
+            textfont=dict(color=COLOR_BEAR, size=10, family="Arial Black"),
+            name="HA SELL Button",
         ), row=1, col=1)
 
-    if ha_sell:
-        fig.add_trace(go.Scatter(
-            x=ha_sell,
-            y=[ha_df["High"].iloc[i] * 1.005 for i in ha_sell],
-            mode="markers",
-            marker=dict(color=COLOR_PB_SELL, size=10, symbol="circle"),
-            name="HA SELL"
-        ), row=1, col=1)
-
+    # --- Row 2: ATR Renko ---
     fig.add_trace(go.Candlestick(
-        x=x,
-        open=renko_df["Open"], high=renko_df["High"],
-        low=renko_df["Low"], close=renko_df["Close"],
-        increasing_line_color=COLOR_BULL,
-        decreasing_line_color=COLOR_BEAR,
-        increasing_fillcolor=COLOR_BULL,
-        decreasing_fillcolor=COLOR_BEAR,
-        name="Renko",
-        showlegend=False
+        x=x_renko, open=renko_df["Open"], high=renko_df["High"], low=renko_df["Low"], close=renko_df["Close"],
+        increasing_line_color=COLOR_BULL, decreasing_line_color=COLOR_BEAR,
+        increasing_fillcolor=COLOR_BULL, decreasing_fillcolor=COLOR_BEAR,
+        name="ATR Renko", showlegend=False,
     ), row=2, col=1)
-
     fig.add_trace(go.Scatter(
-        x=x, y=renko_df["EMA_FAST"],
-        line=dict(color=COLOR_MA_FAST, width=1.5),
-        name=f"EMA {ema_fast}"
+        x=x_renko, y=renko_df["EMA_FAST"], line=dict(color=COLOR_MA_FAST, width=1.5),
+        name=f"EMA {ema_fast}",
     ), row=2, col=1)
-
     fig.add_trace(go.Scatter(
-        x=x, y=renko_df["EMA_SLOW"],
-        line=dict(color=COLOR_MA_SLOW, width=1.5),
-        name=f"EMA {ema_slow}"
+        x=x_renko, y=renko_df["EMA_SLOW"], line=dict(color=COLOR_MA_SLOW, width=1.5),
+        name=f"EMA {ema_slow}",
     ), row=2, col=1)
-
-    renko_buy = [i for i in x if renko_df["Confirmed_Signal"].iloc[i] == "BUY"]
-    renko_sell = [i for i in x if renko_df["Confirmed_Signal"].iloc[i] == "SELL"]
-
-    if renko_buy:
+    
+    renko_buy_x = [i for i in range(len(renko_df)) if renko_df["Confirmed_Signal"].iloc[i] == "BUY"]
+    renko_buy_y = [renko_df["Low"].iloc[i] - (brick_size * 0.30) for i in renko_buy_x]
+    renko_sell_x = [i for i in range(len(renko_df)) if renko_df["Confirmed_Signal"].iloc[i] == "SELL"]
+    renko_sell_y = [renko_df["High"].iloc[i] + (brick_size * 0.30) for i in renko_sell_x]
+    if renko_buy_x:
         fig.add_trace(go.Scatter(
-            x=renko_buy,
-            y=[renko_df["Low"].iloc[i] - brick_size * 0.3 for i in renko_buy],
-            mode="markers",
-            marker=dict(color=COLOR_PB_BUY, size=12, symbol="triangle-up"),
-            name="Renko BUY"
+            x=renko_buy_x, y=renko_buy_y, mode="markers+text",
+            marker=dict(color=COLOR_BULL, size=14, symbol="triangle-up"),
+            text=["BUY"] * len(renko_buy_x), textposition="bottom center",
+            textfont=dict(color=COLOR_BULL, size=10, family="Arial Black"),
+            name="Renko BUY Button",
+        ), row=2, col=1)
+    if renko_sell_x:
+        fig.add_trace(go.Scatter(
+            x=renko_sell_x, y=renko_sell_y, mode="markers+text",
+            marker=dict(color=COLOR_BEAR, size=14, symbol="triangle-down"),
+            text=["SELL"] * len(renko_sell_x), textposition="top center",
+            textfont=dict(color=COLOR_BEAR, size=10, family="Arial Black"),
+            name="Renko SELL Button",
         ), row=2, col=1)
 
-    if renko_sell:
-        fig.add_trace(go.Scatter(
-            x=renko_sell,
-            y=[renko_df["High"].iloc[i] + brick_size * 0.3 for i in renko_sell],
-            mode="markers",
-            marker=dict(color=COLOR_PB_SELL, size=12, symbol="triangle-down"),
-            name="Renko SELL"
-        ), row=2, col=1)
+    struct_style = {
+        "BOS_DEMAND": (COLOR_BOS_DEMAND, "B-S"),
+        "BOS_SUPPLY": (COLOR_BOS_SUPPLY, "B-D"),
+        "CHOCH_DEMAND": (COLOR_CHOCH_DEMAND, "CH-S"),
+        "CHOCH_SUPPLY": (COLOR_CHOCH_SUPPLY, "CH-D"),
+    }
+    last_struct_event = latest_structure_event(renko_df, lookback=len(renko_df))
+    if last_struct_event is not None:
+        s_type = last_struct_event["type"]
+        if s_type in struct_style:
+            color, label = struct_style[s_type]
+            s_level = last_struct_event["level"]
+            i = len(renko_df) - 1 - last_struct_event["bars_ago"]
+            origin_idx = renko_df["StructureOriginIdx"].iloc[i]
+            span_start = int(origin_idx) if pd.notna(origin_idx) else max(i - 6, 0)
+            fig.add_shape(
+                type="line", x0=span_start, x1=len(renko_df) - 1, y0=s_level, y1=s_level,
+                line=dict(color=color, width=1.5, dash="dash"), opacity=0.6,
+                row=2, col=1,
+            )
+            fig.add_annotation(
+                x=i, y=s_level, text=label, showarrow=False,
+                font=dict(color="#FFFFFF", size=10), bgcolor="#1E222D",
+                bordercolor=color, borderwidth=1, row=2, col=1,
+                yshift=14 if s_type in ("BOS_DEMAND", "CHOCH_DEMAND") else -14,
+            )
 
+    # --- Row 3: MACD ---
+    hist_vals = renko_df["MACD_Hist"].values
+    hist_colors = [COLOR_BULL if val >= 0 else COLOR_BEAR for val in hist_vals]
+    
     fig.add_trace(go.Bar(
-        x=x,
-        y=renko_df["MACD_Hist"],
-        marker_color=COLOR_MACD_LINE,
-        name="MACD Hist"
+        x=x_renko, y=hist_vals, marker_color=hist_colors, name="MACD Histogram", opacity=0.8,
     ), row=3, col=1)
-
     fig.add_trace(go.Scatter(
-        x=x, y=renko_df["MACD"],
-        line=dict(color=COLOR_MACD_LINE, width=1.5),
-        name="MACD"
+        x=x_renko, y=renko_df["MACD"], line=dict(color=COLOR_MACD_LINE, width=1.8), name="MACD Line",
     ), row=3, col=1)
-
     fig.add_trace(go.Scatter(
-        x=x, y=renko_df["MACD_Signal"],
-        line=dict(color=COLOR_SIGNAL_LINE, width=1.5),
-        name="Signal"
+        x=x_renko, y=renko_df["MACD_Signal"], line=dict(color=COLOR_SIGNAL_LINE, width=1.8), name="Signal Line",
     ), row=3, col=1)
+    fig.add_hline(y=0, line=dict(color=COLOR_ZERO_LINE, width=1), row=3, col=1)
+    
+    macd_buy_x = [i for i in range(len(renko_df)) if renko_df["Div_Signal"].iloc[i] == "BUY"]
+    macd_buy_y = [renko_df["MACD"].iloc[i] - abs(renko_df["MACD_Hist"]).max() * 0.15 for i in macd_buy_x]
+    macd_sell_x = [i for i in range(len(renko_df)) if renko_df["Div_Signal"].iloc[i] == "SELL"]
+    macd_sell_y = [renko_df["MACD"].iloc[i] + abs(renko_df["MACD_Hist"]).max() * 0.15 for i in macd_sell_x]
+    if macd_buy_x:
+        fig.add_trace(go.Scatter(
+            x=macd_buy_x, y=macd_buy_y, mode="markers+text",
+            marker=dict(color=COLOR_BULL, size=11, symbol="triangle-up"),
+            text=["BUY"] * len(macd_buy_x), textposition="bottom center",
+            textfont=dict(color=COLOR_BULL, size=10, family="Arial Black"),
+            name="MACD BUY Button",
+        ), row=3, col=1)
+    if macd_sell_x:
+        fig.add_trace(go.Scatter(
+            x=macd_sell_x, y=macd_sell_y, mode="markers+text",
+            marker=dict(color=COLOR_BEAR, size=11, symbol="triangle-down"),
+            text=["SELL"] * len(macd_sell_x), textposition="top center",
+            textfont=dict(color=COLOR_BEAR, size=10, family="Arial Black"),
+            name="MACD SELL Button",
+        ), row=3, col=1)
 
+    # --- Row 4: RSI ---
+    rsi_vals = renko_df["RSI"].values
+    rsi_bull_y = np.where(renko_trend_bull, rsi_vals, np.nan)
+    rsi_bear_y = np.where(~renko_trend_bull, rsi_vals, np.nan)
     fig.add_trace(go.Scatter(
-        x=x, y=renko_df["RSI"],
-        line=dict(color=COLOR_GREEN, width=1.5),
-        name="RSI"
+        x=x_renko, y=rsi_bull_y, line=dict(color=COLOR_BULL, width=2.0), name="RSI Buy (Green)",
     ), row=4, col=1)
+    fig.add_trace(go.Scatter(
+        x=x_renko, y=rsi_bear_y, line=dict(color=COLOR_BEAR, width=2.0), name="RSI Sell (Red)",
+    ), row=4, col=1)
+    fig.add_hline(y=70, line=dict(color=COLOR_RED, width=1, dash="dash"), row=4, col=1)
+    fig.add_hline(y=30, line=dict(color=COLOR_GREEN, width=1, dash="dash"), row=4, col=1)
+    fig.update_yaxes(range=[0, 100], row=4, col=1)
 
     fig.update_layout(
-        height=900,
-        showlegend=False,
-        margin=dict(l=40, r=40, t=40, b=40),
+        height=950,
         paper_bgcolor=COLOR_BG_DARK,
         plot_bgcolor=COLOR_BG_DARK,
+        font=dict(color=COLOR_TEXT_MUTED, size=10),
+        legend=dict(orientation="h", y=1.02, x=0, bgcolor="rgba(0,0,0,0)", font=dict(size=10)),
+        margin=dict(l=10, r=10, t=50, b=10),
+        xaxis_rangeslider_visible=False,
+        xaxis2_rangeslider_visible=False,
     )
+
+    for r in range(1, 5):
+        fig.update_xaxes(showgrid=False, row=r, col=1, matches="x", tickfont=dict(size=10))
+        # Format y-axes to display full price without scientific truncation
+        fig.update_yaxes(gridcolor="#2A2F3A", side="right", row=r, col=1, tickformat="f", hoverformat="f", tickfont=dict(size=10))
+
+    def _padded_range(value_lists, pad_frac=0.12):
+        chunks = []
+        for vals in value_lists:
+            if vals is None or len(vals) == 0:
+                continue
+            arr = np.asarray(vals, dtype=float)
+            arr = arr[~np.isnan(arr)]
+            if arr.size:
+                chunks.append(arr)
+        if not chunks:
+            return None
+        combined = np.concatenate(chunks)
+        lo, hi = float(combined.min()), float(combined.max())
+        span = hi - lo
+        if span == 0:
+            span = abs(hi) if hi != 0 else 1.0
+        pad = span * pad_frac
+        return [lo - pad, hi + pad]
+
+    row1_range = _padded_range([
+        ha_df["High"].values, ha_df["Low"].values,
+        ha_df["EMA_FAST"].values, ha_df["EMA_SLOW"].values,
+        ha_buy_y, ha_sell_y, ha_buy_btn_y, ha_sell_btn_y,
+    ])
+    if row1_range:
+        fig.update_yaxes(range=row1_range, row=1, col=1)
+
+    row2_extra = [renko_buy_y, renko_sell_y]
+    if last_struct_event is not None:
+        row2_extra.append([last_struct_event["level"]])
+    row2_range = _padded_range([
+        renko_df["High"].values, renko_df["Low"].values,
+        renko_df["EMA_FAST"].values, renko_df["EMA_SLOW"].values,
+    ] + row2_extra)
+    if row2_range:
+        fig.update_yaxes(range=row2_range, row=2, col=1)
+
+    row3_range = _padded_range([
+        hist_vals, renko_df["MACD"].values, renko_df["MACD_Signal"].values,
+        macd_buy_y, macd_sell_y,
+    ])
+    if row3_range:
+        fig.update_yaxes(range=row3_range, row=3, col=1)
 
     return fig
 
 # =====================================================================
-# MAIN VIEWS
+# CLICK-TO-OPEN-CHART NAVIGATION
 # =====================================================================
-
-
-def render_chart_view():
-    symbol = st.session_state.get("selected_symbol", "GC=F")
-    display = symbol
-
-    df = fetch_live_ohlc(symbol, period="6mo", interval="1d")
-    if df.empty:
-        st.error("No data available.")
-        return
-
-    ha_df = compute_heikin_ashi(df, ema_fast=9, ema_slow=20)
-    renko_df, brick_size = build_atr_renko_df(df, ema_fast=9, ema_slow=20)
-
-    fig = create_chart_figure(renko_df, ha_df, brick_size, display)
-    st.plotly_chart(fig, use_container_width=True)
-
-
-def render_outlook_view():
-    symbol = st.session_state.get("selected_symbol", "GC=F")
-    display = symbol
-
-    outlook = compute_7day_outlook(symbol, display)
-    if not outlook:
-        st.error("Outlook unavailable.")
-        return
-
-    st.markdown(f"### 🧭 7-Day Outlook — {display}")
-    st.markdown(f"**Trend:** {outlook['direction']}")
-    st.markdown(f"**Bias Score:** {outlook['bias_score']:.2f}")
-    st.markdown(f"**Expected Range:** {format_price(outlook['range_low'])} — {format_price(outlook['range_high'])}")
-
-    st.markdown("#### Reasons:")
-    for r in outlook["reasons"]:
-        st.markdown(f"- {r}")
-
-
-def render_screener_view():
-    st.markdown("### 🔍 Screener — US100 + Nifty200")
-    results = run_us100_nifty200_screener()
-
-    if not results:
-        st.info("No screener matches.")
-        return
-
-    for item in results:
-        if st.button(f"{item['display']} — {item['price']}"):
-            go_to_chart(item["symbol"])
-            st.experimental_rerun()
-
-
-def render_main_layout():
-    view = st.session_state.get("view", "📊 Charts")
-
-    col_left, col_right = st.columns([0.75, 0.25])
-
-    with col_left:
-        if view == "📊 Charts":
-            render_chart_view()
-        elif view == "🧭 7-Day Outlook":
-            render_outlook_view()
-        elif view == "🔎 Scanner":
-            render_screener_view()
-
-    with col_right:
-        render_screener_sidebar()
+def go_to_chart(symbol, display):
+    """Point the Charts view at a new symbol and jump to it. This must be
+    used as a widget `on_click` callback (not called from inside a plain
+    `if st.button(...):` block) — callbacks run *before* the script reruns,
+    so it's safe to set session_state here even though `active_view` is
+    bound to the st.radio widget further down the script. Setting it after
+    that radio has already been instantiated in the same run raises
+    StreamlitWidgetAlreadyInstantiatedError."""
+    st.session_state.chart_symbol = symbol
+    st.session_state.chart_display = display
+    st.session_state.active_view = VIEWS[0]
 
 # =====================================================================
-# SIDEBAR NAVIGATION
+# ZOOMABLE / MOUSE-RESIZABLE CHART RENDERER
 # =====================================================================
+def render_zoomable_chart(fig, key, height=950):
+    """Render a Plotly figure inside a mouse-resizable container.
+    - Mouse scroll wheel zooms in/out (Plotly scrollZoom).
+    - Click-drag box-zooms; double-click resets zoom.
+    - Dragging the bottom-right corner of the chart box resizes it; the
+      figure re-renders to fit so full price labels stay readable.
+    """
+    fig_json = fig.to_json()
+    div_id = f"qfx_chart_{key}"
+    html = f"""
+    <div id="{div_id}_wrapper" style="
+        resize: both; overflow: auto; width: 100%; height: {height}px;
+        min-width: 320px; min-height: 400px; max-width: 100%;
+        border: 1px solid {COLOR_BORDER}; border-radius: 6px;
+        background-color: {COLOR_BG_DARK}; padding: 4px; box-sizing: border-box;">
+      <div id="{div_id}" style="width: 100%; height: 100%;"></div>
+    </div>
+    <div style="font-size:10px;color:{COLOR_TEXT_MUTED};margin-top:4px;">
+      🖱️ Scroll to zoom in/out • Drag on the chart to box-zoom (double-click to reset) •
+      Drag the ↘ corner of the chart box to resize it
+    </div>
+    <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
+    <script>
+      (function() {{
+        var figSpec = {fig_json};
+        var config = {{scrollZoom: true, displaylogo: false, responsive: false}};
+        var el = document.getElementById("{div_id}");
+        Plotly.newPlot(el, figSpec.data, figSpec.layout, config);
+        var wrapper = document.getElementById("{div_id}_wrapper");
+        if (window.ResizeObserver) {{
+          var ro = new ResizeObserver(function() {{
+            Plotly.Plots.resize(el);
+          }});
+          ro.observe(wrapper);
+        }}
+      }})();
+    </script>
+    """
+    components.html(html, height=height + 70, scrolling=True)
 
-
-def render_sidebar():
-    st.sidebar.title("QuantFX Terminal")
-
-    if "selected_symbol" not in st.session_state:
-        st.session_state["selected_symbol"] = "GC=F"
-
-    if "view" not in st.session_state:
-        st.session_state["view"] = "📊 Charts"
-
-    st.sidebar.subheader("Select Market")
-
-    categories = list(WATCHLIST_CATEGORIES.keys())
-    selected_category = st.sidebar.selectbox("Category", categories)
-
-    symbols = WATCHLIST_CATEGORIES[selected_category]
-    display_names = [disp for _, disp in symbols]
-
-    selected_display = st.sidebar.selectbox("Symbol", display_names)
-    selected_symbol = DISPLAY_TO_SYMBOL[selected_display]
-
-    if st.sidebar.button("Load Chart"):
-        st.session_state["selected_symbol"] = selected_symbol
-        st.session_state["view"] = "📊 Charts"
-
-    st.sidebar.subheader("Navigation")
-    nav_choice = st.sidebar.radio(
-        "Go to",
-        ["📊 Charts", "🧭 7-Day Outlook", "🔎 Scanner"],
-        index=["📊 Charts", "🧭 7-Day Outlook", "🔎 Scanner"].index(st.session_state["view"])
+# =====================================================================
+# TOP-MOVER QUICK-GLANCE BOXES (FONT SIZE 11)
+# =====================================================================
+def render_top_box(title, movers, mode="single"):
+    if not movers:
+        body = f"<div style='font-size:11px;color:{COLOR_TEXT_MUTED};'>No data</div>"
+    elif mode == "single":
+        best = movers[0]
+        color = COLOR_GREEN if best["chg"] >= 0 else COLOR_RED
+        arrow = "▲" if best["chg"] >= 0 else "▼"
+        price_str = f"${format_price(best['price'])}"
+        body = (
+            f"<div style='font-size:11px;font-weight:700;color:{COLOR_TEXT_MAIN};'>{best['display']}</div>"
+            f"<div style='font-size:11px;color:{COLOR_TEXT_MUTED};'>{price_str}</div>"
+            f"<div style='font-size:11px;color:{color};'>{arrow} {best['chg']:+.2f}%</div>"
+        )
+    else:
+        rows_html = []
+        for idx, m in enumerate(movers, start=1):
+            color = COLOR_GREEN if m["chg"] >= 0 else COLOR_RED
+            arrow = "▲" if m["chg"] >= 0 else "▼"
+            rows_html.append(
+                "<div style='font-size:11px;display:flex;justify-content:space-between;"
+                f"gap:10px;color:{COLOR_TEXT_MAIN};padding:2px 0;'>"
+                f"<span>{idx}. {m['display']}</span>"
+                f"<span style='color:{color};white-space:nowrap;'>{arrow} {m['chg']:+.2f}%</span>"
+                f"</div>"
+            )
+        body = "".join(rows_html)
+    return (
+        f"<div style='background-color:{COLOR_PANEL_BG};border:1px solid {COLOR_BORDER};"
+        f"border-radius:6px;padding:10px 14px;margin-bottom:12px;'>"
+        f"<div style='font-size:11px;color:{COLOR_TEXT_MUTED};margin-bottom:6px;font-weight:600;'>{title}</div>"
+        f"{body}</div>"
     )
 
-    st.session_state["view"] = nav_choice
+# =====================================================================
+# SIDEBAR CONTROLS
+# =====================================================================
+st.sidebar.markdown("## 📈 QuantFX Terminal")
+st.sidebar.caption("ATR Renko • Heikin Ashi • Pullback Signals")
+symbol_mode = st.sidebar.radio("Symbol source", ["Presets", "Custom"], horizontal=True)
+if symbol_mode == "Presets":
+    preset_cat = st.sidebar.selectbox("Category", list(WATCHLIST_CATEGORIES.keys()))
+    options = WATCHLIST_CATEGORIES[preset_cat]
+    choice = st.sidebar.selectbox("Symbol", options, format_func=lambda t: t[1])
+    current_symbol, current_display = choice
+else:
+    current_symbol = st.sidebar.text_input("Yahoo Finance symbol", value="GC=F")
+    current_display = st.sidebar.text_input("Display name", value=current_symbol)
+interval = st.sidebar.select_slider(
+    "Timeframe", options=list(TIMEFRAME_PERIODS.keys()), value="1d"
+)
+period = TIMEFRAME_PERIODS[interval]
+st.sidebar.markdown("---")
+c1, c2 = st.sidebar.columns(2)
+ema_fast = c1.number_input("EMA Fast", min_value=1, max_value=200, value=21)
+ema_slow = c2.number_input("EMA Slow", min_value=1, max_value=200, value=50)
+c3, c4 = st.sidebar.columns(2)
+atr_period = c3.number_input("ATR Period", min_value=2, max_value=100, value=21)
+atr_multiplier = c4.number_input("ATR Mult.", min_value=0.1, max_value=10.0, value=3.0, step=0.1)
+st.sidebar.markdown("---")
+with st.sidebar.expander("Telegram alerts"):
+    if "tg_token" not in st.session_state or "tg_chat" not in st.session_state:
+        saved_token, saved_chat = load_telegram_config()
+        st.session_state["tg_token"] = saved_token
+        st.session_state["tg_chat"] = saved_chat
+    tg_token = st.text_input("Bot Token", value=st.session_state.get("tg_token", ""), type="password")
+    tg_chat = st.text_input("Chat ID", value=st.session_state.get("tg_chat", ""))
+    st.session_state["tg_token"] = tg_token
+    st.session_state["tg_chat"] = tg_chat
+    tcol1, tcol2 = st.columns(2)
+    if tcol1.button("💾 Save login", use_container_width=True):
+        ok, msg = save_telegram_config(tg_token, tg_chat)
+        st.success("Telegram login saved.") if ok else st.error(f"Could not save: {msg}")
+    if tcol2.button("Send test alert", use_container_width=True):
+        ok, msg = send_telegram_alert(
+            "🟢 *QuantFX Terminal Test Alert*\nConnection successfully established!", tg_token, tg_chat
+        )
+        st.success(msg) if ok else st.error(msg)
+if st.sidebar.button("🔄 Refresh data", use_container_width=True):
+    st.cache_data.clear()
+    st.rerun()
 
-    st.sidebar.subheader("Telegram Alerts")
-    tg_token, tg_chat = load_telegram_config()
+# =====================================================================
+# CHART-SYMBOL STATE — lets a click on a scanner row / top-mover box
+# override the chart without fighting the sidebar picker
+# =====================================================================
+if "chart_symbol" not in st.session_state:
+    st.session_state.chart_symbol = current_symbol
+    st.session_state.chart_display = current_display
+    st.session_state._prev_sidebar_symbol = current_symbol
+elif current_symbol != st.session_state._prev_sidebar_symbol:
+    # The sidebar picker itself changed this run — that always wins.
+    st.session_state.chart_symbol = current_symbol
+    st.session_state.chart_display = current_display
+    st.session_state._prev_sidebar_symbol = current_symbol
+chart_symbol = st.session_state.chart_symbol
+chart_display = st.session_state.chart_display
 
-    new_token = st.sidebar.text_input("Bot Token", tg_token)
-    new_chat = st.sidebar.text_input("Chat ID", tg_chat)
+# =====================================================================
+# AUTOMATED MULTI-MARKET TELEGRAM SCANNER & DISPATCHER
+# =====================================================================
+st.sidebar.markdown("---")
+st.sidebar.markdown("### 🔔 Automated Triggers")
+if st.sidebar.button("🚀 Run Rule-Based Telegram Scan", use_container_width=True):
+    triggered_messages = []
 
-    if st.sidebar.button("Save Telegram Settings"):
-        ok, msg = save_telegram_config(new_token, new_chat)
+    # --- Commodities & Forex: structure events (BOS/CHoCH) ---
+    fx_comm_watchlist = [("Commodities", COMMODITIES), ("Forex", FOREX_PAIRS)]
+    for cat_name, symbols in fx_comm_watchlist:
+        for sym, disp in symbols:
+            try:
+                df = fetch_live_ohlc(sym, period="10d", interval="30m")
+                if not df.empty:
+                    renko_df, _ = build_atr_renko_df(df, atr_period=int(atr_period), atr_multiplier=float(atr_multiplier))
+                    ev = latest_structure_event(renko_df, lookback=3)
+                    if ev and ev["type"] in ["CHOCH_DEMAND", "CHOCH_SUPPLY", "BOS_DEMAND", "BOS_SUPPLY"]:
+                        if ev["bars_ago"] <= 1:
+                            triggered_messages.append(f"🚨 *[30m FX/Comm]* *{disp}* triggered *{ev['label']}* at `${format_price(ev['level'])}`")
+            except Exception:
+                continue
+
+    # --- Commodities & Forex: EMA fast/slow cross, BOTH directions (buy & sell) ---
+    for cat_name, symbols in fx_comm_watchlist:
+        for sym, disp in symbols:
+            try:
+                df = fetch_live_ohlc(sym, period="10d", interval="30m")
+                if df.empty:
+                    continue
+                cross = detect_ema_cross_signal(df["Close"], fast=int(ema_fast), slow=int(ema_slow), lookback=1)
+                if cross:
+                    arrow = "🟢 BUY" if cross["direction"] == "BUY" else "🔴 SELL"
+                    triggered_messages.append(
+                        f"🚨 *[{cat_name} • EMA{int(ema_fast)}/{int(ema_slow)} Cross]* *{disp}* {arrow} "
+                        f"(EMA{int(ema_fast)} `${format_price(cross['fast'])}` vs EMA{int(ema_slow)} `${format_price(cross['slow'])}`)"
+                    )
+            except Exception:
+                continue
+
+    # --- US100 & Nifty200: fixed EMA 9 / EMA 20 cross, BOTH directions ---
+    idx_watchlist = [
+        ("US100", list(zip(us100_yf, us100_raw + ["IXIC"]))),
+        ("Nifty200", list(zip(nifty200_yf, nifty200_raw))),
+    ]
+    for cat_name, symbols in idx_watchlist:
+        for sym, disp in symbols:
+            try:
+                df = fetch_live_ohlc(sym, period="1mo", interval="1d")
+                if df.empty:
+                    continue
+                cross = detect_ema_cross_signal(df["Close"], fast=9, slow=20, lookback=1)
+                if cross:
+                    arrow = "🟢 BUY" if cross["direction"] == "BUY" else "🔴 SELL"
+                    triggered_messages.append(
+                        f"🚨 *[{cat_name} • EMA9/20 Cross]* *{disp}* {arrow} "
+                        f"(EMA9 `${format_price(cross['fast'])}` vs EMA20 `${format_price(cross['slow'])}`)"
+                    )
+            except Exception:
+                continue
+
+    if triggered_messages:
+        combined_msg = "📢 *QuantFX Automated Triggers*\n\n" + "\n".join(triggered_messages)
+        ok, m = send_telegram_alert(combined_msg, tg_token, tg_chat)
         if ok:
-            st.sidebar.success(msg)
+            st.sidebar.success(f"Dispatched {len(triggered_messages)} alert(s) via Telegram!")
         else:
-            st.sidebar.error(msg)
+            st.sidebar.error(f"Failed to send: {m}")
+    else:
+        st.sidebar.info("Scan completed: No new active triggers matching rules.")
 
 # =====================================================================
-# MAIN APP WRAPPER
+# MAIN LAYOUT
 # =====================================================================
+st.markdown(
+    f"<h2 style='color:#FFFFFF;margin-bottom:0;'>{chart_display} "
+    f"<span style='color:{COLOR_TEXT_MUTED};font-size:10px;'>({chart_symbol}) • {interval}</span></h2>",
+    unsafe_allow_html=True,
+)
+
+# Tab-like navigation driven by session_state so a click elsewhere (a
+# scanner row, an EMA-cross row, a top-mover box) can jump straight to the
+# Charts view instead of just being visible after the user manually
+# switches tabs — plain st.tabs() can't be changed from code.
+if "active_view" not in st.session_state:
+    st.session_state.active_view = VIEWS[0]
+active_view = st.radio(
+    "View", VIEWS, horizontal=True, label_visibility="collapsed", key="active_view"
+)
+
+# ---- Charts view --------------------------------------------------------
+if active_view == "📊 Charts":
+    with st.spinner(f"Fetching {chart_display}..."):
+        raw_df = fetch_live_ohlc(chart_symbol, period=period, interval=interval)
+    if raw_df.empty:
+        st.error(f"No data returned for {chart_display} ({chart_symbol}).")
+    else:
+        renko_df, brick_size = build_atr_renko_df(
+            raw_df, atr_period=atr_period, atr_multiplier=atr_multiplier,
+            ema_fast=ema_fast, ema_slow=ema_slow,
+        )
+        if renko_df.empty:
+            st.warning("Not enough data to build ATR Renko bricks for this timeframe — try a longer timeframe.")
+        else:
+            ha_df = compute_heikin_ashi(renko_df, ema_fast=ema_fast, ema_slow=ema_slow)
+            last_close = float(raw_df["Close"].iloc[-1])
+            prev_close = float(raw_df["Close"].iloc[-2]) if len(raw_df) > 1 else last_close
+            chg_pct = ((float(raw_df["Close"].iloc[-1]) - prev_close) / prev_close) * 100 if prev_close else 0.0
+            struct_event = latest_structure_event(renko_df, lookback=15)
+
+            # Fetch top movers for the side panel
+            with st.spinner("Scanning watchlists for top movers..."):
+                top_commodity = fetch_top_n_movers(tuple(COMMODITIES), n=1)
+                top_forex = fetch_top_n_movers(tuple(FOREX_PAIRS), n=1)
+                top_us100 = fetch_top_n_movers(tuple(zip(us100_yf, us100_raw + ["IXIC"])), n=5)
+                top_nifty200 = fetch_top_n_movers(tuple(zip(nifty200_yf, nifty200_raw)), n=5)
+
+            fig = create_chart_figure(renko_df, ha_df, brick_size, chart_display, ema_fast, ema_slow)
+
+            # Split layout into Main Chart (left) and Top Mover Cards (right)
+            chart_col, right_panel_col = st.columns([0.80, 0.20])
+
+            with chart_col:
+                render_zoomable_chart(fig, key=chart_symbol.replace("=", "_").replace("^", "idx"), height=950)
+
+                last_signal = renko_df["Signal"].iloc[-1]
+                last_pullback = renko_df["Pullback_Signal"].iloc[-1]
+                last_confirmed = renko_df["Confirmed_Signal"].iloc[-1]
+                badge_color = COLOR_GREEN if last_confirmed == "BUY" else (COLOR_RED if last_confirmed == "SELL" else COLOR_TEXT_MUTED)
+
+                st.markdown(
+                    f"Confirmed signal: <span class='qfx-badge' style='background:{badge_color}22;color:{badge_color};'>{last_confirmed}</span>"
+                    f"&nbsp;&nbsp;•&nbsp;&nbsp;EMA trend: <b>{last_signal}</b>"
+                    f"&nbsp;&nbsp;•&nbsp;&nbsp;Raw pullback: <b>{last_pullback}</b>",
+                    unsafe_allow_html=True,
+                )
+                if st.button("📨 Send current signal to Telegram"):
+                    msg = (
+                        f"*{chart_display}* ({chart_symbol})\n"
+                        f"Price: ${format_price(float(raw_df['Close'].iloc[-1]))}\n"
+                        f"Confirmed Signal: {last_confirmed}\n"
+                        f"EMA Signal: {last_signal}\n"
+                        f"Pullback Signal: {last_pullback}\n"
+                        f"Structure: {struct_event['label'] if struct_event else '—'}"
+                    )
+                    ok, m = send_telegram_alert(msg, tg_token, tg_chat)
+                    st.success(m) if ok else st.error(m)
+
+            with right_panel_col:
+                st.markdown(render_top_box("Top Commodity", top_commodity, mode="single"), unsafe_allow_html=True)
+                if top_commodity:
+                    m = top_commodity[0]
+                    st.button(
+                        f"📈 Open {m['display']}", key="open_top_commodity", use_container_width=True,
+                        on_click=go_to_chart, args=(m["symbol"], m["display"]),
+                    )
+
+                st.markdown(render_top_box("Top Forex", top_forex, mode="single"), unsafe_allow_html=True)
+                if top_forex:
+                    m = top_forex[0]
+                    st.button(
+                        f"📈 Open {m['display']}", key="open_top_forex", use_container_width=True,
+                        on_click=go_to_chart, args=(m["symbol"], m["display"]),
+                    )
+
+                st.markdown(render_top_box("Top 5 US100", top_us100, mode="lines"), unsafe_allow_html=True)
+                for m in top_us100:
+                    st.button(
+                        f"📈 {m['display']}", key=f"open_us100_{m['symbol']}", use_container_width=True,
+                        on_click=go_to_chart, args=(m["symbol"], m["display"]),
+                    )
+
+                st.markdown(render_top_box("Top 5 Nifty200", top_nifty200, mode="lines"), unsafe_allow_html=True)
+                for m in top_nifty200:
+                    st.button(
+                        f"📈 {m['display']}", key=f"open_nifty_{m['symbol']}", use_container_width=True,
+                        on_click=go_to_chart, args=(m["symbol"], m["display"]),
+                    )
 
 
-def main():
-    render_sidebar()
-    render_main_layout()
+# ---- 7-Day Outlook view --------------------------------------------------
+elif active_view == "🧭 7-Day Outlook":
+    with st.spinner("Computing 7-day outlook..."):
+        outlook = compute_7day_outlook(chart_symbol, chart_display, period="1y", interval="1d")
+    if outlook is None:
+        st.warning("Not enough history to compute an outlook for this symbol.")
+    else:
+        dir_color = COLOR_GREEN if outlook["direction"] == "Bullish" else (
+            COLOR_RED if outlook["direction"] == "Bearish" else COLOR_TEXT_MUTED
+        )
+        st.markdown(
+            f"<span class='qfx-badge' style='background:{dir_color}22;color:{dir_color};font-size:10px;'>"
+            f"{outlook['direction']}</span>",
+            unsafe_allow_html=True,
+        )
+        st.markdown(
+            f"Projected 7-day macro range: **${format_price(outlook['range_low'])} – ${format_price(outlook['range_high'])}** "
+            f"(last close: ${format_price(outlook['last_close'])})"
+        )
+        if outlook["structure_event"]:
+            se = outlook["structure_event"]
+            st.caption(f"Latest structure event: {se['label']} at ${format_price(se['level'])} ({se['bars_ago']} bricks ago)")
+        st.markdown("#### Reasoning")
+        for r in outlook["reasons"]:
+            st.markdown(f"- {r}")
 
+# ---- Scanner view ---------------------------------------------------------
+elif active_view == "🔎 Scanner":
+    st.caption("Runs the oracle score across a watchlist. Click any result to open it in the chart view.")
+    cats = st.multiselect("Watchlists to scan", list(WATCHLIST_CATEGORIES.keys()), default=["Commodities", "Forex"])
+    if st.button("▶️ Run scanner", type="primary"):
+        if not cats:
+            st.warning("Pick at least one watchlist.")
+        else:
+            results = []
+            for cat in cats:
+                for sym, disp in WATCHLIST_CATEGORIES[cat]:
+                    res = evaluate_oracle_score(sym, disp)
+                    if res:
+                        results.append(res)
+            df_res = pd.DataFrame(results)
+            st.session_state["scanner_results"] = df_res
+    df_res = st.session_state.get("scanner_results")
+    if df_res is not None and not df_res.empty:
+        display_cols = ["Ticker", "Price", "ChangePct", "Signal", "Structure", "Score", "SL", "TP1", "TP1_PCT", "TP2"]
+        def _row_style(row):
+            color = COLOR_GREEN if row["Signal"] == "BUY" else COLOR_RED
+            return [f"color: {color}" if col == "Signal" else "" for col in row.index]
+        st.dataframe(
+            df_res[display_cols].style.apply(_row_style, axis=1),
+            use_container_width=True, hide_index=True,
+        )
+        oc1, oc2 = st.columns([0.7, 0.3])
+        sel_ticker = oc1.selectbox(
+            "Open a result in the chart", df_res["Ticker"].tolist(), key="scanner_open_select"
+        )
+        sel_row = df_res[df_res["Ticker"] == sel_ticker].iloc[0]
+        oc2.button(
+            "📈 Open chart", key="scanner_open_btn", use_container_width=True,
+            on_click=go_to_chart, args=(sel_row["RawSymbol"], sel_row["Ticker"]),
+        )
+    elif df_res is not None:
+        st.info("No results — the data source may be rate-limiting or the symbols returned no data.")
 
-if __name__ == "__main__":
-    main()
+    st.markdown("---")
+    st.markdown("#### 📐 EMA Cross Scanner")
+    st.caption(
+        f"Commodities & Forex use the sidebar EMA settings (EMA {int(ema_fast)}/{int(ema_slow)}) "
+        "and flag a cross in **either direction** (buy or sell). US100 & Nifty200 always use a "
+        "fixed **EMA 9 / EMA 20** cross, regardless of the sidebar EMA settings."
+    )
+    if st.button("▶️ Run EMA cross scan", type="secondary"):
+        ema_rows = []
+
+        for cat_name, symbols in [("Commodities", COMMODITIES), ("Forex", FOREX_PAIRS)]:
+            for sym, disp in symbols:
+                try:
+                    df = fetch_live_ohlc(sym, period="10d", interval="30m")
+                    if df.empty:
+                        continue
+                    cross = detect_ema_cross_signal(df["Close"], fast=int(ema_fast), slow=int(ema_slow), lookback=1)
+                    if cross:
+                        ema_rows.append({
+                            "Category": cat_name,
+                            "Ticker": disp,
+                            "EMA Pair": f"{int(ema_fast)}/{int(ema_slow)}",
+                            "Direction": cross["direction"],
+                            "Fast EMA": f"${format_price(cross['fast'])}",
+                            "Slow EMA": f"${format_price(cross['slow'])}",
+                            "Bars Ago": cross["bars_ago"],
+                        })
+                except Exception:
+                    continue
+
+        for cat_name, symbols in [
+            ("US100", list(zip(us100_yf, us100_raw + ["IXIC"]))),
+            ("Nifty200", list(zip(nifty200_yf, nifty200_raw))),
+        ]:
+            for sym, disp in symbols:
+                try:
+                    df = fetch_live_ohlc(sym, period="1mo", interval="1d")
+                    if df.empty:
+                        continue
+                    cross = detect_ema_cross_signal(df["Close"], fast=9, slow=20, lookback=1)
+                    if cross:
+                        ema_rows.append({
+                            "Category": cat_name,
+                            "Ticker": disp,
+                            "EMA Pair": "9/20",
+                            "Direction": cross["direction"],
+                            "Fast EMA": f"${format_price(cross['fast'])}",
+                            "Slow EMA": f"${format_price(cross['slow'])}",
+                            "Bars Ago": cross["bars_ago"],
+                        })
+                except Exception:
+                    continue
+
+        st.session_state["ema_cross_results"] = pd.DataFrame(ema_rows)
+
+    ema_df = st.session_state.get("ema_cross_results")
+    if ema_df is not None and not ema_df.empty:
+        def _ema_row_style(row):
+            color = COLOR_GREEN if row["Direction"] == "BUY" else COLOR_RED
+            return [f"color: {color}" if col == "Direction" else "" for col in row.index]
+        st.dataframe(
+            ema_df.style.apply(_ema_row_style, axis=1),
+            use_container_width=True, hide_index=True,
+        )
+        oc3, oc4 = st.columns([0.7, 0.3])
+        sel_ema_ticker = oc3.selectbox(
+            "Open a result in the chart", ema_df["Ticker"].tolist(), key="ema_open_select"
+        )
+        sel_raw_sym = DISPLAY_TO_SYMBOL.get(sel_ema_ticker, sel_ema_ticker)
+        oc4.button(
+            "📈 Open chart", key="ema_open_btn", use_container_width=True,
+            on_click=go_to_chart, args=(sel_raw_sym, sel_ema_ticker),
+        )
+    elif ema_df is not None:
+        st.info("No EMA crosses detected right now for any watchlist symbol.")

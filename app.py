@@ -47,8 +47,6 @@ COLOR_BOS_DEMAND = "#26FF9A"
 COLOR_BOS_SUPPLY = "#FF4F7B"
 COLOR_CHOCH_DEMAND = "#00D4FF"
 COLOR_CHOCH_SUPPLY = "#FF9900"
-COLOR_PB_BUY = "#00FFAA"
-COLOR_PB_SELL = "#FF2255"
 
 # =====================================================================
 # GLOBAL DARK THEME CSS & BLINKING ANIMATION
@@ -78,23 +76,6 @@ st.markdown(
     .js-plotly-plot .plotly .ytick text,
     .js-plotly-plot .plotly .annotation text {{
         font-size: 10px !important;
-    }}
-    
-    /* Blinking & Pulsing Animation for Buy / Sell Signals & Dots */
-    @keyframes signalBlink {{
-        0% {{ opacity: 1; transform: scale(1); }}
-        50% {{ opacity: 0.15; transform: scale(1.18); }}
-        100% {{ opacity: 1; transform: scale(1); }}
-    }}
-    
-    .js-plotly-plot svg path[fill="{COLOR_PB_BUY}"],
-    .js-plotly-plot svg path[stroke="{COLOR_PB_BUY}"],
-    .js-plotly-plot svg text[fill="{COLOR_PB_BUY}"],
-    .js-plotly-plot svg path[fill="{COLOR_PB_SELL}"],
-    .js-plotly-plot svg path[stroke="{COLOR_PB_SELL}"],
-    .js-plotly-plot svg text[fill="{COLOR_PB_SELL}"] {{
-        animation: signalBlink 1.1s infinite ease-in-out;
-        transform-origin: center;
     }}
     </style>
     """,
@@ -891,8 +872,8 @@ def create_chart_figure(renko_df, ha_df, brick_size, display, ema_fast, ema_slow
         row_heights=[0.33, 0.33, 0.165, 0.165],
         vertical_spacing=0.05,
         subplot_titles=(
-            f"{display} — Heikin Ashi (Green Buy / Red Sell Aligned with EMAs)",
-            f"{display} — ATR Renko & Aligned Buy/Sell Signal Buttons (brick ≈ {format_price(brick_size)})",
+            f"{display} — Heikin Ashi",
+            f"{display} — ATR Renko (brick ≈ {format_price(brick_size)})",
             "TradingView MACD (Histogram, MACD Line & Signal Line)",
             "RSI (Synchronized Green/Red Buy & Sell Zones)",
         ),
@@ -916,41 +897,8 @@ def create_chart_figure(renko_df, ha_df, brick_size, display, ema_fast, ema_slow
         name=f"HA EMA {ema_slow}",
     ), row=1, col=1)
     
-    ha_buy_x = [i for i in range(len(ha_df)) if ha_df["Signal"].iloc[i] == "BUY"]
-    ha_buy_y = [ha_df["Low"].iloc[i] * 0.995 for i in ha_buy_x]
-    ha_sell_x = [i for i in range(len(ha_df)) if ha_df["Signal"].iloc[i] == "SELL"]
-    ha_sell_y = [ha_df["High"].iloc[i] * 1.005 for i in ha_sell_x]
-    if ha_buy_x:
-        fig.add_trace(go.Scatter(
-            x=ha_buy_x, y=ha_buy_y, mode="markers",
-            marker=dict(color=COLOR_PB_BUY, size=11, symbol="circle"),
-            name="HA Buy Dot",
-        ), row=1, col=1)
-    if ha_sell_x:
-        fig.add_trace(go.Scatter(
-            x=ha_sell_x, y=ha_sell_y, mode="markers",
-            marker=dict(color=COLOR_PB_SELL, size=11, symbol="circle"),
-            name="HA Sell Dot",
-        ), row=1, col=1)
-        
-    ha_buy_btn_y = [ha_df["Low"].iloc[i] - (brick_size * 0.30) for i in ha_buy_x]
-    ha_sell_btn_y = [ha_df["High"].iloc[i] + (brick_size * 0.30) for i in ha_sell_x]
-    if ha_buy_x:
-        fig.add_trace(go.Scatter(
-            x=ha_buy_x, y=ha_buy_btn_y, mode="markers+text",
-            marker=dict(color=COLOR_BULL, size=13, symbol="triangle-up"),
-            text=["BUY"] * len(ha_buy_x), textposition="bottom center",
-            textfont=dict(color=COLOR_BULL, size=10, family="Arial Black"),
-            name="HA BUY Button",
-        ), row=1, col=1)
-    if ha_sell_x:
-        fig.add_trace(go.Scatter(
-            x=ha_sell_x, y=ha_sell_btn_y, mode="markers+text",
-            marker=dict(color=COLOR_BEAR, size=13, symbol="triangle-down"),
-            text=["SELL"] * len(ha_sell_x), textposition="top center",
-            textfont=dict(color=COLOR_BEAR, size=10, family="Arial Black"),
-            name="HA SELL Button",
-        ), row=1, col=1)
+    # (Buy/Sell signal dots and triangle "buttons" on the Heikin Ashi panel
+    # have been removed — only the candles and EMAs are plotted here now.)
 
     # --- Row 2: ATR Renko ---
     fig.add_trace(go.Candlestick(
@@ -967,27 +915,8 @@ def create_chart_figure(renko_df, ha_df, brick_size, display, ema_fast, ema_slow
         x=x_renko, y=renko_df["EMA_SLOW"], line=dict(color=COLOR_MA_SLOW, width=1.5),
         name=f"EMA {ema_slow}",
     ), row=2, col=1)
-    
-    renko_buy_x = [i for i in range(len(renko_df)) if renko_df["Confirmed_Signal"].iloc[i] == "BUY"]
-    renko_buy_y = [renko_df["Low"].iloc[i] - (brick_size * 0.30) for i in renko_buy_x]
-    renko_sell_x = [i for i in range(len(renko_df)) if renko_df["Confirmed_Signal"].iloc[i] == "SELL"]
-    renko_sell_y = [renko_df["High"].iloc[i] + (brick_size * 0.30) for i in renko_sell_x]
-    if renko_buy_x:
-        fig.add_trace(go.Scatter(
-            x=renko_buy_x, y=renko_buy_y, mode="markers+text",
-            marker=dict(color=COLOR_BULL, size=14, symbol="triangle-up"),
-            text=["BUY"] * len(renko_buy_x), textposition="bottom center",
-            textfont=dict(color=COLOR_BULL, size=10, family="Arial Black"),
-            name="Renko BUY Button",
-        ), row=2, col=1)
-    if renko_sell_x:
-        fig.add_trace(go.Scatter(
-            x=renko_sell_x, y=renko_sell_y, mode="markers+text",
-            marker=dict(color=COLOR_BEAR, size=14, symbol="triangle-down"),
-            text=["SELL"] * len(renko_sell_x), textposition="top center",
-            textfont=dict(color=COLOR_BEAR, size=10, family="Arial Black"),
-            name="Renko SELL Button",
-        ), row=2, col=1)
+    # (Buy/Sell triangle "buttons" on the Renko panel have been removed —
+    # only the bricks and EMAs are plotted here now.)
 
     struct_style = {
         "BOS_DEMAND": (COLOR_BOS_DEMAND, "B-S"),
@@ -1030,27 +959,8 @@ def create_chart_figure(renko_df, ha_df, brick_size, display, ema_fast, ema_slow
         x=x_renko, y=renko_df["MACD_Signal"], line=dict(color=COLOR_SIGNAL_LINE, width=1.8), name="Signal Line",
     ), row=3, col=1)
     fig.add_hline(y=0, line=dict(color=COLOR_ZERO_LINE, width=1), row=3, col=1)
-    
-    macd_buy_x = [i for i in range(len(renko_df)) if renko_df["Div_Signal"].iloc[i] == "BUY"]
-    macd_buy_y = [renko_df["MACD"].iloc[i] - abs(renko_df["MACD_Hist"]).max() * 0.15 for i in macd_buy_x]
-    macd_sell_x = [i for i in range(len(renko_df)) if renko_df["Div_Signal"].iloc[i] == "SELL"]
-    macd_sell_y = [renko_df["MACD"].iloc[i] + abs(renko_df["MACD_Hist"]).max() * 0.15 for i in macd_sell_x]
-    if macd_buy_x:
-        fig.add_trace(go.Scatter(
-            x=macd_buy_x, y=macd_buy_y, mode="markers+text",
-            marker=dict(color=COLOR_BULL, size=11, symbol="triangle-up"),
-            text=["BUY"] * len(macd_buy_x), textposition="bottom center",
-            textfont=dict(color=COLOR_BULL, size=10, family="Arial Black"),
-            name="MACD BUY Button",
-        ), row=3, col=1)
-    if macd_sell_x:
-        fig.add_trace(go.Scatter(
-            x=macd_sell_x, y=macd_sell_y, mode="markers+text",
-            marker=dict(color=COLOR_BEAR, size=11, symbol="triangle-down"),
-            text=["SELL"] * len(macd_sell_x), textposition="top center",
-            textfont=dict(color=COLOR_BEAR, size=10, family="Arial Black"),
-            name="MACD SELL Button",
-        ), row=3, col=1)
+    # (Buy/Sell triangle "buttons" on the MACD panel have been removed —
+    # only the histogram, MACD line, and signal line are plotted here now.)
 
     # --- Row 4: RSI ---
     rsi_vals = renko_df["RSI"].values
@@ -1113,12 +1023,11 @@ def create_chart_figure(renko_df, ha_df, brick_size, display, ema_fast, ema_slow
     row1_range = _padded_range([
         ha_df["High"].values, ha_df["Low"].values,
         ha_df["EMA_FAST"].values, ha_df["EMA_SLOW"].values,
-        ha_buy_y, ha_sell_y, ha_buy_btn_y, ha_sell_btn_y,
     ])
     if row1_range:
         fig.update_yaxes(range=row1_range, row=1, col=1)
 
-    row2_extra = [renko_buy_y, renko_sell_y]
+    row2_extra = []
     if last_struct_event is not None:
         row2_extra.append([last_struct_event["level"]])
     row2_range = _padded_range([
@@ -1130,7 +1039,6 @@ def create_chart_figure(renko_df, ha_df, brick_size, display, ema_fast, ema_slow
 
     row3_range = _padded_range([
         hist_vals, renko_df["MACD"].values, renko_df["MACD_Signal"].values,
-        macd_buy_y, macd_sell_y,
     ])
     if row3_range:
         fig.update_yaxes(range=row3_range, row=3, col=1)
@@ -1151,6 +1059,29 @@ def go_to_chart(symbol, display):
     st.session_state.chart_symbol = symbol
     st.session_state.chart_display = display
     st.session_state.active_view = VIEWS[0]
+
+def run_chart_search():
+    """Callback for the quick-search box above the chart. Resolves whatever
+    the user typed — a watchlist display name ("GOLD", "MU", "EUR/USD"), a
+    raw Yahoo Finance symbol ("GC=F"), or any other ticker text — to a chart
+    and jumps straight to it via go_to_chart. Wired to both the search
+    button's on_click and the text input's on_change, so pressing Enter in
+    the box works the same as clicking the button."""
+    query = (st.session_state.get("chart_search_box") or "").strip()
+    if not query:
+        return
+    q_upper = query.upper()
+    # 1) exact match against a known watchlist display name (e.g. "GOLD", "MU")
+    if q_upper in DISPLAY_TO_SYMBOL:
+        go_to_chart(DISPLAY_TO_SYMBOL[q_upper], q_upper)
+        return
+    # 2) exact match against a known raw Yahoo Finance symbol (e.g. "GC=F")
+    for disp, sym in DISPLAY_TO_SYMBOL.items():
+        if sym.upper() == q_upper:
+            go_to_chart(sym, disp)
+            return
+    # 3) fall back to treating the typed text itself as a Yahoo Finance symbol
+    go_to_chart(query, query)
 
 # =====================================================================
 # ZOOMABLE / MOUSE-RESIZABLE CHART RENDERER
@@ -1515,6 +1446,18 @@ if active_view == "📊 Charts":
             chart_col, right_panel_col = st.columns([0.80, 0.20])
 
             with chart_col:
+                # --- Quick-search bar above the chart: type a ticker/name
+                # and hit Enter (or click Search) to jump straight to it ---
+                search_col, search_btn_col = st.columns([0.85, 0.15])
+                search_col.text_input(
+                    "Quick search", key="chart_search_box", label_visibility="collapsed",
+                    placeholder="🔍 Search a symbol to open its chart — e.g. GOLD, MU, EUR/USD, TSLA...",
+                    on_change=run_chart_search,
+                )
+                search_btn_col.button(
+                    "🔍 Open chart", key="chart_search_btn", use_container_width=True,
+                    on_click=run_chart_search,
+                )
                 render_zoomable_chart(fig, key=chart_symbol.replace("=", "_").replace("^", "idx"), height=950)
 
                 last_signal = renko_df["Signal"].iloc[-1]

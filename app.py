@@ -634,8 +634,15 @@ us100_raw = [
 ]
 
 nifty200_yf = [f"{t}.NS" for t in nifty200_raw]
+def convert_us100_symbol(t):
+    if t == "NAS100":
+        return "^NDX"
+    if t == "SPX":
+        return "^GSPC"
+    if t == "US30":
+        return "^DJI"
+    return t
 
-def convert_us100
 # =====================================================================
 # SCREENER LOGIC (EMA 9 / EMA 20)
 # =====================================================================

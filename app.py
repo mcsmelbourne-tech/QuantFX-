@@ -772,6 +772,10 @@ DISPLAY_TO_SYMBOL = {}
 for _cat_symbols in WATCHLIST_CATEGORIES.values():
     for _sym, _disp in _cat_symbols:
         DISPLAY_TO_SYMBOL[_disp] = _sym
+
+# Names of the three main sections, used by both the click-to-navigate
+# helper (go_to_chart) and the radio-based tab switcher in MAIN LAYOUT.
+VIEWS = ["📊 Charts", "🧭 7-Day Outlook", "🔎 Scanner"]
 TIMEFRAME_PERIODS = {
     "15m": "10d", "30m": "20d", "60m": "60d",
     "4h": "180d", "1d": "1y", "1wk": "5y",
@@ -1029,12 +1033,16 @@ def create_chart_figure(renko_df, ha_df, brick_size, display, ema_fast, ema_slow
 # CLICK-TO-OPEN-CHART NAVIGATION
 # =====================================================================
 def go_to_chart(symbol, display):
-    """Point the Charts view at a new symbol and jump to it. Called from a
-    scanner row, EMA-cross row, or top-mover box click."""
+    """Point the Charts view at a new symbol and jump to it. This must be
+    used as a widget `on_click` callback (not called from inside a plain
+    `if st.button(...):` block) — callbacks run *before* the script reruns,
+    so it's safe to set session_state here even though `active_view` is
+    bound to the st.radio widget further down the script. Setting it after
+    that radio has already been instantiated in the same run raises
+    StreamlitWidgetAlreadyInstantiatedError."""
     st.session_state.chart_symbol = symbol
     st.session_state.chart_display = display
-    st.session_state.active_view = "📊 Charts"
-    st.rerun()
+    st.session_state.active_view = VIEWS[0]
 
 # =====================================================================
 # ZOOMABLE / MOUSE-RESIZABLE CHART RENDERER
@@ -1263,7 +1271,6 @@ st.markdown(
 # scanner row, an EMA-cross row, a top-mover box) can jump straight to the
 # Charts view instead of just being visible after the user manually
 # switches tabs — plain st.tabs() can't be changed from code.
-VIEWS = ["📊 Charts", "🧭 7-Day Outlook", "🔎 Scanner"]
 if "active_view" not in st.session_state:
     st.session_state.active_view = VIEWS[0]
 active_view = st.radio(
@@ -1332,24 +1339,33 @@ if active_view == "📊 Charts":
                 st.markdown(render_top_box("Top Commodity", top_commodity, mode="single"), unsafe_allow_html=True)
                 if top_commodity:
                     m = top_commodity[0]
-                    if st.button(f"📈 Open {m['display']}", key="open_top_commodity", use_container_width=True):
-                        go_to_chart(m["symbol"], m["display"])
+                    st.button(
+                        f"📈 Open {m['display']}", key="open_top_commodity", use_container_width=True,
+                        on_click=go_to_chart, args=(m["symbol"], m["display"]),
+                    )
 
                 st.markdown(render_top_box("Top Forex", top_forex, mode="single"), unsafe_allow_html=True)
                 if top_forex:
                     m = top_forex[0]
-                    if st.button(f"📈 Open {m['display']}", key="open_top_forex", use_container_width=True):
-                        go_to_chart(m["symbol"], m["display"])
+                    st.button(
+                        f"📈 Open {m['display']}", key="open_top_forex", use_container_width=True,
+                        on_click=go_to_chart, args=(m["symbol"], m["display"]),
+                    )
 
                 st.markdown(render_top_box("Top 5 US100", top_us100, mode="lines"), unsafe_allow_html=True)
                 for m in top_us100:
-                    if st.button(f"📈 {m['display']}", key=f"open_us100_{m['symbol']}", use_container_width=True):
-                        go_to_chart(m["symbol"], m["display"])
+                    st.button(
+                        f"📈 {m['display']}", key=f"open_us100_{m['symbol']}", use_container_width=True,
+                        on_click=go_to_chart, args=(m["symbol"], m["display"]),
+                    )
 
                 st.markdown(render_top_box("Top 5 Nifty200", top_nifty200, mode="lines"), unsafe_allow_html=True)
                 for m in top_nifty200:
-                    if st.button(f"📈 {m['display']}", key=f"open_nifty_{m['symbol']}", use_container_width=True):
-                        go_to_chart(m["symbol"], m["display"])
+                    st.button(
+                        f"📈 {m['display']}", key=f"open_nifty_{m['symbol']}", use_container_width=True,
+                        on_click=go_to_chart, args=(m["symbol"], m["display"]),
+                    )
+
 
 # ---- 7-Day Outlook view --------------------------------------------------
 elif active_view == "🧭 7-Day Outlook":
@@ -1407,9 +1423,11 @@ elif active_view == "🔎 Scanner":
         sel_ticker = oc1.selectbox(
             "Open a result in the chart", df_res["Ticker"].tolist(), key="scanner_open_select"
         )
-        if oc2.button("📈 Open chart", key="scanner_open_btn", use_container_width=True):
-            row = df_res[df_res["Ticker"] == sel_ticker].iloc[0]
-            go_to_chart(row["RawSymbol"], row["Ticker"])
+        sel_row = df_res[df_res["Ticker"] == sel_ticker].iloc[0]
+        oc2.button(
+            "📈 Open chart", key="scanner_open_btn", use_container_width=True,
+            on_click=go_to_chart, args=(sel_row["RawSymbol"], sel_row["Ticker"]),
+        )
     elif df_res is not None:
         st.info("No results — the data source may be rate-limiting or the symbols returned no data.")
 
@@ -1481,8 +1499,10 @@ elif active_view == "🔎 Scanner":
         sel_ema_ticker = oc3.selectbox(
             "Open a result in the chart", ema_df["Ticker"].tolist(), key="ema_open_select"
         )
-        if oc4.button("📈 Open chart", key="ema_open_btn", use_container_width=True):
-            raw_sym = DISPLAY_TO_SYMBOL.get(sel_ema_ticker, sel_ema_ticker)
-            go_to_chart(raw_sym, sel_ema_ticker)
+        sel_raw_sym = DISPLAY_TO_SYMBOL.get(sel_ema_ticker, sel_ema_ticker)
+        oc4.button(
+            "📈 Open chart", key="ema_open_btn", use_container_width=True,
+            on_click=go_to_chart, args=(sel_raw_sym, sel_ema_ticker),
+        )
     elif ema_df is not None:
         st.info("No EMA crosses detected right now for any watchlist symbol.")

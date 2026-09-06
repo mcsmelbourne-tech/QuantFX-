@@ -979,8 +979,8 @@ def create_chart_figure(renko_df, ha_df, brick_size, display, ema_fast, ema_slow
     )
 
     for r in range(1, 5):
-        fig.update_xaxes(showgrid=False, row=r, col=1, matches="x", tickfont=dict(size=10))
-        fig.update_yaxes(gridcolor="#2A2F3A", side="right", row=r, col=1, tickfont=dict(size=10))
+    fig.update_xaxes(showgrid=False, row=r, col=1, matches="x", tickfont=dict(size=10))
+    fig.update_yaxes(gridcolor="#2A2F3A", side="right", row=r, col=1, tickformat=".2f", hoverformat=".2f", tickfont=dict(size=10))
 
     def _padded_range(value_lists, pad_frac=0.12):
         chunks = []

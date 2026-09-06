@@ -1,10 +1,3 @@
-"""
-QuantFX Terminal — ATR Renko & Macro Smart Money Structure
-Streamlit rewrite with custom candle coloring, right-side axes, 
-Heikin Ashi EMAs, single-fire pullback signals with blinking animation, 
-blinking round dot buy/sell markers on Heikin Ashi & MACD, targeted multi-market Telegram alerts,
-full share price display, 95% wide charts, font size 10, and right-side top mover cards (font size 11).
-"""
 import numpy as np
 import pandas as pd
 import yfinance as yf
@@ -412,7 +405,6 @@ def build_atr_renko_df(df,
         pullback_signals.append(pb_sig)
     renko_df["Signal"] = signals
     renko_df["Pullback_Signal"] = pullback_signals
-
     confirmed_signals = []
     for i in range(len(renko_df)):
         sig = renko_df.loc[i, "Signal"]
@@ -689,7 +681,6 @@ us100_raw = [
 "META","CSGP","CEG","AMZN","ISRG","CCEP","FANG"
 ]
 nifty200_yf = [f"{t}.NS" for t in nifty200_raw]
-
 def convert_us100_symbol(t):
     if t == "NAS100":
         return "^NDX"
@@ -698,7 +689,6 @@ def convert_us100_symbol(t):
     if t == "US30":
         return "^DJI"
     return t
-
 us100_yf = [convert_us100_symbol(t) for t in us100_raw] + ["^IXIC"]
 COMMODITIES = [("GC=F", "GOLD"), ("SI=F", "SILVER"), ("KC=F", "COFFEE"), ("CL=F", "CRUDE"), ("NG=F", "GAS"), ("^VIX", "VIX")]
 FOREX_PAIRS = [("EURUSD=X", "EUR/USD"), ("GBPUSD=X", "GBP/USD"), ("USDJPY=X", "USD/JPY"),
@@ -822,7 +812,6 @@ def create_chart_figure(renko_df, ha_df, brick_size, display, ema_fast, ema_slow
             textfont=dict(color=COLOR_BEAR, size=10, family="Arial Black"),
             name="Renko SELL Button",
         ), row=2, col=1)
-
     struct_style = {
         "BOS_DEMAND": (COLOR_BOS_DEMAND, "B-S"),
         "BOS_SUPPLY": (COLOR_BOS_SUPPLY, "B-D"),
@@ -899,7 +888,6 @@ def create_chart_figure(renko_df, ha_df, brick_size, display, ema_fast, ema_slow
     fig.add_hline(y=70, line=dict(color=COLOR_RED, width=1, dash="dash"), row=4, col=1)
     fig.add_hline(y=30, line=dict(color=COLOR_GREEN, width=1, dash="dash"), row=4, col=1)
     fig.update_yaxes(range=[0, 100], row=4, col=1)
-
     fig.update_layout(
         height=950,
         paper_bgcolor=COLOR_BG_DARK,
@@ -910,12 +898,10 @@ def create_chart_figure(renko_df, ha_df, brick_size, display, ema_fast, ema_slow
         xaxis_rangeslider_visible=False,
         xaxis2_rangeslider_visible=False,
     )
-
     for r in range(1, 5):
         fig.update_xaxes(showgrid=False, row=r, col=1, matches="x", tickfont=dict(size=10))
         # Format y-axes to display full price without scientific truncation
         fig.update_yaxes(gridcolor="#2A2F3A", side="right", row=r, col=1, tickformat="f", tickfont=dict(size=10))
-
     def _padded_range(value_lists, pad_frac=0.12):
         chunks = []
         for vals in value_lists:
@@ -934,7 +920,6 @@ def create_chart_figure(renko_df, ha_df, brick_size, display, ema_fast, ema_slow
             span = abs(hi) if hi != 0 else 1.0
         pad = span * pad_frac
         return [lo - pad, hi + pad]
-
     row1_range = _padded_range([
         ha_df["High"].values, ha_df["Low"].values,
         ha_df["EMA_FAST"].values, ha_df["EMA_SLOW"].values,
@@ -942,7 +927,6 @@ def create_chart_figure(renko_df, ha_df, brick_size, display, ema_fast, ema_slow
     ])
     if row1_range:
         fig.update_yaxes(range=row1_range, row=1, col=1)
-
     row2_extra = [renko_buy_y, renko_sell_y]
     if last_struct_event is not None:
         row2_extra.append([last_struct_event["level"]])
@@ -952,31 +936,29 @@ def create_chart_figure(renko_df, ha_df, brick_size, display, ema_fast, ema_slow
     ] + row2_extra)
     if row2_range:
         fig.update_yaxes(range=row2_range, row=2, col=1)
-
     row3_range = _padded_range([
         hist_vals, renko_df["MACD"].values, renko_df["MACD_Signal"].values,
         macd_buy_y, macd_sell_y,
     ])
     if row3_range:
         fig.update_yaxes(range=row3_range, row=3, col=1)
-
     return fig
 
 # =====================================================================
-# TOP-MOVER QUICK-GLANCE BOXES (FONT SIZE 11)
+# TOP-MOVER QUICK-GLANCE BOXES (FONT SIZE 12, PADDED CONTAINER)
 # =====================================================================
 def render_top_box(title, movers, mode="single"):
     if not movers:
-        body = f"<div style='font-size:11px;color:{COLOR_TEXT_MUTED};'>No data</div>"
+        body = f"<div style='font-size:12px;color:{COLOR_TEXT_MUTED};'>No data</div>"
     elif mode == "single":
         best = movers[0]
         color = COLOR_GREEN if best["chg"] >= 0 else COLOR_RED
         arrow = "▲" if best["chg"] >= 0 else "▼"
         price_str = f"${best['price']:f}".rstrip('0').rstrip('.')
         body = (
-            f"<div style='font-size:11px;font-weight:700;color:{COLOR_TEXT_MAIN};'>{best['display']}</div>"
-            f"<div style='font-size:11px;color:{COLOR_TEXT_MUTED};'>{price_str}</div>"
-            f"<div style='font-size:11px;color:{color};'>{arrow} {best['chg']:+.2f}%</div>"
+            f"<div style='font-size:12px;font-weight:700;color:{COLOR_TEXT_MAIN};margin-bottom:2px;'>{best['display']}</div>"
+            f"<div style='font-size:12px;color:{COLOR_TEXT_MUTED};margin-bottom:2px;'>{price_str}</div>"
+            f"<div style='font-size:12px;font-weight:600;color:{color};'>{arrow} {best['chg']:+.2f}%</div>"
         )
     else:
         rows_html = []
@@ -984,17 +966,17 @@ def render_top_box(title, movers, mode="single"):
             color = COLOR_GREEN if m["chg"] >= 0 else COLOR_RED
             arrow = "▲" if m["chg"] >= 0 else "▼"
             rows_html.append(
-                "<div style='font-size:11px;display:flex;justify-content:space-between;"
-                f"gap:10px;color:{COLOR_TEXT_MAIN};padding:2px 0;'>"
-                f"<span>{idx}. {m['display']}</span>"
-                f"<span style='color:{color};white-space:nowrap;'>{arrow} {m['chg']:+.2f}%</span>"
+                f"<div style='font-size:12px;display:flex;justify-content:space-between;"
+                f"align-items:center;gap:6px;color:{COLOR_TEXT_MAIN};padding:3px 0;'>"
+                f"<span style='overflow:hidden;text-overflow:ellipsis;white-space:nowrap;'>{idx}. {m['display']}</span>"
+                f"<span style='color:{color};white-space:nowrap;font-weight:600;'>{arrow} {m['chg']:+.2f}%</span>"
                 f"</div>"
             )
         body = "".join(rows_html)
     return (
         f"<div style='background-color:{COLOR_PANEL_BG};border:1px solid {COLOR_BORDER};"
-        f"border-radius:6px;padding:10px 14px;margin-bottom:12px;'>"
-        f"<div style='font-size:11px;color:{COLOR_TEXT_MUTED};margin-bottom:6px;font-weight:600;'>{title}</div>"
+        f"border-radius:6px;padding:12px 14px;margin-bottom:12px;box-sizing:border-box;overflow:hidden;'>"
+        f"<div style='font-size:12px;color:{COLOR_TEXT_MUTED};margin-bottom:8px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;'>{title}</div>"
         f"{body}</div>"
     )
 
@@ -1114,9 +1096,9 @@ with tab_chart:
                 top_nifty200 = fetch_top_n_movers(tuple(zip(nifty200_yf, nifty200_raw)), n=5)
                 
             fig = create_chart_figure(renko_df, ha_df, brick_size, current_display, ema_fast, ema_slow)
-
-            # Split layout into Main Chart (left) and Top Mover Cards (right)
-            chart_col, right_panel_col = st.columns([0.80, 0.20])
+            
+            # Adjusted column layout ratio to widen the right sidebar and avoid truncation
+            chart_col, right_panel_col = st.columns([0.72, 0.28])
             
             with chart_col:
                 st.plotly_chart(fig, use_container_width=True, theme=None)
@@ -1143,7 +1125,6 @@ with tab_chart:
                     )
                     ok, m = send_telegram_alert(msg, tg_token, tg_chat)
                     st.success(m) if ok else st.error(m)
-
             with right_panel_col:
                 st.markdown(render_top_box("Top Commodity", top_commodity, mode="single"), unsafe_allow_html=True)
                 st.markdown(render_top_box("Top Forex", top_forex, mode="single"), unsafe_allow_html=True)

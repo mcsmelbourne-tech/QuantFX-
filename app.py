@@ -15,7 +15,6 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import json
 import os
-
 # =====================================================================
 # PAGE CONFIG
 # =====================================================================
@@ -25,7 +24,6 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
 )
-
 # =====================================================================
 # COLORS – TradingView-style dark + neon
 # =====================================================================
@@ -47,7 +45,6 @@ COLOR_BOS_DEMAND = "#26FF9A"
 COLOR_BOS_SUPPLY = "#FF4F7B"
 COLOR_CHOCH_DEMAND = "#00D4FF"
 COLOR_CHOCH_SUPPLY = "#FF9900"
-
 # =====================================================================
 # GLOBAL DARK THEME CSS & BLINKING ANIMATION
 # =====================================================================
@@ -81,12 +78,10 @@ st.markdown(
     """,
     unsafe_allow_html=True,
 )
-
 # =====================================================================
 # TELEGRAM
 # =====================================================================
 TG_CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".qfx_telegram_config.json")
-
 def load_telegram_config():
     try:
         if os.path.exists(TG_CONFIG_PATH):
@@ -96,7 +91,6 @@ def load_telegram_config():
     except Exception:
         pass
     return "", ""
-
 def save_telegram_config(token, chat_id):
     try:
         with open(TG_CONFIG_PATH, "w") as f:
@@ -104,7 +98,6 @@ def save_telegram_config(token, chat_id):
         return True, "Saved."
     except Exception as e:
         return False, str(e)
-
 def send_telegram_alert(message, token, chat_id):
     token = (token or "").strip()
     chat_id = (chat_id or "").strip()
@@ -120,7 +113,6 @@ def send_telegram_alert(message, token, chat_id):
         return False, data.get("description", "Unknown Telegram API error")
     except Exception as e:
         return False, str(e)
-
 # =====================================================================
 # INDICATORS & HEIKIN ASHI / MACD
 # =====================================================================
@@ -144,7 +136,6 @@ def compute_heikin_ashi(df, ema_fast=21, ema_slow=50):
             ha_signals[i] = "SELL"
     ha["Signal"] = ha_signals
     return ha
-
 def detect_macd_crossovers(renko_df):
     macd = renko_df["MACD"].values
     signal = renko_df["MACD_Signal"].values
@@ -160,20 +151,15 @@ def detect_macd_crossovers(renko_df):
             macd_signals[i] = "SELL"
             macd_types[i] = "MACD Cross Down"
     return macd_signals, macd_types
-
 # =====================================================================
 # FULL-PRECISION PRICE FORMATTING
 # =====================================================================
 def format_price(value):
-    """Format a price with enough decimals to never truncate small values
-    (e.g. FX pairs) while trimming meaningless trailing zeros. Replaces the
-    old ':f' + rstrip('0') pattern, which could still read as only 2-3
-    significant digits for very small quotes."""
     try:
         value = float(value)
     except (TypeError, ValueError):
         return str(value)
-    if value != value:  # NaN check
+    if value != value:
         return "—"
     abs_val = abs(value)
     if abs_val == 0:
@@ -190,14 +176,10 @@ def format_price(value):
     if "." in s:
         s = s.rstrip("0").rstrip(".")
     return s
-
 # =====================================================================
-# EMA CROSSOVER DETECTION (both bullish & bearish — "both sides")
+# EMA CROSSOVER DETECTION
 # =====================================================================
 def detect_ema_cross_signal(close_series, fast=21, slow=50, lookback=1):
-    """Detect the most recent EMA fast/slow crossover in either direction
-    (bullish golden cross OR bearish death cross) within the last
-    `lookback` bars. Returns None if no cross occurred in that window."""
     if close_series is None or len(close_series) < slow + 2:
         return None
     ema_fast_s = close_series.ewm(span=fast, adjust=False).mean()
@@ -214,7 +196,6 @@ def detect_ema_cross_signal(close_series, fast=21, slow=50, lookback=1):
             return {"direction": "SELL", "bars_ago": n - 1 - i,
                     "fast": float(f_now), "slow": float(s_now)}
     return None
-
 # =====================================================================
 # SMART MONEY STRUCTURE — BOS & CHoCH
 # =====================================================================
@@ -303,14 +284,12 @@ def detect_market_structure(high, low, close, swing_lookback=5, brick_type=None)
         "StructureSeq": seq_arr,
         "Trend": trend_arr,
     })
-
 STRUCTURE_LABELS = {
     "BOS_DEMAND": "B-S",
     "BOS_SUPPLY": "B-D",
     "CHOCH_DEMAND": "CH-S",
     "CHOCH_SUPPLY": "CH-D",
 }
-
 def latest_structure_event(struct_df, lookback=15):
     if struct_df is None or struct_df.empty or "Structure" not in struct_df.columns:
         return None
@@ -327,7 +306,6 @@ def latest_structure_event(struct_df, lookback=15):
         "level": float(hits["StructureLevel"].iloc[-1]),
         "bars_ago": int((len(struct_df) - 1) - last_idx),
     }
-
 def build_atr_renko_df(df,
                         atr_period=21,
                         atr_multiplier=3.0,
@@ -448,7 +426,6 @@ def build_atr_renko_df(df,
         pullback_signals.append(pb_sig)
     renko_df["Signal"] = signals
     renko_df["Pullback_Signal"] = pullback_signals
-
     confirmed_signals = []
     for i in range(len(renko_df)):
         sig = renko_df.loc[i, "Signal"]
@@ -478,7 +455,6 @@ def build_atr_renko_df(df,
         [renko_df.reset_index(drop=True), struct_df.reset_index(drop=True)], axis=1
     )
     return renko_df, brick_size
-
 # =====================================================================
 # DATA SOURCE & OUTLOOK
 # =====================================================================
@@ -488,7 +464,6 @@ def fetch_live_ohlc(symbol="GC=F", period="6mo", interval="1d"):
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.get_level_values(0)
     return df
-
 @st.cache_data(ttl=300, show_spinner=False)
 def fetch_top_n_movers(symbols_tuple, n=1):
     symbols = list(symbols_tuple)
@@ -517,26 +492,15 @@ def fetch_top_n_movers(symbols_tuple, n=1):
             continue
     results.sort(key=lambda r: r["chg"], reverse=True)
     return results[:n]
-
 @st.cache_data(ttl=300, show_spinner=False)
 def compute_rsi(close_series, period=14):
-    """Standard Wilder-style RSI (simple rolling mean version, matching the
-    RSI already used elsewhere in this file) computed on a raw close series."""
     delta = close_series.diff()
     gain = delta.where(delta > 0, 0.0).rolling(period).mean()
     loss = (-delta.where(delta < 0, 0.0)).rolling(period).mean()
     rs = gain / loss.replace(0, np.nan)
     return 100 - (100 / (1 + rs))
-
 @st.cache_data(ttl=300, show_spinner=False)
 def compute_vwap(df, window=20):
-    """Rolling Volume-Weighted Average Price over the last `window` bars,
-    using the typical price (H+L+C)/3. Data here is daily OHLCV (not
-    intraday), so this is a rolling N-day VWAP rather than a true
-    session-anchored intraday VWAP — still a useful "is price rich/cheap
-    relative to recent volume-weighted value" gauge for a daily scanner.
-    Falls back to a simple rolling average of typical price if a symbol
-    has no volume data (common for FX/index pairs on Yahoo Finance)."""
     typical = (df["High"] + df["Low"] + df["Close"]) / 3.0
     if "Volume" in df.columns and df["Volume"].fillna(0).sum() > 0:
         vol = df["Volume"].replace(0, np.nan)
@@ -545,12 +509,8 @@ def compute_vwap(df, window=20):
     else:
         vwap = typical.rolling(window, min_periods=1).mean()
     return vwap
-
 @st.cache_data(ttl=300, show_spinner=False)
 def compute_adx(high, low, close, period=14):
-    """Standard Wilder ADX (trend-strength, 0-100) plus the +DI/-DI lines
-    it's built from. Used to confirm an EMA cross is happening in a
-    genuinely trending (not choppy/sideways) market."""
     high = pd.Series(high).reset_index(drop=True)
     low = pd.Series(low).reset_index(drop=True)
     close = pd.Series(close).reset_index(drop=True)
@@ -568,18 +528,10 @@ def compute_adx(high, low, close, period=14):
     dx = (plus_di - minus_di).abs() / (plus_di + minus_di).replace(0, np.nan) * 100
     adx = dx.ewm(alpha=1 / period, adjust=False).mean()
     return adx, plus_di, minus_di
-
 @st.cache_data(ttl=300, show_spinner=False)
 def scan_ema9_cross21_rsi_vwap_adx(symbols_tuple, ema_fast=9, ema_slow=21,
                                     rsi_threshold=51.0, adx_threshold=20.0,
-                                    lookback=1, max_results=8):
-    """Scan a watchlist for symbols where, on the daily chart:
-      • EMA9 has just crossed above EMA21 (bullish cross within `lookback` bars)
-      • RSI(14) is above `rsi_threshold`
-      • price is trading above its rolling VWAP (confirms buyers in control)
-      • ADX(14) is above `adx_threshold` (confirms a real trend, not chop)
-    All four values are also returned per hit so the box can display them,
-    not just filter on them. Feeds the right-panel EMA9/21 scanner box."""
+                                    lookback=1, max_results=5):
     results = []
     for sym, disp in symbols_tuple:
         try:
@@ -616,7 +568,6 @@ def scan_ema9_cross21_rsi_vwap_adx(symbols_tuple, ema_fast=9, ema_slow=21,
             continue
     results.sort(key=lambda r: r["adx"], reverse=True)
     return results[:max_results]
-
 def evaluate_oracle_score(symbol, display=None):
     try:
         df = fetch_live_ohlc(symbol, period="1y", interval="1d")
@@ -671,7 +622,6 @@ def evaluate_oracle_score(symbol, display=None):
         structure_label = structure_event["label"] if structure_event else "—"
         structure_type = structure_event["type"] if structure_event else None
         
-        # Display full share price without rounding cutoff
         price_fmt = format_price(last_close)
         high_fmt = format_price(high)
         low_fmt = format_price(low)
@@ -695,7 +645,6 @@ def evaluate_oracle_score(symbol, display=None):
         }
     except Exception:
         return None
-
 def compute_7day_outlook(symbol, display, period="1y", interval="1d"):
     try:
         data = fetch_live_ohlc(symbol, period=period, interval=interval)
@@ -736,10 +685,10 @@ def compute_7day_outlook(symbol, display, period="1y", interval="1d"):
         bias_score = 0.0
         if last_ema21 > last_ema50:
             bias_score += 1
-            reasons.append(f"EMA21 (${format_price(last_ema21)}) is above EMA50 (${format_price(last_ema50)}), keeping the trend bullish.")
+            reasons.append(f"EMA21 (${format_price(last_ema21)}) is above EMA50 (${format_price(last_ema50)}), keeping trend bullish.")
         else:
             bias_score -= 1
-            reasons.append(f"EMA21 (${format_price(last_ema21)}) is below EMA50 (${format_price(last_ema50)}), keeping the trend bearish.")
+            reasons.append(f"EMA21 (${format_price(last_ema21)}) is below EMA50 (${format_price(last_ema50)}), keeping trend bearish.")
         renko_df, _ = build_atr_renko_df(
             data, atr_period=21, atr_multiplier=3.0,
             ema_fast=21, ema_slow=50,
@@ -760,9 +709,9 @@ def compute_7day_outlook(symbol, display, period="1y", interval="1d"):
                 s_level = structure_event["level"]
                 bars_ago = structure_event["bars_ago"]
                 bias_score += structure_weight.get(s_type, 0.0)
-                recency = "on the latest brick" if bars_ago == 0 else f"{bars_ago} bricks ago"
-                reasons.append(f"Structure {structure_event['label']} confirmed at ${format_price(s_level)} ({recency}).")
-        direction = "Bullish" if bias_score >= 2.0 else ("Bearish" if bias_score <= -2.0 else "Neutral / Consolidation")
+                recency = "on latest brick" if bars_ago == 0 else f"{bars_ago} bricks ago"
+                reasons.append(f"Structure {structure_event['label']} at ${format_price(s_level)} ({recency}).")
+        direction = "Bullish" if bias_score >= 2.0 else ("Bearish" if bias_score <= -2.0 else "Neutral")
         weekly_move_pct = atr_pct * np.sqrt(bars_in_7_days)
         tilt = float(np.clip(bias_score / 3.0, -1, 1))
         center_shift_pct = weekly_move_pct * 0.35 * tilt
@@ -781,7 +730,6 @@ def compute_7day_outlook(symbol, display, period="1y", interval="1d"):
         }
     except Exception:
         return None
-
 # =====================================================================
 # WATCHLISTS
 # =====================================================================
@@ -824,7 +772,6 @@ us100_raw = [
 "META","CSGP","CEG","AMZN","ISRG","CCEP","FANG"
 ]
 nifty200_yf = [f"{t}.NS" for t in nifty200_raw]
-
 def convert_us100_symbol(t):
     if t == "NAS100":
         return "^NDX"
@@ -833,7 +780,6 @@ def convert_us100_symbol(t):
     if t == "US30":
         return "^DJI"
     return t
-
 us100_yf = [convert_us100_symbol(t) for t in us100_raw] + ["^IXIC"]
 COMMODITIES = [("GC=F", "GOLD"), ("SI=F", "SILVER"), ("KC=F", "COFFEE"), ("CL=F", "CRUDE"), ("NG=F", "GAS"), ("^VIX", "VIX")]
 FOREX_PAIRS = [("EURUSD=X", "EUR/USD"), ("GBPUSD=X", "GBP/USD"), ("USDJPY=X", "USD/JPY"),
@@ -844,23 +790,17 @@ WATCHLIST_CATEGORIES = {
     "Nifty200": list(zip(nifty200_yf, nifty200_raw)),
     "US100": list(zip(us100_yf, us100_raw + ["IXIC"])),
 }
-
-# Reverse lookup (display name -> Yahoo Finance symbol) so any ticker shown
-# in a scanner table, top-mover box, or EMA-cross result can be resolved
-# back to a tradable symbol when clicked.
 DISPLAY_TO_SYMBOL = {}
 for _cat_symbols in WATCHLIST_CATEGORIES.values():
     for _sym, _disp in _cat_symbols:
         DISPLAY_TO_SYMBOL[_disp] = _sym
 
-# Names of the three main sections, used by both the click-to-navigate
-# helper (go_to_chart) and the radio-based tab switcher in MAIN LAYOUT.
-VIEWS = ["📊 Charts", "🧭 7-Day Outlook", "🔎 Scanner"]
+# Updated views without 7-Day Outlook tab
+VIEWS = ["📊 Charts", "🔎 Scanner"]
 TIMEFRAME_PERIODS = {
     "15m": "10d", "30m": "20d", "60m": "60d",
     "4h": "180d", "1d": "1y", "1wk": "5y",
 }
-
 # =====================================================================
 # CHARTING
 # =====================================================================
@@ -881,7 +821,6 @@ def create_chart_figure(renko_df, ha_df, brick_size, display, ema_fast, ema_slow
     
     renko_trend_bull = (renko_df["EMA_FAST"] > renko_df["EMA_SLOW"]).values
     
-    # --- Row 1: Heikin Ashi ---
     fig.add_trace(go.Candlestick(
         x=x_ha, open=ha_df["Open"], high=ha_df["High"], low=ha_df["Low"], close=ha_df["Close"],
         increasing_line_color=COLOR_BULL, decreasing_line_color=COLOR_BEAR,
@@ -897,10 +836,6 @@ def create_chart_figure(renko_df, ha_df, brick_size, display, ema_fast, ema_slow
         name=f"HA EMA {ema_slow}",
     ), row=1, col=1)
     
-    # (Buy/Sell signal dots and triangle "buttons" on the Heikin Ashi panel
-    # have been removed — only the candles and EMAs are plotted here now.)
-
-    # --- Row 2: ATR Renko ---
     fig.add_trace(go.Candlestick(
         x=x_renko, open=renko_df["Open"], high=renko_df["High"], low=renko_df["Low"], close=renko_df["Close"],
         increasing_line_color=COLOR_BULL, decreasing_line_color=COLOR_BEAR,
@@ -915,9 +850,7 @@ def create_chart_figure(renko_df, ha_df, brick_size, display, ema_fast, ema_slow
         x=x_renko, y=renko_df["EMA_SLOW"], line=dict(color=COLOR_MA_SLOW, width=1.5),
         name=f"EMA {ema_slow}",
     ), row=2, col=1)
-    # (Buy/Sell triangle "buttons" on the Renko panel have been removed —
-    # only the bricks and EMAs are plotted here now.)
-
+    
     struct_style = {
         "BOS_DEMAND": (COLOR_BOS_DEMAND, "B-S"),
         "BOS_SUPPLY": (COLOR_BOS_SUPPLY, "B-D"),
@@ -944,8 +877,7 @@ def create_chart_figure(renko_df, ha_df, brick_size, display, ema_fast, ema_slow
                 bordercolor=color, borderwidth=1, row=2, col=1,
                 yshift=14 if s_type in ("BOS_DEMAND", "CHOCH_DEMAND") else -14,
             )
-
-    # --- Row 3: MACD ---
+            
     hist_vals = renko_df["MACD_Hist"].values
     hist_colors = [COLOR_BULL if val >= 0 else COLOR_BEAR for val in hist_vals]
     
@@ -959,10 +891,7 @@ def create_chart_figure(renko_df, ha_df, brick_size, display, ema_fast, ema_slow
         x=x_renko, y=renko_df["MACD_Signal"], line=dict(color=COLOR_SIGNAL_LINE, width=1.8), name="Signal Line",
     ), row=3, col=1)
     fig.add_hline(y=0, line=dict(color=COLOR_ZERO_LINE, width=1), row=3, col=1)
-    # (Buy/Sell triangle "buttons" on the MACD panel have been removed —
-    # only the histogram, MACD line, and signal line are plotted here now.)
-
-    # --- Row 4: RSI ---
+    
     rsi_vals = renko_df["RSI"].values
     rsi_bull_y = np.where(renko_trend_bull, rsi_vals, np.nan)
     rsi_bear_y = np.where(~renko_trend_bull, rsi_vals, np.nan)
@@ -975,124 +904,45 @@ def create_chart_figure(renko_df, ha_df, brick_size, display, ema_fast, ema_slow
     fig.add_hline(y=70, line=dict(color=COLOR_RED, width=1, dash="dash"), row=4, col=1)
     fig.add_hline(y=30, line=dict(color=COLOR_GREEN, width=1, dash="dash"), row=4, col=1)
     fig.update_yaxes(range=[0, 100], row=4, col=1)
-
     fig.update_layout(
         height=950,
         paper_bgcolor=COLOR_BG_DARK,
         plot_bgcolor=COLOR_BG_DARK,
         font=dict(color=COLOR_TEXT_MUTED, size=10),
         legend=dict(orientation="h", y=1.02, x=0, bgcolor="rgba(0,0,0,0)", font=dict(size=10)),
-        # Right margin widened (10 -> 70) so full right-side price labels like
-        # "4250.00" are never clipped down to just their first couple of digits.
         margin=dict(l=10, r=70, t=50, b=10),
         xaxis_rangeslider_visible=False,
         xaxis2_rangeslider_visible=False,
     )
-
     for r in range(1, 5):
         fig.update_xaxes(showgrid=False, row=r, col=1, matches="x", tickfont=dict(size=10))
-        # Format y-axes to display full price without scientific truncation.
-        # automargin=True lets Plotly grow the right margin further on its
-        # own if a label (e.g. a 5-digit price) still wouldn't fit in the
-        # fixed margin above, instead of silently cutting the text off.
         fig.update_yaxes(
             gridcolor="#2A2F3A", side="right", row=r, col=1,
             tickformat="f", hoverformat="f", tickfont=dict(size=10),
             automargin=True, ticklabelposition="outside right",
         )
-
-    def _padded_range(value_lists, pad_frac=0.12):
-        chunks = []
-        for vals in value_lists:
-            if vals is None or len(vals) == 0:
-                continue
-            arr = np.asarray(vals, dtype=float)
-            arr = arr[~np.isnan(arr)]
-            if arr.size:
-                chunks.append(arr)
-        if not chunks:
-            return None
-        combined = np.concatenate(chunks)
-        lo, hi = float(combined.min()), float(combined.max())
-        span = hi - lo
-        if span == 0:
-            span = abs(hi) if hi != 0 else 1.0
-        pad = span * pad_frac
-        return [lo - pad, hi + pad]
-
-    row1_range = _padded_range([
-        ha_df["High"].values, ha_df["Low"].values,
-        ha_df["EMA_FAST"].values, ha_df["EMA_SLOW"].values,
-    ])
-    if row1_range:
-        fig.update_yaxes(range=row1_range, row=1, col=1)
-
-    row2_extra = []
-    if last_struct_event is not None:
-        row2_extra.append([last_struct_event["level"]])
-    row2_range = _padded_range([
-        renko_df["High"].values, renko_df["Low"].values,
-        renko_df["EMA_FAST"].values, renko_df["EMA_SLOW"].values,
-    ] + row2_extra)
-    if row2_range:
-        fig.update_yaxes(range=row2_range, row=2, col=1)
-
-    row3_range = _padded_range([
-        hist_vals, renko_df["MACD"].values, renko_df["MACD_Signal"].values,
-    ])
-    if row3_range:
-        fig.update_yaxes(range=row3_range, row=3, col=1)
-
     return fig
 
-# =====================================================================
-# CLICK-TO-OPEN-CHART NAVIGATION
-# =====================================================================
 def go_to_chart(symbol, display):
-    """Point the Charts view at a new symbol and jump to it. This must be
-    used as a widget `on_click` callback (not called from inside a plain
-    `if st.button(...):` block) — callbacks run *before* the script reruns,
-    so it's safe to set session_state here even though `active_view` is
-    bound to the st.radio widget further down the script. Setting it after
-    that radio has already been instantiated in the same run raises
-    StreamlitWidgetAlreadyInstantiatedError."""
     st.session_state.chart_symbol = symbol
     st.session_state.chart_display = display
     st.session_state.active_view = VIEWS[0]
 
 def run_chart_search():
-    """Callback for the quick-search box above the chart. Resolves whatever
-    the user typed — a watchlist display name ("GOLD", "MU", "EUR/USD"), a
-    raw Yahoo Finance symbol ("GC=F"), or any other ticker text — to a chart
-    and jumps straight to it via go_to_chart. Wired to both the search
-    button's on_click and the text input's on_change, so pressing Enter in
-    the box works the same as clicking the button."""
     query = (st.session_state.get("chart_search_box") or "").strip()
     if not query:
         return
     q_upper = query.upper()
-    # 1) exact match against a known watchlist display name (e.g. "GOLD", "MU")
     if q_upper in DISPLAY_TO_SYMBOL:
         go_to_chart(DISPLAY_TO_SYMBOL[q_upper], q_upper)
         return
-    # 2) exact match against a known raw Yahoo Finance symbol (e.g. "GC=F")
     for disp, sym in DISPLAY_TO_SYMBOL.items():
         if sym.upper() == q_upper:
             go_to_chart(sym, disp)
             return
-    # 3) fall back to treating the typed text itself as a Yahoo Finance symbol
     go_to_chart(query, query)
 
-# =====================================================================
-# ZOOMABLE / MOUSE-RESIZABLE CHART RENDERER
-# =====================================================================
 def render_zoomable_chart(fig, key, height=950):
-    """Render a Plotly figure inside a mouse-resizable container.
-    - Mouse scroll wheel zooms in/out (Plotly scrollZoom).
-    - Click-drag box-zooms; double-click resets zoom.
-    - Dragging the bottom-right corner of the chart box resizes it; the
-      figure re-renders to fit so full price labels stay readable.
-    """
     fig_json = fig.to_json()
     div_id = f"qfx_chart_{key}"
     html = f"""
@@ -1104,8 +954,7 @@ def render_zoomable_chart(fig, key, height=950):
       <div id="{div_id}" style="width: 100%; height: 100%;"></div>
     </div>
     <div style="font-size:10px;color:{COLOR_TEXT_MUTED};margin-top:4px;">
-      🖱️ Scroll to zoom in/out • Drag on the chart to box-zoom (double-click to reset) •
-      Drag the ↘ corner of the chart box to resize it
+      🖱️ Scroll to zoom • Drag to box-zoom • Drag corner to resize
     </div>
     <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
     <script>
@@ -1126,24 +975,7 @@ def render_zoomable_chart(fig, key, height=950):
     """
     components.html(html, height=height + 70, scrolling=True)
 
-# =====================================================================
-# TOP-MOVER QUICK-GLANCE BOXES (FONT SIZE 11) — FULLY CLICKABLE CARDS
-# =====================================================================
-# These boxes no longer have a separate "Open XYZ" button underneath them.
-# Instead the whole card (or, in list boxes, each row) IS the click target.
-#
-# How: each card/row is rendered inside its own st.container(), which
-# Streamlit backs with one wrapping <div>. We tag the HTML card with a
-# unique marker class, then use a CSS `:has()` rule to turn that specific
-# wrapping div into a positioning context (position: relative) and stretch
-# the invisible button inside it to `inset: 0` (position: absolute,
-# 100% width/height). Because the button is sized off the container's own
-# rendered box rather than a hand-guessed pixel height, it always matches
-# the card exactly — no leftover sliver of button poking out below it.
 def _render_clickable_html(marker, inner_html, extra_style="", key_prefix=None, on_click=None, args=None):
-    """Render one HTML card tagged with `marker` plus an invisible button
-    stretched over it (inset:0), inside a shared container so the two
-    always share the same box."""
     with st.container():
         st.markdown(
             f"<div class='{marker}' style='cursor:pointer;{extra_style}'>{inner_html}</div>",
@@ -1178,13 +1010,11 @@ def _render_clickable_html(marker, inner_html, extra_style="", key_prefix=None, 
         st.button(" ", key=f"{key_prefix}_btn", on_click=on_click, args=args)
 
 def render_clickable_single_box(title, movers, key_prefix, on_click):
-    """'Top Commodity' / 'Top Forex' style box: one card, whole card clicks
-    through to that symbol's chart — no button underneath it."""
     if not movers:
         st.markdown(
             f"<div style='background-color:{COLOR_PANEL_BG};border:1px solid {COLOR_BORDER};"
-            f"border-radius:6px;padding:10px 14px;margin-bottom:12px;'>"
-            f"<div style='font-size:11px;color:{COLOR_TEXT_MUTED};margin-bottom:6px;font-weight:600;'>{title}</div>"
+            f"border-radius:6px;padding:8px 12px;margin-bottom:8px;'>"
+            f"<div style='font-size:11px;color:{COLOR_TEXT_MUTED};margin-bottom:4px;font-weight:600;'>{title}</div>"
             f"<div style='font-size:11px;color:{COLOR_TEXT_MUTED};'>No data</div></div>",
             unsafe_allow_html=True,
         )
@@ -1194,7 +1024,7 @@ def render_clickable_single_box(title, movers, key_prefix, on_click):
     arrow = "▲" if best["chg"] >= 0 else "▼"
     price_str = f"${format_price(best['price'])}"
     inner = (
-        f"<div style='font-size:11px;color:{COLOR_TEXT_MUTED};margin-bottom:6px;font-weight:600;'>{title}</div>"
+        f"<div style='font-size:11px;color:{COLOR_TEXT_MUTED};margin-bottom:4px;font-weight:600;'>{title}</div>"
         f"<div style='font-size:11px;font-weight:700;color:{COLOR_TEXT_MAIN};'>{best['display']}</div>"
         f"<div style='font-size:11px;color:{COLOR_TEXT_MUTED};'>{price_str}</div>"
         f"<div style='font-size:11px;color:{color};'>{arrow} {best['chg']:+.2f}%</div>"
@@ -1204,25 +1034,22 @@ def render_clickable_single_box(title, movers, key_prefix, on_click):
         marker, inner,
         extra_style=(
             f"background-color:{COLOR_PANEL_BG};border:1px solid {COLOR_BORDER};"
-            f"border-radius:6px;padding:10px 14px;margin-bottom:12px;"
+            f"border-radius:6px;padding:8px 12px;margin-bottom:8px;"
         ),
         key_prefix=key_prefix, on_click=on_click, args=(best["symbol"], best["display"]),
     )
 
 def render_clickable_list_box(title, movers, key_prefix, on_click, value_fmt=None):
-    """'Top 5 US100' / 'Top 5 Nifty200' / scanner-style box: a static
-    header followed by one clickable row per entry — clicking a row opens
-    that ticker's chart directly, with no separate button beside it."""
     st.markdown(
         f"<div style='background-color:{COLOR_PANEL_BG};border:1px solid {COLOR_BORDER};"
-        f"border-radius:6px 6px 0 0;padding:8px 14px 6px 14px;margin-bottom:0px;'>"
+        f"border-radius:6px 6px 0 0;padding:6px 10px 4px 10px;margin-bottom:0px;'>"
         f"<div style='font-size:11px;color:{COLOR_TEXT_MUTED};font-weight:600;'>{title}</div></div>",
         unsafe_allow_html=True,
     )
     if not movers:
         st.markdown(
             f"<div style='background-color:{COLOR_PANEL_BG};border:1px solid {COLOR_BORDER};"
-            f"border-top:none;border-radius:0 0 6px 6px;padding:8px 14px;margin-bottom:12px;"
+            f"border-top:none;border-radius:0 0 6px 6px;padding:6px 10px;margin-bottom:8px;"
             f"font-size:11px;color:{COLOR_TEXT_MUTED};'>No data</div>",
             unsafe_allow_html=True,
         )
@@ -1237,17 +1064,17 @@ def render_clickable_list_box(title, movers, key_prefix, on_click, value_fmt=Non
         else:
             value_html = f"<span style='color:{color};white-space:nowrap;'>{arrow} {m['chg']:+.2f}%</span>"
         inner = (
-            f"<div style='font-size:11px;display:flex;justify-content:space-between;gap:10px;color:{COLOR_TEXT_MAIN};'>"
+            f"<div style='font-size:11px;display:flex;justify-content:space-between;gap:6px;color:{COLOR_TEXT_MAIN};'>"
             f"<span>{idx}. {m['display']}</span>{value_html}</div>"
         )
         radius = "0 0 6px 6px" if is_last else "0"
-        margin = "12px" if is_last else "0px"
+        margin = "8px" if is_last else "0px"
         marker = f"qfx-hit-{key_prefix}-{idx}"
         _render_clickable_html(
             marker, inner,
             extra_style=(
                 f"background-color:{COLOR_PANEL_BG};border:1px solid {COLOR_BORDER};border-top:none;"
-                f"border-radius:{radius};padding:6px 14px;margin-bottom:{margin};"
+                f"border-radius:{radius};padding:5px 10px;margin-bottom:{margin};"
             ),
             key_prefix=f"{key_prefix}_{idx}", on_click=on_click, args=(m["symbol"], m["display"]),
         )
@@ -1277,115 +1104,21 @@ ema_slow = c2.number_input("EMA Slow", min_value=1, max_value=200, value=50)
 c3, c4 = st.sidebar.columns(2)
 atr_period = c3.number_input("ATR Period", min_value=2, max_value=100, value=21)
 atr_multiplier = c4.number_input("ATR Mult.", min_value=0.1, max_value=10.0, value=3.0, step=0.1)
-st.sidebar.markdown("---")
-with st.sidebar.expander("Telegram alerts"):
-    if "tg_token" not in st.session_state or "tg_chat" not in st.session_state:
-        saved_token, saved_chat = load_telegram_config()
-        st.session_state["tg_token"] = saved_token
-        st.session_state["tg_chat"] = saved_chat
-    tg_token = st.text_input("Bot Token", value=st.session_state.get("tg_token", ""), type="password")
-    tg_chat = st.text_input("Chat ID", value=st.session_state.get("tg_chat", ""))
-    st.session_state["tg_token"] = tg_token
-    st.session_state["tg_chat"] = tg_chat
-    tcol1, tcol2 = st.columns(2)
-    if tcol1.button("💾 Save login", use_container_width=True):
-        ok, msg = save_telegram_config(tg_token, tg_chat)
-        st.success("Telegram login saved.") if ok else st.error(f"Could not save: {msg}")
-    if tcol2.button("Send test alert", use_container_width=True):
-        ok, msg = send_telegram_alert(
-            "🟢 *QuantFX Terminal Test Alert*\nConnection successfully established!", tg_token, tg_chat
-        )
-        st.success(msg) if ok else st.error(msg)
+
 if st.sidebar.button("🔄 Refresh data", use_container_width=True):
     st.cache_data.clear()
     st.rerun()
 
-# =====================================================================
-# CHART-SYMBOL STATE — lets a click on a scanner row / top-mover box
-# override the chart without fighting the sidebar picker
-# =====================================================================
 if "chart_symbol" not in st.session_state:
     st.session_state.chart_symbol = current_symbol
     st.session_state.chart_display = current_display
     st.session_state._prev_sidebar_symbol = current_symbol
 elif current_symbol != st.session_state._prev_sidebar_symbol:
-    # The sidebar picker itself changed this run — that always wins.
     st.session_state.chart_symbol = current_symbol
     st.session_state.chart_display = current_display
     st.session_state._prev_sidebar_symbol = current_symbol
 chart_symbol = st.session_state.chart_symbol
 chart_display = st.session_state.chart_display
-
-# =====================================================================
-# AUTOMATED MULTI-MARKET TELEGRAM SCANNER & DISPATCHER
-# =====================================================================
-st.sidebar.markdown("---")
-st.sidebar.markdown("### 🔔 Automated Triggers")
-if st.sidebar.button("🚀 Run Rule-Based Telegram Scan", use_container_width=True):
-    triggered_messages = []
-
-    # --- Commodities & Forex: structure events (BOS/CHoCH) ---
-    fx_comm_watchlist = [("Commodities", COMMODITIES), ("Forex", FOREX_PAIRS)]
-    for cat_name, symbols in fx_comm_watchlist:
-        for sym, disp in symbols:
-            try:
-                df = fetch_live_ohlc(sym, period="10d", interval="30m")
-                if not df.empty:
-                    renko_df, _ = build_atr_renko_df(df, atr_period=int(atr_period), atr_multiplier=float(atr_multiplier))
-                    ev = latest_structure_event(renko_df, lookback=3)
-                    if ev and ev["type"] in ["CHOCH_DEMAND", "CHOCH_SUPPLY", "BOS_DEMAND", "BOS_SUPPLY"]:
-                        if ev["bars_ago"] <= 1:
-                            triggered_messages.append(f"🚨 *[30m FX/Comm]* *{disp}* triggered *{ev['label']}* at `${format_price(ev['level'])}`")
-            except Exception:
-                continue
-
-    # --- Commodities & Forex: EMA fast/slow cross, BOTH directions (buy & sell) ---
-    for cat_name, symbols in fx_comm_watchlist:
-        for sym, disp in symbols:
-            try:
-                df = fetch_live_ohlc(sym, period="10d", interval="30m")
-                if df.empty:
-                    continue
-                cross = detect_ema_cross_signal(df["Close"], fast=int(ema_fast), slow=int(ema_slow), lookback=1)
-                if cross:
-                    arrow = "🟢 BUY" if cross["direction"] == "BUY" else "🔴 SELL"
-                    triggered_messages.append(
-                        f"🚨 *[{cat_name} • EMA{int(ema_fast)}/{int(ema_slow)} Cross]* *{disp}* {arrow} "
-                        f"(EMA{int(ema_fast)} `${format_price(cross['fast'])}` vs EMA{int(ema_slow)} `${format_price(cross['slow'])}`)"
-                    )
-            except Exception:
-                continue
-
-    # --- US100 & Nifty200: fixed EMA 9 / EMA 20 cross, BOTH directions ---
-    idx_watchlist = [
-        ("US100", list(zip(us100_yf, us100_raw + ["IXIC"]))),
-        ("Nifty200", list(zip(nifty200_yf, nifty200_raw))),
-    ]
-    for cat_name, symbols in idx_watchlist:
-        for sym, disp in symbols:
-            try:
-                df = fetch_live_ohlc(sym, period="1mo", interval="1d")
-                if df.empty:
-                    continue
-                cross = detect_ema_cross_signal(df["Close"], fast=9, slow=20, lookback=1)
-                if cross:
-                    arrow = "🟢 BUY" if cross["direction"] == "BUY" else "🔴 SELL"
-                    triggered_messages.append(
-                        f"🚨 *[{cat_name} • EMA9/20 Cross]* *{disp}* {arrow} "
-                        f"(EMA9 `${format_price(cross['fast'])}` vs EMA20 `${format_price(cross['slow'])}`)"
-                    )
-            except Exception:
-                continue
-
-    if triggered_messages:
-        combined_msg = "📢 *QuantFX Automated Triggers*\n\n" + "\n".join(triggered_messages)
-        ok, m = send_telegram_alert(combined_msg, tg_token, tg_chat)
-        if ok:
-            st.sidebar.success(f"Dispatched {len(triggered_messages)} alert(s) via Telegram!")
-        else:
-            st.sidebar.error(f"Failed to send: {m}")
-    else:
-        st.sidebar.info("Scan completed: No new active triggers matching rules.")
 
 # =====================================================================
 # MAIN LAYOUT
@@ -1396,10 +1129,6 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# Tab-like navigation driven by session_state so a click elsewhere (a
-# scanner row, an EMA-cross row, a top-mover box) can jump straight to the
-# Charts view instead of just being visible after the user manually
-# switches tabs — plain st.tabs() can't be changed from code.
 if "active_view" not in st.session_state:
     st.session_state.active_view = VIEWS[0]
 active_view = st.radio(
@@ -1418,16 +1147,12 @@ if active_view == "📊 Charts":
             ema_fast=ema_fast, ema_slow=ema_slow,
         )
         if renko_df.empty:
-            st.warning("Not enough data to build ATR Renko bricks for this timeframe — try a longer timeframe.")
+            st.warning("Not enough data to build ATR Renko bricks for this timeframe.")
         else:
             ha_df = compute_heikin_ashi(renko_df, ema_fast=ema_fast, ema_slow=ema_slow)
-            last_close = float(raw_df["Close"].iloc[-1])
-            prev_close = float(raw_df["Close"].iloc[-2]) if len(raw_df) > 1 else last_close
-            chg_pct = ((float(raw_df["Close"].iloc[-1]) - prev_close) / prev_close) * 100 if prev_close else 0.0
             struct_event = latest_structure_event(renko_df, lookback=15)
-
-            # Fetch top movers for the side panel
-            with st.spinner("Scanning watchlists for top movers..."):
+            
+            with st.spinner("Scanning watchlists..."):
                 top_commodity = fetch_top_n_movers(tuple(COMMODITIES), n=1)
                 top_forex = fetch_top_n_movers(tuple(FOREX_PAIRS), n=1)
                 top_us100 = fetch_top_n_movers(tuple(zip(us100_yf, us100_raw + ["IXIC"])), n=5)
@@ -1437,21 +1162,60 @@ if active_view == "📊 Charts":
                 )
                 ema_scanner_hits = scan_ema9_cross21_rsi_vwap_adx(
                     ema_scanner_watchlist, ema_fast=9, ema_slow=21,
-                    rsi_threshold=51.0, adx_threshold=20.0, lookback=1, max_results=8,
+                    rsi_threshold=51.0, adx_threshold=20.0, lookback=1, max_results=4,
                 )
+                outlook = compute_7day_outlook(chart_symbol, chart_display, period="1y", interval="1d")
 
             fig = create_chart_figure(renko_df, ha_df, brick_size, chart_display, ema_fast, ema_slow)
-
-            # Split layout into Main Chart (left) and Top Mover Cards (right)
+            
             chart_col, right_panel_col = st.columns([0.80, 0.20])
-
             with chart_col:
-                # --- Quick-search bar above the chart: type a ticker/name
-                # and hit Enter (or click Search) to jump straight to it ---
+                # --- Moved Telegram configuration & triggers above the chart ---
+                if "tg_token" not in st.session_state or "tg_chat" not in st.session_state:
+                    saved_token, saved_chat = load_telegram_config()
+                    st.session_state["tg_token"] = saved_token
+                    st.session_state["tg_chat"] = saved_chat
+
+                with st.expander("🔔 Telegram Alerts & Automated Triggers", expanded=False):
+                    tc1, tc2 = st.columns(2)
+                    tg_token = tc1.text_input("Bot Token", value=st.session_state.get("tg_token", ""), type="password")
+                    tg_chat = tc2.text_input("Chat ID", value=st.session_state.get("tg_chat", ""))
+                    st.session_state["tg_token"] = tg_token
+                    st.session_state["tg_chat"] = tg_chat
+                    
+                    bcol1, bcol2, bcol3 = st.columns(3)
+                    if bcol1.button("💾 Save credentials"):
+                        ok, msg = save_telegram_config(tg_token, tg_chat)
+                        st.success("Saved.") if ok else st.error(msg)
+                    if bcol2.button("Test Connection"):
+                        ok, msg = send_telegram_alert("🟢 *QuantFX Terminal Test Alert*", tg_token, tg_chat)
+                        st.success(msg) if ok else st.error(msg)
+                    if bcol3.button("🚀 Run Auto Scan & Send"):
+                        triggered_messages = []
+                        fx_comm_watchlist = [("Commodities", COMMODITIES), ("Forex", FOREX_PAIRS)]
+                        for cat_name, symbols in fx_comm_watchlist:
+                            for sym, disp in symbols:
+                                try:
+                                    df = fetch_live_ohlc(sym, period="10d", interval="30m")
+                                    if not df.empty:
+                                        r_df, _ = build_atr_renko_df(df, atr_period=int(atr_period), atr_multiplier=float(atr_multiplier))
+                                        ev = latest_structure_event(r_df, lookback=3)
+                                        if ev and ev["type"] in ["CHOCH_DEMAND", "CHOCH_SUPPLY", "BOS_DEMAND", "BOS_SUPPLY"]:
+                                            if ev["bars_ago"] <= 1:
+                                                triggered_messages.append(f"🚨 *[30m]* *{disp}* triggered *{ev['label']}* at `${format_price(ev['level'])}`")
+                                except Exception:
+                                    continue
+                        if triggered_messages:
+                            combined_msg = "📢 *QuantFX Automated Triggers*\n\n" + "\n".join(triggered_messages)
+                            ok, m = send_telegram_alert(combined_msg, tg_token, tg_chat)
+                            st.success(f"Dispatched {len(triggered_messages)} alert(s)!") if ok else st.error(m)
+                        else:
+                            st.info("No new active triggers matching rules.")
+
                 search_col, search_btn_col = st.columns([0.85, 0.15])
                 search_col.text_input(
                     "Quick search", key="chart_search_box", label_visibility="collapsed",
-                    placeholder="🔍 Search a symbol to open its chart — e.g. GOLD, MU, EUR/USD, TSLA...",
+                    placeholder="🔍 Search a symbol to open its chart — e.g. GOLD, MU, EUR/USD...",
                     on_change=run_chart_search,
                 )
                 search_btn_col.button(
@@ -1459,12 +1223,11 @@ if active_view == "📊 Charts":
                     on_click=run_chart_search,
                 )
                 render_zoomable_chart(fig, key=chart_symbol.replace("=", "_").replace("^", "idx"), height=950)
-
+                
                 last_signal = renko_df["Signal"].iloc[-1]
                 last_pullback = renko_df["Pullback_Signal"].iloc[-1]
                 last_confirmed = renko_df["Confirmed_Signal"].iloc[-1]
                 badge_color = COLOR_GREEN if last_confirmed == "BUY" else (COLOR_RED if last_confirmed == "SELL" else COLOR_TEXT_MUTED)
-
                 st.markdown(
                     f"Confirmed signal: <span class='qfx-badge' style='background:{badge_color}22;color:{badge_color};'>{last_confirmed}</span>"
                     f"&nbsp;&nbsp;•&nbsp;&nbsp;EMA trend: <b>{last_signal}</b>"
@@ -1477,35 +1240,42 @@ if active_view == "📊 Charts":
                         f"Price: ${format_price(float(raw_df['Close'].iloc[-1]))}\n"
                         f"Confirmed Signal: {last_confirmed}\n"
                         f"EMA Signal: {last_signal}\n"
-                        f"Pullback Signal: {last_pullback}\n"
                         f"Structure: {struct_event['label'] if struct_event else '—'}"
                     )
                     ok, m = send_telegram_alert(msg, tg_token, tg_chat)
                     st.success(m) if ok else st.error(m)
-
+                    
             with right_panel_col:
-                # --- EMA9/21 bullish cross + RSI>51 + VWAP + ADX scanner box, top of panel ---
+                # --- Compact EMA9/21 scanner box ---
                 def _ema_scanner_value_html(m):
                     color = COLOR_GREEN if m["chg"] >= 0 else COLOR_RED
                     arrow = "▲" if m["chg"] >= 0 else "▼"
-                    e9 = format_price(m["ema_fast"])
-                    e21 = format_price(m["ema_slow"])
                     return (
-                        f"<div style='text-align:right;'>"
-                        f"<div style='white-space:nowrap;'>"
+                        f"<div style='text-align:right;font-size:10px;'>"
                         f"<span style='color:{color};'>{arrow} {m['chg']:+.2f}%</span>"
-                        f"<span style='color:{COLOR_TEXT_MUTED};'> · RSI {m['rsi']:.0f}</span></div>"
-                        f"<div style='white-space:nowrap;font-size:10px;color:{COLOR_TEXT_MUTED};'>"
-                        f"ADX {m['adx']:.0f} · E9 {e9}/E21 {e21} · <span style='color:{COLOR_GREEN};'>&gt;VWAP</span>"
-                        f"</div></div>"
+                        f"<span style='color:{COLOR_TEXT_MUTED};'> · RSI {m['rsi']:.0f}</span>"
+                        f"</div>"
                     )
                 render_clickable_list_box(
-                    "⚡ EMA9↗21 Cross · RSI/VWAP/ADX", ema_scanner_hits,
+                    "⚡ EMA9↗21 Scanner", ema_scanner_hits,
                     key_prefix="ema921scan", on_click=go_to_chart, value_fmt=_ema_scanner_value_html,
                 )
-
-                # --- Existing top-mover boxes — now the whole card/row is
-                # the click target, with no separate "Open" button below it ---
+                
+                # --- 7-Day Outlook integrated on the left side under EMA section ---
+                if outlook:
+                    dir_color = COLOR_GREEN if outlook["direction"] == "Bullish" else (
+                        COLOR_RED if outlook["direction"] == "Bearish" else COLOR_TEXT_MUTED
+                    )
+                    st.markdown(
+                        f"<div style='background-color:{COLOR_PANEL_BG};border:1px solid {COLOR_BORDER};"
+                        f"border-radius:6px;padding:8px 12px;margin-bottom:8px;'>"
+                        f"<div style='font-size:11px;color:{COLOR_TEXT_MUTED};font-weight:600;margin-bottom:4px;'>🧭 7-Day Outlook</div>"
+                        f"<div style='font-size:11px;font-weight:700;color:{dir_color};'>{outlook['direction']}</div>"
+                        f"<div style='font-size:10px;color:{COLOR_TEXT_MUTED};margin-top:2px;'>Range: ${format_price(outlook['range_low'])} - ${format_price(outlook['range_high'])}</div>"
+                        f"</div>",
+                        unsafe_allow_html=True,
+                    )
+                
                 render_clickable_single_box(
                     "Top Commodity", top_commodity, key_prefix="open_top_commodity", on_click=go_to_chart,
                 )
@@ -1518,33 +1288,6 @@ if active_view == "📊 Charts":
                 render_clickable_list_box(
                     "Top 5 Nifty200", top_nifty200, key_prefix="open_nifty", on_click=go_to_chart,
                 )
-
-
-# ---- 7-Day Outlook view --------------------------------------------------
-elif active_view == "🧭 7-Day Outlook":
-    with st.spinner("Computing 7-day outlook..."):
-        outlook = compute_7day_outlook(chart_symbol, chart_display, period="1y", interval="1d")
-    if outlook is None:
-        st.warning("Not enough history to compute an outlook for this symbol.")
-    else:
-        dir_color = COLOR_GREEN if outlook["direction"] == "Bullish" else (
-            COLOR_RED if outlook["direction"] == "Bearish" else COLOR_TEXT_MUTED
-        )
-        st.markdown(
-            f"<span class='qfx-badge' style='background:{dir_color}22;color:{dir_color};font-size:10px;'>"
-            f"{outlook['direction']}</span>",
-            unsafe_allow_html=True,
-        )
-        st.markdown(
-            f"Projected 7-day macro range: **${format_price(outlook['range_low'])} – ${format_price(outlook['range_high'])}** "
-            f"(last close: ${format_price(outlook['last_close'])})"
-        )
-        if outlook["structure_event"]:
-            se = outlook["structure_event"]
-            st.caption(f"Latest structure event: {se['label']} at ${format_price(se['level'])} ({se['bars_ago']} bricks ago)")
-        st.markdown("#### Reasoning")
-        for r in outlook["reasons"]:
-            st.markdown(f"- {r}")
 
 # ---- Scanner view ---------------------------------------------------------
 elif active_view == "🔎 Scanner":
@@ -1582,80 +1325,4 @@ elif active_view == "🔎 Scanner":
             on_click=go_to_chart, args=(sel_row["RawSymbol"], sel_row["Ticker"]),
         )
     elif df_res is not None:
-        st.info("No results — the data source may be rate-limiting or the symbols returned no data.")
-
-    st.markdown("---")
-    st.markdown("#### 📐 EMA Cross Scanner")
-    st.caption(
-        f"Commodities & Forex use the sidebar EMA settings (EMA {int(ema_fast)}/{int(ema_slow)}) "
-        "and flag a cross in **either direction** (buy or sell). US100 & Nifty200 always use a "
-        "fixed **EMA 9 / EMA 20** cross, regardless of the sidebar EMA settings."
-    )
-    if st.button("▶️ Run EMA cross scan", type="secondary"):
-        ema_rows = []
-
-        for cat_name, symbols in [("Commodities", COMMODITIES), ("Forex", FOREX_PAIRS)]:
-            for sym, disp in symbols:
-                try:
-                    df = fetch_live_ohlc(sym, period="10d", interval="30m")
-                    if df.empty:
-                        continue
-                    cross = detect_ema_cross_signal(df["Close"], fast=int(ema_fast), slow=int(ema_slow), lookback=1)
-                    if cross:
-                        ema_rows.append({
-                            "Category": cat_name,
-                            "Ticker": disp,
-                            "EMA Pair": f"{int(ema_fast)}/{int(ema_slow)}",
-                            "Direction": cross["direction"],
-                            "Fast EMA": f"${format_price(cross['fast'])}",
-                            "Slow EMA": f"${format_price(cross['slow'])}",
-                            "Bars Ago": cross["bars_ago"],
-                        })
-                except Exception:
-                    continue
-
-        for cat_name, symbols in [
-            ("US100", list(zip(us100_yf, us100_raw + ["IXIC"]))),
-            ("Nifty200", list(zip(nifty200_yf, nifty200_raw))),
-        ]:
-            for sym, disp in symbols:
-                try:
-                    df = fetch_live_ohlc(sym, period="1mo", interval="1d")
-                    if df.empty:
-                        continue
-                    cross = detect_ema_cross_signal(df["Close"], fast=9, slow=20, lookback=1)
-                    if cross:
-                        ema_rows.append({
-                            "Category": cat_name,
-                            "Ticker": disp,
-                            "EMA Pair": "9/20",
-                            "Direction": cross["direction"],
-                            "Fast EMA": f"${format_price(cross['fast'])}",
-                            "Slow EMA": f"${format_price(cross['slow'])}",
-                            "Bars Ago": cross["bars_ago"],
-                        })
-                except Exception:
-                    continue
-
-        st.session_state["ema_cross_results"] = pd.DataFrame(ema_rows)
-
-    ema_df = st.session_state.get("ema_cross_results")
-    if ema_df is not None and not ema_df.empty:
-        def _ema_row_style(row):
-            color = COLOR_GREEN if row["Direction"] == "BUY" else COLOR_RED
-            return [f"color: {color}" if col == "Direction" else "" for col in row.index]
-        st.dataframe(
-            ema_df.style.apply(_ema_row_style, axis=1),
-            use_container_width=True, hide_index=True,
-        )
-        oc3, oc4 = st.columns([0.7, 0.3])
-        sel_ema_ticker = oc3.selectbox(
-            "Open a result in the chart", ema_df["Ticker"].tolist(), key="ema_open_select"
-        )
-        sel_raw_sym = DISPLAY_TO_SYMBOL.get(sel_ema_ticker, sel_ema_ticker)
-        oc4.button(
-            "📈 Open chart", key="ema_open_btn", use_container_width=True,
-            on_click=go_to_chart, args=(sel_raw_sym, sel_ema_ticker),
-        )
-    elif ema_df is not None:
-        st.info("No EMA crosses detected right now for any watchlist symbol.")
+        st.info("No results — data source may be rate-limiting.")

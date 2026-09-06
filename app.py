@@ -10,6 +10,7 @@ import pandas as pd
 import yfinance as yf
 import requests
 import streamlit as st
+import streamlit.components.v1 as components
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import json
@@ -763,6 +764,14 @@ WATCHLIST_CATEGORIES = {
     "Nifty200": list(zip(nifty200_yf, nifty200_raw)),
     "US100": list(zip(us100_yf, us100_raw + ["IXIC"])),
 }
+
+# Reverse lookup (display name -> Yahoo Finance symbol) so any ticker shown
+# in a scanner table, top-mover box, or EMA-cross result can be resolved
+# back to a tradable symbol when clicked.
+DISPLAY_TO_SYMBOL = {}
+for _cat_symbols in WATCHLIST_CATEGORIES.values():
+    for _sym, _disp in _cat_symbols:
+        DISPLAY_TO_SYMBOL[_disp] = _sym
 TIMEFRAME_PERIODS = {
     "15m": "10d", "30m": "20d", "60m": "60d",
     "4h": "180d", "1d": "1y", "1wk": "5y",
@@ -968,7 +977,7 @@ def create_chart_figure(renko_df, ha_df, brick_size, display, ema_fast, ema_slow
     for r in range(1, 5):
         fig.update_xaxes(showgrid=False, row=r, col=1, matches="x", tickfont=dict(size=10))
         # Format y-axes to display full price without scientific truncation
-        fig.update_yaxes(gridcolor="#2A2F3A", side="right", row=r, col=1, tickformat="f", tickfont=dict(size=10))
+        fig.update_yaxes(gridcolor="#2A2F3A", side="right", row=r, col=1, tickformat="f", hoverformat="f", tickfont=dict(size=10))
 
     def _padded_range(value_lists, pad_frac=0.12):
         chunks = []
@@ -1015,6 +1024,60 @@ def create_chart_figure(renko_df, ha_df, brick_size, display, ema_fast, ema_slow
         fig.update_yaxes(range=row3_range, row=3, col=1)
 
     return fig
+
+# =====================================================================
+# CLICK-TO-OPEN-CHART NAVIGATION
+# =====================================================================
+def go_to_chart(symbol, display):
+    """Point the Charts view at a new symbol and jump to it. Called from a
+    scanner row, EMA-cross row, or top-mover box click."""
+    st.session_state.chart_symbol = symbol
+    st.session_state.chart_display = display
+    st.session_state.active_view = "📊 Charts"
+    st.rerun()
+
+# =====================================================================
+# ZOOMABLE / MOUSE-RESIZABLE CHART RENDERER
+# =====================================================================
+def render_zoomable_chart(fig, key, height=950):
+    """Render a Plotly figure inside a mouse-resizable container.
+    - Mouse scroll wheel zooms in/out (Plotly scrollZoom).
+    - Click-drag box-zooms; double-click resets zoom.
+    - Dragging the bottom-right corner of the chart box resizes it; the
+      figure re-renders to fit so full price labels stay readable.
+    """
+    fig_json = fig.to_json()
+    div_id = f"qfx_chart_{key}"
+    html = f"""
+    <div id="{div_id}_wrapper" style="
+        resize: both; overflow: auto; width: 100%; height: {height}px;
+        min-width: 320px; min-height: 400px; max-width: 100%;
+        border: 1px solid {COLOR_BORDER}; border-radius: 6px;
+        background-color: {COLOR_BG_DARK}; padding: 4px; box-sizing: border-box;">
+      <div id="{div_id}" style="width: 100%; height: 100%;"></div>
+    </div>
+    <div style="font-size:10px;color:{COLOR_TEXT_MUTED};margin-top:4px;">
+      🖱️ Scroll to zoom in/out • Drag on the chart to box-zoom (double-click to reset) •
+      Drag the ↘ corner of the chart box to resize it
+    </div>
+    <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
+    <script>
+      (function() {{
+        var figSpec = {fig_json};
+        var config = {{scrollZoom: true, displaylogo: false, responsive: false}};
+        var el = document.getElementById("{div_id}");
+        Plotly.newPlot(el, figSpec.data, figSpec.layout, config);
+        var wrapper = document.getElementById("{div_id}_wrapper");
+        if (window.ResizeObserver) {{
+          var ro = new ResizeObserver(function() {{
+            Plotly.Plots.resize(el);
+          }});
+          ro.observe(wrapper);
+        }}
+      }})();
+    </script>
+    """
+    components.html(html, height=height + 70, scrolling=True)
 
 # =====================================================================
 # TOP-MOVER QUICK-GLANCE BOXES (FONT SIZE 11)
@@ -1101,6 +1164,22 @@ if st.sidebar.button("🔄 Refresh data", use_container_width=True):
     st.rerun()
 
 # =====================================================================
+# CHART-SYMBOL STATE — lets a click on a scanner row / top-mover box
+# override the chart without fighting the sidebar picker
+# =====================================================================
+if "chart_symbol" not in st.session_state:
+    st.session_state.chart_symbol = current_symbol
+    st.session_state.chart_display = current_display
+    st.session_state._prev_sidebar_symbol = current_symbol
+elif current_symbol != st.session_state._prev_sidebar_symbol:
+    # The sidebar picker itself changed this run — that always wins.
+    st.session_state.chart_symbol = current_symbol
+    st.session_state.chart_display = current_display
+    st.session_state._prev_sidebar_symbol = current_symbol
+chart_symbol = st.session_state.chart_symbol
+chart_display = st.session_state.chart_display
+
+# =====================================================================
 # AUTOMATED MULTI-MARKET TELEGRAM SCANNER & DISPATCHER
 # =====================================================================
 st.sidebar.markdown("---")
@@ -1175,18 +1254,28 @@ if st.sidebar.button("🚀 Run Rule-Based Telegram Scan", use_container_width=Tr
 # MAIN LAYOUT
 # =====================================================================
 st.markdown(
-    f"<h2 style='color:#FFFFFF;margin-bottom:0;'>{current_display} "
-    f"<span style='color:{COLOR_TEXT_MUTED};font-size:10px;'>({current_symbol}) • {interval}</span></h2>",
+    f"<h2 style='color:#FFFFFF;margin-bottom:0;'>{chart_display} "
+    f"<span style='color:{COLOR_TEXT_MUTED};font-size:10px;'>({chart_symbol}) • {interval}</span></h2>",
     unsafe_allow_html=True,
 )
-tab_chart, tab_outlook, tab_scanner = st.tabs(["📊 Charts", "🧭 7-Day Outlook", "🔎 Scanner"])
 
-# ---- Charts tab --------------------------------------------------------
-with tab_chart:
-    with st.spinner(f"Fetching {current_display}..."):
-        raw_df = fetch_live_ohlc(current_symbol, period=period, interval=interval)
+# Tab-like navigation driven by session_state so a click elsewhere (a
+# scanner row, an EMA-cross row, a top-mover box) can jump straight to the
+# Charts view instead of just being visible after the user manually
+# switches tabs — plain st.tabs() can't be changed from code.
+VIEWS = ["📊 Charts", "🧭 7-Day Outlook", "🔎 Scanner"]
+if "active_view" not in st.session_state:
+    st.session_state.active_view = VIEWS[0]
+active_view = st.radio(
+    "View", VIEWS, horizontal=True, label_visibility="collapsed", key="active_view"
+)
+
+# ---- Charts view --------------------------------------------------------
+if active_view == "📊 Charts":
+    with st.spinner(f"Fetching {chart_display}..."):
+        raw_df = fetch_live_ohlc(chart_symbol, period=period, interval=interval)
     if raw_df.empty:
-        st.error(f"No data returned for {current_display} ({current_symbol}).")
+        st.error(f"No data returned for {chart_display} ({chart_symbol}).")
     else:
         renko_df, brick_size = build_atr_renko_df(
             raw_df, atr_period=atr_period, atr_multiplier=atr_multiplier,
@@ -1200,27 +1289,27 @@ with tab_chart:
             prev_close = float(raw_df["Close"].iloc[-2]) if len(raw_df) > 1 else last_close
             chg_pct = ((float(raw_df["Close"].iloc[-1]) - prev_close) / prev_close) * 100 if prev_close else 0.0
             struct_event = latest_structure_event(renko_df, lookback=15)
-            
+
             # Fetch top movers for the side panel
             with st.spinner("Scanning watchlists for top movers..."):
                 top_commodity = fetch_top_n_movers(tuple(COMMODITIES), n=1)
                 top_forex = fetch_top_n_movers(tuple(FOREX_PAIRS), n=1)
                 top_us100 = fetch_top_n_movers(tuple(zip(us100_yf, us100_raw + ["IXIC"])), n=5)
                 top_nifty200 = fetch_top_n_movers(tuple(zip(nifty200_yf, nifty200_raw)), n=5)
-                
-            fig = create_chart_figure(renko_df, ha_df, brick_size, current_display, ema_fast, ema_slow)
+
+            fig = create_chart_figure(renko_df, ha_df, brick_size, chart_display, ema_fast, ema_slow)
 
             # Split layout into Main Chart (left) and Top Mover Cards (right)
             chart_col, right_panel_col = st.columns([0.80, 0.20])
-            
+
             with chart_col:
-                st.plotly_chart(fig, use_container_width=True, theme=None)
-                
+                render_zoomable_chart(fig, key=chart_symbol.replace("=", "_").replace("^", "idx"), height=950)
+
                 last_signal = renko_df["Signal"].iloc[-1]
                 last_pullback = renko_df["Pullback_Signal"].iloc[-1]
                 last_confirmed = renko_df["Confirmed_Signal"].iloc[-1]
                 badge_color = COLOR_GREEN if last_confirmed == "BUY" else (COLOR_RED if last_confirmed == "SELL" else COLOR_TEXT_MUTED)
-                
+
                 st.markdown(
                     f"Confirmed signal: <span class='qfx-badge' style='background:{badge_color}22;color:{badge_color};'>{last_confirmed}</span>"
                     f"&nbsp;&nbsp;•&nbsp;&nbsp;EMA trend: <b>{last_signal}</b>"
@@ -1229,7 +1318,7 @@ with tab_chart:
                 )
                 if st.button("📨 Send current signal to Telegram"):
                     msg = (
-                        f"*{current_display}* ({current_symbol})\n"
+                        f"*{chart_display}* ({chart_symbol})\n"
                         f"Price: ${format_price(float(raw_df['Close'].iloc[-1]))}\n"
                         f"Confirmed Signal: {last_confirmed}\n"
                         f"EMA Signal: {last_signal}\n"
@@ -1241,14 +1330,31 @@ with tab_chart:
 
             with right_panel_col:
                 st.markdown(render_top_box("Top Commodity", top_commodity, mode="single"), unsafe_allow_html=True)
-                st.markdown(render_top_box("Top Forex", top_forex, mode="single"), unsafe_allow_html=True)
-                st.markdown(render_top_box("Top 5 US100", top_us100, mode="lines"), unsafe_allow_html=True)
-                st.markdown(render_top_box("Top 5 Nifty200", top_nifty200, mode="lines"), unsafe_allow_html=True)
+                if top_commodity:
+                    m = top_commodity[0]
+                    if st.button(f"📈 Open {m['display']}", key="open_top_commodity", use_container_width=True):
+                        go_to_chart(m["symbol"], m["display"])
 
-# ---- Outlook tab --------------------------------------------------------
-with tab_outlook:
+                st.markdown(render_top_box("Top Forex", top_forex, mode="single"), unsafe_allow_html=True)
+                if top_forex:
+                    m = top_forex[0]
+                    if st.button(f"📈 Open {m['display']}", key="open_top_forex", use_container_width=True):
+                        go_to_chart(m["symbol"], m["display"])
+
+                st.markdown(render_top_box("Top 5 US100", top_us100, mode="lines"), unsafe_allow_html=True)
+                for m in top_us100:
+                    if st.button(f"📈 {m['display']}", key=f"open_us100_{m['symbol']}", use_container_width=True):
+                        go_to_chart(m["symbol"], m["display"])
+
+                st.markdown(render_top_box("Top 5 Nifty200", top_nifty200, mode="lines"), unsafe_allow_html=True)
+                for m in top_nifty200:
+                    if st.button(f"📈 {m['display']}", key=f"open_nifty_{m['symbol']}", use_container_width=True):
+                        go_to_chart(m["symbol"], m["display"])
+
+# ---- 7-Day Outlook view --------------------------------------------------
+elif active_view == "🧭 7-Day Outlook":
     with st.spinner("Computing 7-day outlook..."):
-        outlook = compute_7day_outlook(current_symbol, current_display, period="1y", interval="1d")
+        outlook = compute_7day_outlook(chart_symbol, chart_display, period="1y", interval="1d")
     if outlook is None:
         st.warning("Not enough history to compute an outlook for this symbol.")
     else:
@@ -1271,9 +1377,9 @@ with tab_outlook:
         for r in outlook["reasons"]:
             st.markdown(f"- {r}")
 
-# ---- Scanner tab --------------------------------------------------------
-with tab_scanner:
-    st.caption("Runs the oracle score across a watchlist.")
+# ---- Scanner view ---------------------------------------------------------
+elif active_view == "🔎 Scanner":
+    st.caption("Runs the oracle score across a watchlist. Click any result to open it in the chart view.")
     cats = st.multiselect("Watchlists to scan", list(WATCHLIST_CATEGORIES.keys()), default=["Commodities", "Forex"])
     if st.button("▶️ Run scanner", type="primary"):
         if not cats:
@@ -1297,6 +1403,13 @@ with tab_scanner:
             df_res[display_cols].style.apply(_row_style, axis=1),
             use_container_width=True, hide_index=True,
         )
+        oc1, oc2 = st.columns([0.7, 0.3])
+        sel_ticker = oc1.selectbox(
+            "Open a result in the chart", df_res["Ticker"].tolist(), key="scanner_open_select"
+        )
+        if oc2.button("📈 Open chart", key="scanner_open_btn", use_container_width=True):
+            row = df_res[df_res["Ticker"] == sel_ticker].iloc[0]
+            go_to_chart(row["RawSymbol"], row["Ticker"])
     elif df_res is not None:
         st.info("No results — the data source may be rate-limiting or the symbols returned no data.")
 
@@ -1364,5 +1477,12 @@ with tab_scanner:
             ema_df.style.apply(_ema_row_style, axis=1),
             use_container_width=True, hide_index=True,
         )
+        oc3, oc4 = st.columns([0.7, 0.3])
+        sel_ema_ticker = oc3.selectbox(
+            "Open a result in the chart", ema_df["Ticker"].tolist(), key="ema_open_select"
+        )
+        if oc4.button("📈 Open chart", key="ema_open_btn", use_container_width=True):
+            raw_sym = DISPLAY_TO_SYMBOL.get(sel_ema_ticker, sel_ema_ticker)
+            go_to_chart(raw_sym, sel_ema_ticker)
     elif ema_df is not None:
         st.info("No EMA crosses detected right now for any watchlist symbol.")

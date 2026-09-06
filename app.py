@@ -1015,15 +1015,24 @@ def create_chart_figure(renko_df, ha_df, brick_size, display, ema_fast, ema_slow
         plot_bgcolor=COLOR_BG_DARK,
         font=dict(color=COLOR_TEXT_MUTED, size=10),
         legend=dict(orientation="h", y=1.02, x=0, bgcolor="rgba(0,0,0,0)", font=dict(size=10)),
-        margin=dict(l=10, r=10, t=50, b=10),
+        # Right margin widened (10 -> 70) so full right-side price labels like
+        # "4250.00" are never clipped down to just their first couple of digits.
+        margin=dict(l=10, r=70, t=50, b=10),
         xaxis_rangeslider_visible=False,
         xaxis2_rangeslider_visible=False,
     )
 
     for r in range(1, 5):
         fig.update_xaxes(showgrid=False, row=r, col=1, matches="x", tickfont=dict(size=10))
-        # Format y-axes to display full price without scientific truncation
-        fig.update_yaxes(gridcolor="#2A2F3A", side="right", row=r, col=1, tickformat="f", hoverformat="f", tickfont=dict(size=10))
+        # Format y-axes to display full price without scientific truncation.
+        # automargin=True lets Plotly grow the right margin further on its
+        # own if a label (e.g. a 5-digit price) still wouldn't fit in the
+        # fixed margin above, instead of silently cutting the text off.
+        fig.update_yaxes(
+            gridcolor="#2A2F3A", side="right", row=r, col=1,
+            tickformat="f", hoverformat="f", tickfont=dict(size=10),
+            automargin=True, ticklabelposition="outside right",
+        )
 
     def _padded_range(value_lists, pad_frac=0.12):
         chunks = []
@@ -1133,37 +1142,52 @@ def render_zoomable_chart(fig, key, height=950):
 # TOP-MOVER QUICK-GLANCE BOXES (FONT SIZE 11) — FULLY CLICKABLE CARDS
 # =====================================================================
 # These boxes no longer have a separate "Open XYZ" button underneath them.
-# Instead, the whole card (or, in list boxes, each row) IS the click
-# target. This is done by layering a fully-transparent Streamlit button
-# directly on top of the rendered HTML card using a small CSS negative
-# margin, keyed to a unique marker class on the card. Clicking anywhere
-# on the card fires the same on_click as the old button used to.
-_QFX_SINGLE_CARD_HEIGHT = 94   # px — header + name + price + change line
-_QFX_ROW_HEIGHT = 32           # px — one "N. TICKER   ▲ x.xx%" row
-
-def _render_clickable_html(marker, inner_html, height_px, extra_style=""):
-    """Render one HTML block tagged with `marker`, then inject the CSS that
-    overlays the very next Streamlit button on top of it."""
-    st.markdown(
-        f"<div class='{marker}' style='cursor:pointer;{extra_style}'>{inner_html}</div>",
-        unsafe_allow_html=True,
-    )
-    st.markdown(
-        f"""<style>
-        .{marker}:hover {{ border-color: {COLOR_TEXT_MUTED} !important; }}
-        div[data-testid="stMarkdown"]:has(.{marker}) + div[data-testid="stButton"] {{
-            margin-top: -{height_px}px;
-            margin-bottom: 0px;
-        }}
-        div[data-testid="stMarkdown"]:has(.{marker}) + div[data-testid="stButton"] > button {{
-            height: {height_px}px;
-            width: 100%;
-            opacity: 0;
-            cursor: pointer;
-        }}
-        </style>""",
-        unsafe_allow_html=True,
-    )
+# Instead the whole card (or, in list boxes, each row) IS the click target.
+#
+# How: each card/row is rendered inside its own st.container(), which
+# Streamlit backs with one wrapping <div>. We tag the HTML card with a
+# unique marker class, then use a CSS `:has()` rule to turn that specific
+# wrapping div into a positioning context (position: relative) and stretch
+# the invisible button inside it to `inset: 0` (position: absolute,
+# 100% width/height). Because the button is sized off the container's own
+# rendered box rather than a hand-guessed pixel height, it always matches
+# the card exactly — no leftover sliver of button poking out below it.
+def _render_clickable_html(marker, inner_html, extra_style="", key_prefix=None, on_click=None, args=None):
+    """Render one HTML card tagged with `marker` plus an invisible button
+    stretched over it (inset:0), inside a shared container so the two
+    always share the same box."""
+    with st.container():
+        st.markdown(
+            f"<div class='{marker}' style='cursor:pointer;{extra_style}'>{inner_html}</div>",
+            unsafe_allow_html=True,
+        )
+        st.markdown(
+            f"""<style>
+            div[data-testid="stVerticalBlock"]:has(> div[data-testid="stElementContainer"] .{marker}),
+            div[data-testid="stVerticalBlock"]:has(.{marker}):has(button) {{
+                position: relative;
+            }}
+            div[data-testid="stVerticalBlock"]:has(.{marker}) div[data-testid="stButton"] {{
+                position: absolute;
+                inset: 0;
+                margin: 0;
+                z-index: 5;
+            }}
+            div[data-testid="stVerticalBlock"]:has(.{marker}) div[data-testid="stButton"] button {{
+                width: 100%;
+                height: 100%;
+                min-height: 100%;
+                opacity: 0;
+                cursor: pointer;
+                padding: 0;
+                border: none;
+                background: transparent;
+            }}
+            .{marker}:hover {{ border-color: {COLOR_TEXT_MUTED} !important; }}
+            </style>""",
+            unsafe_allow_html=True,
+        )
+        st.button(" ", key=f"{key_prefix}_btn", on_click=on_click, args=args)
 
 def render_clickable_single_box(title, movers, key_prefix, on_click):
     """'Top Commodity' / 'Top Forex' style box: one card, whole card clicks
@@ -1189,15 +1213,15 @@ def render_clickable_single_box(title, movers, key_prefix, on_click):
     )
     marker = f"qfx-hit-{key_prefix}"
     _render_clickable_html(
-        marker, inner, _QFX_SINGLE_CARD_HEIGHT,
+        marker, inner,
         extra_style=(
             f"background-color:{COLOR_PANEL_BG};border:1px solid {COLOR_BORDER};"
             f"border-radius:6px;padding:10px 14px;margin-bottom:12px;"
         ),
+        key_prefix=key_prefix, on_click=on_click, args=(best["symbol"], best["display"]),
     )
-    st.button(" ", key=f"{key_prefix}_btn", on_click=on_click, args=(best["symbol"], best["display"]))
 
-def render_clickable_list_box(title, movers, key_prefix, on_click, value_key="chg", value_fmt=None):
+def render_clickable_list_box(title, movers, key_prefix, on_click, value_fmt=None):
     """'Top 5 US100' / 'Top 5 Nifty200' / scanner-style box: a static
     header followed by one clickable row per entry — clicking a row opens
     that ticker's chart directly, with no separate button beside it."""
@@ -1232,13 +1256,13 @@ def render_clickable_list_box(title, movers, key_prefix, on_click, value_key="ch
         margin = "12px" if is_last else "0px"
         marker = f"qfx-hit-{key_prefix}-{idx}"
         _render_clickable_html(
-            marker, inner, _QFX_ROW_HEIGHT,
+            marker, inner,
             extra_style=(
                 f"background-color:{COLOR_PANEL_BG};border:1px solid {COLOR_BORDER};border-top:none;"
                 f"border-radius:{radius};padding:6px 14px;margin-bottom:{margin};"
             ),
+            key_prefix=f"{key_prefix}_{idx}", on_click=on_click, args=(m["symbol"], m["display"]),
         )
-        st.button(" ", key=f"{key_prefix}_{idx}_btn", on_click=on_click, args=(m["symbol"], m["display"]))
 
 # =====================================================================
 # SIDEBAR CONTROLS

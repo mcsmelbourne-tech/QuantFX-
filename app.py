@@ -526,7 +526,7 @@ def fetch_top_n_movers(symbols_tuple, n=1):
             closes = sub["Close"].dropna()
             if len(closes) < 2:
                 continue
-            last_price = float(closes.iloc[-1])
+            last_price = format_price(closes.iloc[-1])
             prev_price = float(closes.iloc[-2])
             if prev_price == 0:
                 continue

@@ -180,6 +180,60 @@ def detect_macd_crossovers(renko_df):
     return macd_signals, macd_types
 
 # =====================================================================
+# FULL-PRECISION PRICE FORMATTING
+# =====================================================================
+def format_price(value):
+    """Format a price with enough decimals to never truncate small values
+    (e.g. FX pairs) while trimming meaningless trailing zeros. Replaces the
+    old ':f' + rstrip('0') pattern, which could still read as only 2-3
+    significant digits for very small quotes."""
+    try:
+        value = float(value)
+    except (TypeError, ValueError):
+        return str(value)
+    if value != value:  # NaN check
+        return "—"
+    abs_val = abs(value)
+    if abs_val == 0:
+        decimals = 2
+    elif abs_val >= 1000:
+        decimals = 3
+    elif abs_val >= 100:
+        decimals = 4
+    elif abs_val >= 1:
+        decimals = 5
+    else:
+        decimals = 8
+    s = f"{value:.{decimals}f}"
+    if "." in s:
+        s = s.rstrip("0").rstrip(".")
+    return s
+
+# =====================================================================
+# EMA CROSSOVER DETECTION (both bullish & bearish — "both sides")
+# =====================================================================
+def detect_ema_cross_signal(close_series, fast=21, slow=50, lookback=1):
+    """Detect the most recent EMA fast/slow crossover in either direction
+    (bullish golden cross OR bearish death cross) within the last
+    `lookback` bars. Returns None if no cross occurred in that window."""
+    if close_series is None or len(close_series) < slow + 2:
+        return None
+    ema_fast_s = close_series.ewm(span=fast, adjust=False).mean()
+    ema_slow_s = close_series.ewm(span=slow, adjust=False).mean()
+    n = len(close_series)
+    earliest = max(n - 1 - lookback, 1)
+    for i in range(n - 1, earliest - 1, -1):
+        f_now, s_now = ema_fast_s.iloc[i], ema_slow_s.iloc[i]
+        f_prev, s_prev = ema_fast_s.iloc[i - 1], ema_slow_s.iloc[i - 1]
+        if f_now > s_now and f_prev <= s_prev:
+            return {"direction": "BUY", "bars_ago": n - 1 - i,
+                    "fast": float(f_now), "slow": float(s_now)}
+        if f_now < s_now and f_prev >= s_prev:
+            return {"direction": "SELL", "bars_ago": n - 1 - i,
+                    "fast": float(f_now), "slow": float(s_now)}
+    return None
+
+# =====================================================================
 # SMART MONEY STRUCTURE — BOS & CHoCH
 # =====================================================================
 def detect_market_structure(high, low, close, swing_lookback=5, brick_type=None):
@@ -537,9 +591,9 @@ def evaluate_oracle_score(symbol, display=None):
         structure_type = structure_event["type"] if structure_event else None
         
         # Display full share price without rounding cutoff
-        price_fmt = f"{last_close:f}".rstrip('0').rstrip('.')
-        high_fmt = f"{high:f}".rstrip('0').rstrip('.')
-        low_fmt = f"{low:f}".rstrip('0').rstrip('.')
+        price_fmt = format_price(last_close)
+        high_fmt = format_price(high)
+        low_fmt = format_price(low)
         
         return {
             "Ticker": display or symbol,
@@ -553,10 +607,10 @@ def evaluate_oracle_score(symbol, display=None):
             "Structure": structure_label,
             "StructureType": structure_type,
             "Score": score_str,
-            "SL": f"${sl:f}".rstrip('0').rstrip('.'),
-            "TP1": f"${tp1:f}".rstrip('0').rstrip('.'),
+            "SL": f"${format_price(sl)}",
+            "TP1": f"${format_price(tp1)}",
             "TP1_PCT": f"{tp1_pct:.2f}%",
-            "TP2": f"${tp2:f}".rstrip('0').rstrip('.')
+            "TP2": f"${format_price(tp2)}"
         }
     except Exception:
         return None
@@ -601,10 +655,10 @@ def compute_7day_outlook(symbol, display, period="1y", interval="1d"):
         bias_score = 0.0
         if last_ema21 > last_ema50:
             bias_score += 1
-            reasons.append(f"EMA21 (${last_ema21:f}) is above EMA50 (${last_ema50:f}), keeping the trend bullish.")
+            reasons.append(f"EMA21 (${format_price(last_ema21)}) is above EMA50 (${format_price(last_ema50)}), keeping the trend bullish.")
         else:
             bias_score -= 1
-            reasons.append(f"EMA21 (${last_ema21:f}) is below EMA50 (${last_ema50:f}), keeping the trend bearish.")
+            reasons.append(f"EMA21 (${format_price(last_ema21)}) is below EMA50 (${format_price(last_ema50)}), keeping the trend bearish.")
         renko_df, _ = build_atr_renko_df(
             data, atr_period=21, atr_multiplier=3.0,
             ema_fast=21, ema_slow=50,
@@ -626,7 +680,7 @@ def compute_7day_outlook(symbol, display, period="1y", interval="1d"):
                 bars_ago = structure_event["bars_ago"]
                 bias_score += structure_weight.get(s_type, 0.0)
                 recency = "on the latest brick" if bars_ago == 0 else f"{bars_ago} bricks ago"
-                reasons.append(f"Structure {structure_event['label']} confirmed at ${s_level:f} ({recency}).")
+                reasons.append(f"Structure {structure_event['label']} confirmed at ${format_price(s_level)} ({recency}).")
         direction = "Bullish" if bias_score >= 2.0 else ("Bearish" if bias_score <= -2.0 else "Neutral / Consolidation")
         weekly_move_pct = atr_pct * np.sqrt(bars_in_7_days)
         tilt = float(np.clip(bias_score / 3.0, -1, 1))
@@ -726,7 +780,7 @@ def create_chart_figure(renko_df, ha_df, brick_size, display, ema_fast, ema_slow
         vertical_spacing=0.05,
         subplot_titles=(
             f"{display} — Heikin Ashi (Green Buy / Red Sell Aligned with EMAs)",
-            f"{display} — ATR Renko & Aligned Buy/Sell Signal Buttons (brick ≈ {brick_size:f})",
+            f"{display} — ATR Renko & Aligned Buy/Sell Signal Buttons (brick ≈ {format_price(brick_size)})",
             "TradingView MACD (Histogram, MACD Line & Signal Line)",
             "RSI (Synchronized Green/Red Buy & Sell Zones)",
         ),
@@ -972,7 +1026,7 @@ def render_top_box(title, movers, mode="single"):
         best = movers[0]
         color = COLOR_GREEN if best["chg"] >= 0 else COLOR_RED
         arrow = "▲" if best["chg"] >= 0 else "▼"
-        price_str = f"${best['price']:f}".rstrip('0').rstrip('.')
+        price_str = f"${format_price(best['price'])}"
         body = (
             f"<div style='font-size:11px;font-weight:700;color:{COLOR_TEXT_MAIN};'>{best['display']}</div>"
             f"<div style='font-size:11px;color:{COLOR_TEXT_MUTED};'>{price_str}</div>"
@@ -1053,6 +1107,8 @@ st.sidebar.markdown("---")
 st.sidebar.markdown("### 🔔 Automated Triggers")
 if st.sidebar.button("🚀 Run Rule-Based Telegram Scan", use_container_width=True):
     triggered_messages = []
+
+    # --- Commodities & Forex: structure events (BOS/CHoCH) ---
     fx_comm_watchlist = [("Commodities", COMMODITIES), ("Forex", FOREX_PAIRS)]
     for cat_name, symbols in fx_comm_watchlist:
         for sym, disp in symbols:
@@ -1063,9 +1119,48 @@ if st.sidebar.button("🚀 Run Rule-Based Telegram Scan", use_container_width=Tr
                     ev = latest_structure_event(renko_df, lookback=3)
                     if ev and ev["type"] in ["CHOCH_DEMAND", "CHOCH_SUPPLY", "BOS_DEMAND", "BOS_SUPPLY"]:
                         if ev["bars_ago"] <= 1:
-                            triggered_messages.append(f"🚨 *[30m FX/Comm]* *{disp}* triggered *{ev['label']}* at `${ev['level']:f}`")
+                            triggered_messages.append(f"🚨 *[30m FX/Comm]* *{disp}* triggered *{ev['label']}* at `${format_price(ev['level'])}`")
             except Exception:
                 continue
+
+    # --- Commodities & Forex: EMA fast/slow cross, BOTH directions (buy & sell) ---
+    for cat_name, symbols in fx_comm_watchlist:
+        for sym, disp in symbols:
+            try:
+                df = fetch_live_ohlc(sym, period="10d", interval="30m")
+                if df.empty:
+                    continue
+                cross = detect_ema_cross_signal(df["Close"], fast=int(ema_fast), slow=int(ema_slow), lookback=1)
+                if cross:
+                    arrow = "🟢 BUY" if cross["direction"] == "BUY" else "🔴 SELL"
+                    triggered_messages.append(
+                        f"🚨 *[{cat_name} • EMA{int(ema_fast)}/{int(ema_slow)} Cross]* *{disp}* {arrow} "
+                        f"(EMA{int(ema_fast)} `${format_price(cross['fast'])}` vs EMA{int(ema_slow)} `${format_price(cross['slow'])}`)"
+                    )
+            except Exception:
+                continue
+
+    # --- US100 & Nifty200: fixed EMA 9 / EMA 20 cross, BOTH directions ---
+    idx_watchlist = [
+        ("US100", list(zip(us100_yf, us100_raw + ["IXIC"]))),
+        ("Nifty200", list(zip(nifty200_yf, nifty200_raw))),
+    ]
+    for cat_name, symbols in idx_watchlist:
+        for sym, disp in symbols:
+            try:
+                df = fetch_live_ohlc(sym, period="1mo", interval="1d")
+                if df.empty:
+                    continue
+                cross = detect_ema_cross_signal(df["Close"], fast=9, slow=20, lookback=1)
+                if cross:
+                    arrow = "🟢 BUY" if cross["direction"] == "BUY" else "🔴 SELL"
+                    triggered_messages.append(
+                        f"🚨 *[{cat_name} • EMA9/20 Cross]* *{disp}* {arrow} "
+                        f"(EMA9 `${format_price(cross['fast'])}` vs EMA20 `${format_price(cross['slow'])}`)"
+                    )
+            except Exception:
+                continue
+
     if triggered_messages:
         combined_msg = "📢 *QuantFX Automated Triggers*\n\n" + "\n".join(triggered_messages)
         ok, m = send_telegram_alert(combined_msg, tg_token, tg_chat)
@@ -1135,7 +1230,7 @@ with tab_chart:
                 if st.button("📨 Send current signal to Telegram"):
                     msg = (
                         f"*{current_display}* ({current_symbol})\n"
-                        f"Price: ${float(raw_df['Close'].iloc[-1]):f}\n"
+                        f"Price: ${format_price(float(raw_df['Close'].iloc[-1]))}\n"
                         f"Confirmed Signal: {last_confirmed}\n"
                         f"EMA Signal: {last_signal}\n"
                         f"Pullback Signal: {last_pullback}\n"
@@ -1166,12 +1261,12 @@ with tab_outlook:
             unsafe_allow_html=True,
         )
         st.markdown(
-            f"Projected 7-day macro range: **${outlook['range_low']:f} – ${outlook['range_high']:f}** "
-            f"(last close: ${outlook['last_close']:f})"
+            f"Projected 7-day macro range: **${format_price(outlook['range_low'])} – ${format_price(outlook['range_high'])}** "
+            f"(last close: ${format_price(outlook['last_close'])})"
         )
         if outlook["structure_event"]:
             se = outlook["structure_event"]
-            st.caption(f"Latest structure event: {se['label']} at ${se['level']:f} ({se['bars_ago']} bricks ago)")
+            st.caption(f"Latest structure event: {se['label']} at ${format_price(se['level'])} ({se['bars_ago']} bricks ago)")
         st.markdown("#### Reasoning")
         for r in outlook["reasons"]:
             st.markdown(f"- {r}")
@@ -1204,3 +1299,70 @@ with tab_scanner:
         )
     elif df_res is not None:
         st.info("No results — the data source may be rate-limiting or the symbols returned no data.")
+
+    st.markdown("---")
+    st.markdown("#### 📐 EMA Cross Scanner")
+    st.caption(
+        f"Commodities & Forex use the sidebar EMA settings (EMA {int(ema_fast)}/{int(ema_slow)}) "
+        "and flag a cross in **either direction** (buy or sell). US100 & Nifty200 always use a "
+        "fixed **EMA 9 / EMA 20** cross, regardless of the sidebar EMA settings."
+    )
+    if st.button("▶️ Run EMA cross scan", type="secondary"):
+        ema_rows = []
+
+        for cat_name, symbols in [("Commodities", COMMODITIES), ("Forex", FOREX_PAIRS)]:
+            for sym, disp in symbols:
+                try:
+                    df = fetch_live_ohlc(sym, period="10d", interval="30m")
+                    if df.empty:
+                        continue
+                    cross = detect_ema_cross_signal(df["Close"], fast=int(ema_fast), slow=int(ema_slow), lookback=1)
+                    if cross:
+                        ema_rows.append({
+                            "Category": cat_name,
+                            "Ticker": disp,
+                            "EMA Pair": f"{int(ema_fast)}/{int(ema_slow)}",
+                            "Direction": cross["direction"],
+                            "Fast EMA": f"${format_price(cross['fast'])}",
+                            "Slow EMA": f"${format_price(cross['slow'])}",
+                            "Bars Ago": cross["bars_ago"],
+                        })
+                except Exception:
+                    continue
+
+        for cat_name, symbols in [
+            ("US100", list(zip(us100_yf, us100_raw + ["IXIC"]))),
+            ("Nifty200", list(zip(nifty200_yf, nifty200_raw))),
+        ]:
+            for sym, disp in symbols:
+                try:
+                    df = fetch_live_ohlc(sym, period="1mo", interval="1d")
+                    if df.empty:
+                        continue
+                    cross = detect_ema_cross_signal(df["Close"], fast=9, slow=20, lookback=1)
+                    if cross:
+                        ema_rows.append({
+                            "Category": cat_name,
+                            "Ticker": disp,
+                            "EMA Pair": "9/20",
+                            "Direction": cross["direction"],
+                            "Fast EMA": f"${format_price(cross['fast'])}",
+                            "Slow EMA": f"${format_price(cross['slow'])}",
+                            "Bars Ago": cross["bars_ago"],
+                        })
+                except Exception:
+                    continue
+
+        st.session_state["ema_cross_results"] = pd.DataFrame(ema_rows)
+
+    ema_df = st.session_state.get("ema_cross_results")
+    if ema_df is not None and not ema_df.empty:
+        def _ema_row_style(row):
+            color = COLOR_GREEN if row["Direction"] == "BUY" else COLOR_RED
+            return [f"color: {color}" if col == "Direction" else "" for col in row.index]
+        st.dataframe(
+            ema_df.style.apply(_ema_row_style, axis=1),
+            use_container_width=True, hide_index=True,
+        )
+    elif ema_df is not None:
+        st.info("No EMA crosses detected right now for any watchlist symbol.")

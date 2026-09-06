@@ -548,11 +548,57 @@ def compute_rsi(close_series, period=14):
     return 100 - (100 / (1 + rs))
 
 @st.cache_data(ttl=300, show_spinner=False)
-def scan_ema9_cross20_rsi_above(symbols_tuple, ema_fast=9, ema_slow=20,
-                                 rsi_threshold=51.0, lookback=1, max_results=8):
-    """Scan a watchlist for symbols where EMA9 has just crossed above EMA20
-    (bullish cross within `lookback` bars) AND the current RSI(14) is above
-    `rsi_threshold`. Used to feed the right-panel 'EMA9/20 + RSI>51' box."""
+def compute_vwap(df, window=20):
+    """Rolling Volume-Weighted Average Price over the last `window` bars,
+    using the typical price (H+L+C)/3. Data here is daily OHLCV (not
+    intraday), so this is a rolling N-day VWAP rather than a true
+    session-anchored intraday VWAP — still a useful "is price rich/cheap
+    relative to recent volume-weighted value" gauge for a daily scanner.
+    Falls back to a simple rolling average of typical price if a symbol
+    has no volume data (common for FX/index pairs on Yahoo Finance)."""
+    typical = (df["High"] + df["Low"] + df["Close"]) / 3.0
+    if "Volume" in df.columns and df["Volume"].fillna(0).sum() > 0:
+        vol = df["Volume"].replace(0, np.nan)
+        pv = typical * vol
+        vwap = pv.rolling(window, min_periods=1).sum() / vol.rolling(window, min_periods=1).sum()
+    else:
+        vwap = typical.rolling(window, min_periods=1).mean()
+    return vwap
+
+@st.cache_data(ttl=300, show_spinner=False)
+def compute_adx(high, low, close, period=14):
+    """Standard Wilder ADX (trend-strength, 0-100) plus the +DI/-DI lines
+    it's built from. Used to confirm an EMA cross is happening in a
+    genuinely trending (not choppy/sideways) market."""
+    high = pd.Series(high).reset_index(drop=True)
+    low = pd.Series(low).reset_index(drop=True)
+    close = pd.Series(close).reset_index(drop=True)
+    up_move = high.diff()
+    down_move = -low.diff()
+    plus_dm = np.where((up_move > down_move) & (up_move > 0), up_move, 0.0)
+    minus_dm = np.where((down_move > up_move) & (down_move > 0), down_move, 0.0)
+    tr1 = high - low
+    tr2 = (high - close.shift(1)).abs()
+    tr3 = (low - close.shift(1)).abs()
+    tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+    atr = tr.ewm(alpha=1 / period, adjust=False).mean()
+    plus_di = 100 * pd.Series(plus_dm).ewm(alpha=1 / period, adjust=False).mean() / atr.replace(0, np.nan)
+    minus_di = 100 * pd.Series(minus_dm).ewm(alpha=1 / period, adjust=False).mean() / atr.replace(0, np.nan)
+    dx = (plus_di - minus_di).abs() / (plus_di + minus_di).replace(0, np.nan) * 100
+    adx = dx.ewm(alpha=1 / period, adjust=False).mean()
+    return adx, plus_di, minus_di
+
+@st.cache_data(ttl=300, show_spinner=False)
+def scan_ema9_cross21_rsi_vwap_adx(symbols_tuple, ema_fast=9, ema_slow=21,
+                                    rsi_threshold=51.0, adx_threshold=20.0,
+                                    lookback=1, max_results=8):
+    """Scan a watchlist for symbols where, on the daily chart:
+      • EMA9 has just crossed above EMA21 (bullish cross within `lookback` bars)
+      • RSI(14) is above `rsi_threshold`
+      • price is trading above its rolling VWAP (confirms buyers in control)
+      • ADX(14) is above `adx_threshold` (confirms a real trend, not chop)
+    All four values are also returned per hit so the box can display them,
+    not just filter on them. Feeds the right-panel EMA9/21 scanner box."""
     results = []
     for sym, disp in symbols_tuple:
         try:
@@ -567,16 +613,27 @@ def scan_ema9_cross20_rsi_above(symbols_tuple, ema_fast=9, ema_slow=20,
             last_rsi = float(rsi_series.iloc[-1])
             if np.isnan(last_rsi) or last_rsi <= rsi_threshold:
                 continue
+            vwap_series = compute_vwap(df, window=20)
+            last_vwap = float(vwap_series.iloc[-1])
             last_price = float(close.iloc[-1])
+            above_vwap = last_price > last_vwap
+            if not above_vwap:
+                continue
+            adx_series, _, _ = compute_adx(df["High"], df["Low"], df["Close"], period=14)
+            last_adx = float(adx_series.iloc[-1])
+            if np.isnan(last_adx) or last_adx <= adx_threshold:
+                continue
             prev_price = float(close.iloc[-2]) if len(close) > 1 else last_price
             chg = ((last_price - prev_price) / prev_price) * 100 if prev_price else 0.0
             results.append({
-                "symbol": sym, "display": disp, "price": last_price,
-                "chg": chg, "rsi": last_rsi, "bars_ago": cross["bars_ago"],
+                "symbol": sym, "display": disp, "price": last_price, "chg": chg,
+                "rsi": last_rsi, "vwap": last_vwap, "above_vwap": above_vwap,
+                "adx": last_adx, "ema_fast": float(cross["fast"]), "ema_slow": float(cross["slow"]),
+                "bars_ago": cross["bars_ago"],
             })
         except Exception:
             continue
-    results.sort(key=lambda r: r["rsi"], reverse=True)
+    results.sort(key=lambda r: r["adx"], reverse=True)
     return results[:max_results]
 
 def evaluate_oracle_score(symbol, display=None):
@@ -1444,12 +1501,12 @@ if active_view == "📊 Charts":
                 top_forex = fetch_top_n_movers(tuple(FOREX_PAIRS), n=1)
                 top_us100 = fetch_top_n_movers(tuple(zip(us100_yf, us100_raw + ["IXIC"])), n=5)
                 top_nifty200 = fetch_top_n_movers(tuple(zip(nifty200_yf, nifty200_raw)), n=5)
-                ema9_20_rsi_watchlist = tuple(
+                ema_scanner_watchlist = tuple(
                     list(zip(us100_yf, us100_raw + ["IXIC"])) + list(zip(nifty200_yf, nifty200_raw))
                 )
-                ema9_20_rsi_hits = scan_ema9_cross20_rsi_above(
-                    ema9_20_rsi_watchlist, ema_fast=9, ema_slow=20,
-                    rsi_threshold=51.0, lookback=1, max_results=8,
+                ema_scanner_hits = scan_ema9_cross21_rsi_vwap_adx(
+                    ema_scanner_watchlist, ema_fast=9, ema_slow=21,
+                    rsi_threshold=51.0, adx_threshold=20.0, lookback=1, max_results=8,
                 )
 
             fig = create_chart_figure(renko_df, ha_df, brick_size, chart_display, ema_fast, ema_slow)
@@ -1484,18 +1541,24 @@ if active_view == "📊 Charts":
                     st.success(m) if ok else st.error(m)
 
             with right_panel_col:
-                # --- NEW: EMA9/20 bullish cross + RSI>51 scanner box, top of panel ---
-                def _rsi_value_html(m):
+                # --- EMA9/21 bullish cross + RSI>51 + VWAP + ADX scanner box, top of panel ---
+                def _ema_scanner_value_html(m):
                     color = COLOR_GREEN if m["chg"] >= 0 else COLOR_RED
                     arrow = "▲" if m["chg"] >= 0 else "▼"
+                    e9 = format_price(m["ema_fast"])
+                    e21 = format_price(m["ema_slow"])
                     return (
-                        f"<span style='white-space:nowrap;'>"
+                        f"<div style='text-align:right;'>"
+                        f"<div style='white-space:nowrap;'>"
                         f"<span style='color:{color};'>{arrow} {m['chg']:+.2f}%</span>"
-                        f"<span style='color:{COLOR_TEXT_MUTED};'> · RSI {m['rsi']:.1f}</span></span>"
+                        f"<span style='color:{COLOR_TEXT_MUTED};'> · RSI {m['rsi']:.0f}</span></div>"
+                        f"<div style='white-space:nowrap;font-size:10px;color:{COLOR_TEXT_MUTED};'>"
+                        f"ADX {m['adx']:.0f} · E9 {e9}/E21 {e21} · <span style='color:{COLOR_GREEN};'>&gt;VWAP</span>"
+                        f"</div></div>"
                     )
                 render_clickable_list_box(
-                    "⚡ EMA9↗20 Cross + RSI>51", ema9_20_rsi_hits,
-                    key_prefix="ema920rsi", on_click=go_to_chart, value_fmt=_rsi_value_html,
+                    "⚡ EMA9↗21 Cross · RSI/VWAP/ADX", ema_scanner_hits,
+                    key_prefix="ema921scan", on_click=go_to_chart, value_fmt=_ema_scanner_value_html,
                 )
 
                 # --- Existing top-mover boxes — now the whole card/row is

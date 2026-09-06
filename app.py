@@ -3,7 +3,7 @@ QuantFX Terminal — ATR Renko & Macro Smart Money Structure
 Streamlit rewrite with custom candle coloring, right-side axes, 
 Heikin Ashi EMAs, single-fire pullback signals with blinking animation, 
 blinking round dot buy/sell markers on Heikin Ashi & MACD, targeted multi-market Telegram alerts,
-full share price display, 95% wide charts, font size 10, and right-side top mover cards.
+full share price display, 95% wide charts, font size 10, and right-side top mover cards (font size 11).
 """
 import numpy as np
 import pandas as pd
@@ -963,20 +963,20 @@ def create_chart_figure(renko_df, ha_df, brick_size, display, ema_fast, ema_slow
     return fig
 
 # =====================================================================
-# TOP-MOVER QUICK-GLANCE BOXES
+# TOP-MOVER QUICK-GLANCE BOXES (FONT SIZE 11)
 # =====================================================================
 def render_top_box(title, movers, mode="single"):
     if not movers:
-        body = f"<div style='font-size:10px;color:{COLOR_TEXT_MUTED};'>No data</div>"
+        body = f"<div style='font-size:11px;color:{COLOR_TEXT_MUTED};'>No data</div>"
     elif mode == "single":
         best = movers[0]
         color = COLOR_GREEN if best["chg"] >= 0 else COLOR_RED
         arrow = "▲" if best["chg"] >= 0 else "▼"
         price_str = f"${best['price']:f}".rstrip('0').rstrip('.')
         body = (
-            f"<div style='font-size:10px;font-weight:700;color:{COLOR_TEXT_MAIN};'>{best['display']}</div>"
-            f"<div style='font-size:10px;color:{COLOR_TEXT_MUTED};'>{price_str}</div>"
-            f"<div style='font-size:10px;color:{color};'>{arrow} {best['chg']:+.2f}%</div>"
+            f"<div style='font-size:11px;font-weight:700;color:{COLOR_TEXT_MAIN};'>{best['display']}</div>"
+            f"<div style='font-size:11px;color:{COLOR_TEXT_MUTED};'>{price_str}</div>"
+            f"<div style='font-size:11px;color:{color};'>{arrow} {best['chg']:+.2f}%</div>"
         )
     else:
         rows_html = []
@@ -984,7 +984,7 @@ def render_top_box(title, movers, mode="single"):
             color = COLOR_GREEN if m["chg"] >= 0 else COLOR_RED
             arrow = "▲" if m["chg"] >= 0 else "▼"
             rows_html.append(
-                "<div style='font-size:10px;display:flex;justify-content:space-between;"
+                "<div style='font-size:11px;display:flex;justify-content:space-between;"
                 f"gap:10px;color:{COLOR_TEXT_MAIN};padding:2px 0;'>"
                 f"<span>{idx}. {m['display']}</span>"
                 f"<span style='color:{color};white-space:nowrap;'>{arrow} {m['chg']:+.2f}%</span>"
@@ -994,7 +994,7 @@ def render_top_box(title, movers, mode="single"):
     return (
         f"<div style='background-color:{COLOR_PANEL_BG};border:1px solid {COLOR_BORDER};"
         f"border-radius:6px;padding:10px 14px;margin-bottom:12px;'>"
-        f"<div style='font-size:10px;color:{COLOR_TEXT_MUTED};margin-bottom:6px;font-weight:600;'>{title}</div>"
+        f"<div style='font-size:11px;color:{COLOR_TEXT_MUTED};margin-bottom:6px;font-weight:600;'>{title}</div>"
         f"{body}</div>"
     )
 

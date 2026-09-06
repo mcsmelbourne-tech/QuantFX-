@@ -58,10 +58,10 @@ st.markdown(
     }}
     .qfx-badge {{
         display:inline-block; padding:3px 10px; border-radius:4px;
-        font-weight:700; font-size:10px; letter-spacing:0.5px;
+        font-weight:700; font-size:12px; letter-spacing:0.5px;
     }}
     
-    /* Font size 10 override for chart labels & text elements */
+    /* Global Plotly font size adjustments */
     .js-plotly-plot .plotly .gtitle,
     .js-plotly-plot .plotly .xtitle,
     .js-plotly-plot .plotly .ytitle,
@@ -69,7 +69,7 @@ st.markdown(
     .js-plotly-plot .plotly .xtick text,
     .js-plotly-plot .plotly .ytick text,
     .js-plotly-plot .plotly .annotation text {{
-        font-size: 10px !important;
+        font-size: 12px !important;
     }}
     
     /* Blinking & Pulsing Animation for Buy / Sell Signals & Dots */
@@ -94,7 +94,7 @@ st.markdown(
 )
 
 # =====================================================================
-# TELEGRAM
+# TELEGRAM INTEGRATION
 # =====================================================================
 TG_CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".qfx_telegram_config.json")
 
@@ -764,7 +764,7 @@ def create_chart_figure(renko_df, ha_df, brick_size, display, ema_fast, ema_slow
             x=ha_buy_x, y=ha_buy_btn_y, mode="markers+text",
             marker=dict(color=COLOR_BULL, size=13, symbol="triangle-up"),
             text=["BUY"] * len(ha_buy_x), textposition="bottom center",
-            textfont=dict(color=COLOR_BULL, size=10, family="Arial Black"),
+            textfont=dict(color=COLOR_BULL, size=12, family="Arial Black"),
             name="HA BUY Button",
         ), row=1, col=1)
     if ha_sell_x:
@@ -772,7 +772,7 @@ def create_chart_figure(renko_df, ha_df, brick_size, display, ema_fast, ema_slow
             x=ha_sell_x, y=ha_sell_btn_y, mode="markers+text",
             marker=dict(color=COLOR_BEAR, size=13, symbol="triangle-down"),
             text=["SELL"] * len(ha_sell_x), textposition="top center",
-            textfont=dict(color=COLOR_BEAR, size=10, family="Arial Black"),
+            textfont=dict(color=COLOR_BEAR, size=12, family="Arial Black"),
             name="HA SELL Button",
         ), row=1, col=1)
 
@@ -801,7 +801,7 @@ def create_chart_figure(renko_df, ha_df, brick_size, display, ema_fast, ema_slow
             x=renko_buy_x, y=renko_buy_y, mode="markers+text",
             marker=dict(color=COLOR_BULL, size=14, symbol="triangle-up"),
             text=["BUY"] * len(renko_buy_x), textposition="bottom center",
-            textfont=dict(color=COLOR_BULL, size=10, family="Arial Black"),
+            textfont=dict(color=COLOR_BULL, size=12, family="Arial Black"),
             name="Renko BUY Button",
         ), row=2, col=1)
     if renko_sell_x:
@@ -809,7 +809,7 @@ def create_chart_figure(renko_df, ha_df, brick_size, display, ema_fast, ema_slow
             x=renko_sell_x, y=renko_sell_y, mode="markers+text",
             marker=dict(color=COLOR_BEAR, size=14, symbol="triangle-down"),
             text=["SELL"] * len(renko_sell_x), textposition="top center",
-            textfont=dict(color=COLOR_BEAR, size=10, family="Arial Black"),
+            textfont=dict(color=COLOR_BEAR, size=12, family="Arial Black"),
             name="Renko SELL Button",
         ), row=2, col=1)
     struct_style = {
@@ -834,7 +834,7 @@ def create_chart_figure(renko_df, ha_df, brick_size, display, ema_fast, ema_slow
             )
             fig.add_annotation(
                 x=i, y=s_level, text=label, showarrow=False,
-                font=dict(color="#FFFFFF", size=10), bgcolor="#1E222D",
+                font=dict(color="#FFFFFF", size=12), bgcolor="#1E222D",
                 bordercolor=color, borderwidth=1, row=2, col=1,
                 yshift=14 if s_type in ("BOS_DEMAND", "CHOCH_DEMAND") else -14,
             )
@@ -863,7 +863,7 @@ def create_chart_figure(renko_df, ha_df, brick_size, display, ema_fast, ema_slow
             x=macd_buy_x, y=macd_buy_y, mode="markers+text",
             marker=dict(color=COLOR_BULL, size=11, symbol="triangle-up"),
             text=["BUY"] * len(macd_buy_x), textposition="bottom center",
-            textfont=dict(color=COLOR_BULL, size=10, family="Arial Black"),
+            textfont=dict(color=COLOR_BULL, size=12, family="Arial Black"),
             name="MACD BUY Button",
         ), row=3, col=1)
     if macd_sell_x:
@@ -871,7 +871,7 @@ def create_chart_figure(renko_df, ha_df, brick_size, display, ema_fast, ema_slow
             x=macd_sell_x, y=macd_sell_y, mode="markers+text",
             marker=dict(color=COLOR_BEAR, size=11, symbol="triangle-down"),
             text=["SELL"] * len(macd_sell_x), textposition="top center",
-            textfont=dict(color=COLOR_BEAR, size=10, family="Arial Black"),
+            textfont=dict(color=COLOR_BEAR, size=12, family="Arial Black"),
             name="MACD SELL Button",
         ), row=3, col=1)
 
@@ -892,16 +892,15 @@ def create_chart_figure(renko_df, ha_df, brick_size, display, ema_fast, ema_slow
         height=950,
         paper_bgcolor=COLOR_BG_DARK,
         plot_bgcolor=COLOR_BG_DARK,
-        font=dict(color=COLOR_TEXT_MUTED, size=10),
-        legend=dict(orientation="h", y=1.02, x=0, bgcolor="rgba(0,0,0,0)", font=dict(size=10)),
+        font=dict(color=COLOR_TEXT_MUTED, size=12),
+        legend=dict(orientation="h", y=1.02, x=0, bgcolor="rgba(0,0,0,0)", font=dict(size=12)),
         margin=dict(l=10, r=10, t=50, b=10),
         xaxis_rangeslider_visible=False,
         xaxis2_rangeslider_visible=False,
     )
     for r in range(1, 5):
-        fig.update_xaxes(showgrid=False, row=r, col=1, matches="x", tickfont=dict(size=10))
-        # Format y-axes to display full price without scientific truncation
-        fig.update_yaxes(gridcolor="#2A2F3A", side="right", row=r, col=1, tickformat="f", tickfont=dict(size=10))
+        fig.update_xaxes(showgrid=False, row=r, col=1, matches="x", tickfont=dict(size=12))
+        fig.update_yaxes(gridcolor="#2A2F3A", side="right", row=r, col=1, tickformat="f", tickfont=dict(size=12))
     def _padded_range(value_lists, pad_frac=0.12):
         chunks = []
         for vals in value_lists:
@@ -1063,7 +1062,7 @@ if st.sidebar.button("🚀 Run Rule-Based Telegram Scan", use_container_width=Tr
 # =====================================================================
 st.markdown(
     f"<h2 style='color:#FFFFFF;margin-bottom:0;'>{current_display} "
-    f"<span style='color:{COLOR_TEXT_MUTED};font-size:10px;'>({current_symbol}) · {interval}</span></h2>",
+    f"<span style='color:{COLOR_TEXT_MUTED};font-size:12px;'>({current_symbol}) · {interval}</span></h2>",
     unsafe_allow_html=True,
 )
 tab_chart, tab_outlook, tab_scanner = st.tabs(["📊 Charts", "🧭 7-Day Outlook", "🔎 Scanner"])
@@ -1142,7 +1141,7 @@ with tab_outlook:
             COLOR_RED if outlook["direction"] == "Bearish" else COLOR_TEXT_MUTED
         )
         st.markdown(
-            f"<span class='qfx-badge' style='background:{dir_color}22;color:{dir_color};font-size:10px;'>"
+            f"<span class='qfx-badge' style='background:{dir_color}22;color:{dir_color};font-size:12px;'>"
             f"{outlook['direction']}</span>",
             unsafe_allow_html=True,
         )

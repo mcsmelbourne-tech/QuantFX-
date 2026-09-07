@@ -15,7 +15,6 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import json
 import os
-
 # =====================================================================
 # PAGE CONFIG
 # =====================================================================
@@ -25,7 +24,6 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
 )
-
 # =====================================================================
 # COLORS – TradingView-style dark + neon
 # =====================================================================
@@ -47,7 +45,6 @@ COLOR_BOS_DEMAND = "#26FF9A"
 COLOR_BOS_SUPPLY = "#FF4F7B"
 COLOR_CHOCH_DEMAND = "#00D4FF"
 COLOR_CHOCH_SUPPLY = "#FF9900"
-
 # =====================================================================
 # GLOBAL DARK THEME CSS & BLINKING ANIMATION
 # =====================================================================
@@ -81,12 +78,10 @@ st.markdown(
     """,
     unsafe_allow_html=True,
 )
-
 # =====================================================================
 # TELEGRAM
 # =====================================================================
 TG_CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".qfx_telegram_config.json")
-
 def load_telegram_config():
     try:
         if os.path.exists(TG_CONFIG_PATH):
@@ -96,7 +91,6 @@ def load_telegram_config():
     except Exception:
         pass
     return "", ""
-
 def save_telegram_config(token, chat_id):
     try:
         with open(TG_CONFIG_PATH, "w") as f:
@@ -104,7 +98,6 @@ def save_telegram_config(token, chat_id):
         return True, "Saved."
     except Exception as e:
         return False, str(e)
-
 def send_telegram_alert(message, token, chat_id):
     token = (token or "").strip()
     chat_id = (chat_id or "").strip()
@@ -120,7 +113,6 @@ def send_telegram_alert(message, token, chat_id):
         return False, data.get("description", "Unknown Telegram API error")
     except Exception as e:
         return False, str(e)
-
 # =====================================================================
 # INDICATORS & HEIKIN ASHI / MACD
 # =====================================================================
@@ -144,7 +136,6 @@ def compute_heikin_ashi(df, ema_fast=21, ema_slow=50):
             ha_signals[i] = "SELL"
     ha["Signal"] = ha_signals
     return ha
-
 def detect_macd_crossovers(renko_df):
     macd = renko_df["MACD"].values
     signal = renko_df["MACD_Signal"].values
@@ -160,7 +151,6 @@ def detect_macd_crossovers(renko_df):
             macd_signals[i] = "SELL"
             macd_types[i] = "MACD Cross Down"
     return macd_signals, macd_types
-
 # =====================================================================
 # FULL-PRECISION PRICE FORMATTING
 # =====================================================================
@@ -186,7 +176,6 @@ def format_price(value):
     if "." in s:
         s = s.rstrip("0").rstrip(".")
     return s
-
 # =====================================================================
 # EMA CROSSOVER DETECTION
 # =====================================================================
@@ -207,7 +196,6 @@ def detect_ema_cross_signal(close_series, fast=21, slow=50, lookback=1):
             return {"direction": "SELL", "bars_ago": n - 1 - i,
                     "fast": float(f_now), "slow": float(s_now)}
     return None
-
 # =====================================================================
 # SMART MONEY STRUCTURE — BOS & CHoCH
 # =====================================================================
@@ -296,14 +284,12 @@ def detect_market_structure(high, low, close, swing_lookback=5, brick_type=None)
         "StructureSeq": seq_arr,
         "Trend": trend_arr,
     })
-
 STRUCTURE_LABELS = {
     "BOS_DEMAND": "B-S",
     "BOS_SUPPLY": "B-D",
     "CHOCH_DEMAND": "CH-S",
     "CHOCH_SUPPLY": "CH-D",
 }
-
 def latest_structure_event(struct_df, lookback=15):
     if struct_df is None or struct_df.empty or "Structure" not in struct_df.columns:
         return None
@@ -320,7 +306,6 @@ def latest_structure_event(struct_df, lookback=15):
         "level": float(hits["StructureLevel"].iloc[-1]),
         "bars_ago": int((len(struct_df) - 1) - last_idx),
     }
-
 def build_atr_renko_df(df,
                         atr_period=21,
                         atr_multiplier=3.0,
@@ -470,7 +455,6 @@ def build_atr_renko_df(df,
         [renko_df.reset_index(drop=True), struct_df.reset_index(drop=True)], axis=1
     )
     return renko_df, brick_size
-
 # =====================================================================
 # DATA SOURCE & OUTLOOK
 # =====================================================================
@@ -480,7 +464,6 @@ def fetch_live_ohlc(symbol="GC=F", period="6mo", interval="1d"):
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.get_level_values(0)
     return df
-
 @st.cache_data(ttl=300, show_spinner=False)
 def fetch_top_n_movers(symbols_tuple, n=1):
     symbols = list(symbols_tuple)
@@ -509,7 +492,6 @@ def fetch_top_n_movers(symbols_tuple, n=1):
             continue
     results.sort(key=lambda r: r["chg"], reverse=True)
     return results[:n]
-
 @st.cache_data(ttl=300, show_spinner=False)
 def compute_rsi(close_series, period=14):
     delta = close_series.diff()
@@ -517,7 +499,6 @@ def compute_rsi(close_series, period=14):
     loss = (-delta.where(delta < 0, 0.0)).rolling(period).mean()
     rs = gain / loss.replace(0, np.nan)
     return 100 - (100 / (1 + rs))
-
 @st.cache_data(ttl=300, show_spinner=False)
 def compute_vwap(df, window=20):
     typical = (df["High"] + df["Low"] + df["Close"]) / 3.0
@@ -528,7 +509,6 @@ def compute_vwap(df, window=20):
     else:
         vwap = typical.rolling(window, min_periods=1).mean()
     return vwap
-
 @st.cache_data(ttl=300, show_spinner=False)
 def compute_adx(high, low, close, period=14):
     high = pd.Series(high).reset_index(drop=True)
@@ -548,7 +528,6 @@ def compute_adx(high, low, close, period=14):
     dx = (plus_di - minus_di).abs() / (plus_di + minus_di).replace(0, np.nan) * 100
     adx = dx.ewm(alpha=1 / period, adjust=False).mean()
     return adx, plus_di, minus_di
-
 @st.cache_data(ttl=300, show_spinner=False)
 def scan_ema9_cross21_rsi_vwap_adx(symbols_tuple, ema_fast=9, ema_slow=21,
                                     rsi_threshold=51.0, adx_threshold=20.0,
@@ -589,7 +568,6 @@ def scan_ema9_cross21_rsi_vwap_adx(symbols_tuple, ema_fast=9, ema_slow=21,
             continue
     results.sort(key=lambda r: r["adx"], reverse=True)
     return results[:max_results]
-
 def evaluate_oracle_score(symbol, display=None):
     try:
         df = fetch_live_ohlc(symbol, period="1y", interval="1d")
@@ -667,7 +645,6 @@ def evaluate_oracle_score(symbol, display=None):
         }
     except Exception:
         return None
-
 def compute_7day_outlook(symbol, display, period="1y", interval="1d"):
     try:
         data = fetch_live_ohlc(symbol, period=period, interval=interval)
@@ -753,7 +730,6 @@ def compute_7day_outlook(symbol, display, period="1y", interval="1d"):
         }
     except Exception:
         return None
-
 # =====================================================================
 # WATCHLISTS
 # =====================================================================
@@ -785,7 +761,6 @@ nifty200_raw = [
 "TEJASNET","TIINDIA","TITAN","TMPV","TORNTPHARM","TORNTPOWER","TRENT","TVSMOTOR",
 "UBL","ULTRACEMCO","UNITDSPR","VBL","VEDL","VOLTAS","HINDCOPPER","NDIA"
 ]
-
 us100_raw = [
 "PLTR","ARM","INTC","AMD","MU","QCOM","LRCX","MCHP","AVGO","AMAT","GFS","TXN",
 "IDXX","DDOG","ZS","TRI","CSCO","ADI","PANW","ORCL","AXON","CRWD","ASML","SLV",
@@ -796,9 +771,7 @@ us100_raw = [
 "WBD","MNST","LULU","TMUS","PEP","ADP","NFLX","ABNB","COST","CTSH","MELI","TTWO",
 "META","CSGP","CEG","AMZN","ISRG","CCEP","FANG"
 ]
-
 nifty200_yf = [f"{t}.NS" for t in nifty200_raw]
-
 def convert_us100_symbol(t):
     if t == "NAS100":
         return "^NDX"
@@ -807,30 +780,27 @@ def convert_us100_symbol(t):
     if t == "US30":
         return "^DJI"
     return t
-
 us100_yf = [convert_us100_symbol(t) for t in us100_raw] + ["^IXIC"]
 COMMODITIES = [("GC=F", "GOLD"), ("SI=F", "SILVER"), ("KC=F", "COFFEE"), ("CL=F", "CRUDE"), ("NG=F", "GAS"), ("^VIX", "VIX")]
 FOREX_PAIRS = [("EURUSD=X", "EUR/USD"), ("GBPUSD=X", "GBP/USD"), ("USDJPY=X", "USD/JPY"),
                ("AUDUSD=X", "AUD/USD"), ("USDCAD=X", "USD/CAD")]
-
 WATCHLIST_CATEGORIES = {
     "Commodities": COMMODITIES,
     "Forex": FOREX_PAIRS,
     "Nifty200": list(zip(nifty200_yf, nifty200_raw)),
     "US100": list(zip(us100_yf, us100_raw + ["IXIC"])),
 }
-
 DISPLAY_TO_SYMBOL = {}
 for _cat_symbols in WATCHLIST_CATEGORIES.values():
     for _sym, _disp in _cat_symbols:
         DISPLAY_TO_SYMBOL[_disp] = _sym
 
+# Updated views without 7-Day Outlook tab
 VIEWS = ["📊 Charts", "🔎 Scanner"]
 TIMEFRAME_PERIODS = {
     "15m": "10d", "30m": "20d", "60m": "60d",
     "4h": "180d", "1d": "1y", "1wk": "5y",
 }
-
 # =====================================================================
 # CHARTING
 # =====================================================================
@@ -1123,15 +1093,14 @@ if symbol_mode == "Presets":
 else:
     current_symbol = st.sidebar.text_input("Yahoo Finance symbol", value="GC=F")
     current_display = st.sidebar.text_input("Display name", value=current_symbol)
-
 interval = st.sidebar.select_slider(
     "Timeframe", options=list(TIMEFRAME_PERIODS.keys()), value="1d"
 )
 period = TIMEFRAME_PERIODS[interval]
 st.sidebar.markdown("---")
 c1, c2 = st.sidebar.columns(2)
-ema_fast = c1.number_input("EMA Fast", min_value=1, max_value=200, value=9)
-ema_slow = c2.number_input("EMA Slow", min_value=1, max_value=200, value=12)
+ema_fast = c1.number_input("EMA Fast", min_value=1, max_value=200, value=21)
+ema_slow = c2.number_input("EMA Slow", min_value=1, max_value=200, value=50)
 c3, c4 = st.sidebar.columns(2)
 atr_period = c3.number_input("ATR Period", min_value=2, max_value=100, value=21)
 atr_multiplier = c4.number_input("ATR Mult.", min_value=0.1, max_value=10.0, value=3.0, step=0.1)
@@ -1148,7 +1117,6 @@ elif current_symbol != st.session_state._prev_sidebar_symbol:
     st.session_state.chart_symbol = current_symbol
     st.session_state.chart_display = current_display
     st.session_state._prev_sidebar_symbol = current_symbol
-
 chart_symbol = st.session_state.chart_symbol
 chart_display = st.session_state.chart_display
 
@@ -1163,7 +1131,6 @@ st.markdown(
 
 if "active_view" not in st.session_state:
     st.session_state.active_view = VIEWS[0]
-
 active_view = st.radio(
     "View", VIEWS, horizontal=True, label_visibility="collapsed", key="active_view"
 )
@@ -1188,13 +1155,13 @@ if active_view == "📊 Charts":
             with st.spinner("Scanning watchlists..."):
                 top_commodity = fetch_top_n_movers(tuple(COMMODITIES), n=1)
                 top_forex = fetch_top_n_movers(tuple(FOREX_PAIRS), n=1)
-                top_us100 = fetch_top_n_movers(tuple(zip(us100_yf, us100_raw + ["IXIC"])), n=10)
-                top_nifty200 = fetch_top_n_movers(tuple(zip(nifty200_yf, nifty200_raw)), n=10)
+                top_us100 = fetch_top_n_movers(tuple(zip(us100_yf, us100_raw + ["IXIC"])), n=5)
+                top_nifty200 = fetch_top_n_movers(tuple(zip(nifty200_yf, nifty200_raw)), n=5)
                 ema_scanner_watchlist = tuple(
                     list(zip(us100_yf, us100_raw + ["IXIC"])) + list(zip(nifty200_yf, nifty200_raw))
                 )
                 ema_scanner_hits = scan_ema9_cross21_rsi_vwap_adx(
-                    ema_scanner_watchlist, ema_fast=ema_fast, ema_slow=ema_slow,
+                    ema_scanner_watchlist, ema_fast=9, ema_slow=21,
                     rsi_threshold=51.0, adx_threshold=20.0, lookback=1, max_results=4,
                 )
                 outlook = compute_7day_outlook(chart_symbol, chart_display, period="1y", interval="1d")
@@ -1203,6 +1170,48 @@ if active_view == "📊 Charts":
             
             chart_col, right_panel_col = st.columns([0.80, 0.20])
             with chart_col:
+                # --- Moved Telegram configuration & triggers above the chart ---
+                if "tg_token" not in st.session_state or "tg_chat" not in st.session_state:
+                    saved_token, saved_chat = load_telegram_config()
+                    st.session_state["tg_token"] = saved_token
+                    st.session_state["tg_chat"] = saved_chat
+
+                with st.expander("🔔 Telegram Alerts & Automated Triggers", expanded=False):
+                    tc1, tc2 = st.columns(2)
+                    tg_token = tc1.text_input("Bot Token", value=st.session_state.get("tg_token", ""), type="password")
+                    tg_chat = tc2.text_input("Chat ID", value=st.session_state.get("tg_chat", ""))
+                    st.session_state["tg_token"] = tg_token
+                    st.session_state["tg_chat"] = tg_chat
+                    
+                    bcol1, bcol2, bcol3 = st.columns(3)
+                    if bcol1.button("💾 Save credentials"):
+                        ok, msg = save_telegram_config(tg_token, tg_chat)
+                        st.success("Saved.") if ok else st.error(msg)
+                    if bcol2.button("Test Connection"):
+                        ok, msg = send_telegram_alert("🟢 *QuantFX Terminal Test Alert*", tg_token, tg_chat)
+                        st.success(msg) if ok else st.error(msg)
+                    if bcol3.button("🚀 Run Auto Scan & Send"):
+                        triggered_messages = []
+                        fx_comm_watchlist = [("Commodities", COMMODITIES), ("Forex", FOREX_PAIRS)]
+                        for cat_name, symbols in fx_comm_watchlist:
+                            for sym, disp in symbols:
+                                try:
+                                    df = fetch_live_ohlc(sym, period="10d", interval="30m")
+                                    if not df.empty:
+                                        r_df, _ = build_atr_renko_df(df, atr_period=int(atr_period), atr_multiplier=float(atr_multiplier))
+                                        ev = latest_structure_event(r_df, lookback=3)
+                                        if ev and ev["type"] in ["CHOCH_DEMAND", "CHOCH_SUPPLY", "BOS_DEMAND", "BOS_SUPPLY"]:
+                                            if ev["bars_ago"] <= 1:
+                                                triggered_messages.append(f"🚨 *[30m]* *{disp}* triggered *{ev['label']}* at `${format_price(ev['level'])}`")
+                                except Exception:
+                                    continue
+                        if triggered_messages:
+                            combined_msg = "📢 *QuantFX Automated Triggers*\n\n" + "\n".join(triggered_messages)
+                            ok, m = send_telegram_alert(combined_msg, tg_token, tg_chat)
+                            st.success(f"Dispatched {len(triggered_messages)} alert(s)!") if ok else st.error(m)
+                        else:
+                            st.info("No new active triggers matching rules.")
+
                 search_col, search_btn_col = st.columns([0.85, 0.15])
                 search_col.text_input(
                     "Quick search", key="chart_search_box", label_visibility="collapsed",
@@ -1225,54 +1234,52 @@ if active_view == "📊 Charts":
                     f"&nbsp;&nbsp;•&nbsp;&nbsp;Raw pullback: <b>{last_pullback}</b>",
                     unsafe_allow_html=True,
                 )
+                if st.button("📨 Send current signal to Telegram"):
+                    msg = (
+                        f"*{chart_display}* ({chart_symbol})\n"
+                        f"Price: ${format_price(float(raw_df['Close'].iloc[-1]))}\n"
+                        f"Confirmed Signal: {last_confirmed}\n"
+                        f"EMA Signal: {last_signal}\n"
+                        f"Structure: {struct_event['label'] if struct_event else '—'}"
+                    )
+                    ok, m = send_telegram_alert(msg, tg_token, tg_chat)
+                    st.success(m) if ok else st.error(m)
                     
             with right_panel_col:
-                # --- 1. Telegram Alert Box (3 inches height ≈ 288px, moved above EMA scanner) ---
-                if "tg_token" not in st.session_state or "tg_chat" not in st.session_state:
-                    saved_token, saved_chat = load_telegram_config()
-                    st.session_state["tg_token"] = saved_token
-                    st.session_state["tg_chat"] = saved_chat
-
-                st.markdown(
-                    f"<div style='background-color:{COLOR_PANEL_BG};border:1px solid {COLOR_BORDER};"
-                    f"border-radius:6px;padding:8px;margin-bottom:8px;'>"
-                    f"<div style='font-size:11px;color:{COLOR_TEXT_MUTED};font-weight:600;margin-bottom:4px;'>🔔 Telegram Alerts</div>",
-                    unsafe_allow_html=True,
-                )
-                tg_msg = st.text_area(
-                    "Telegram Payload",
-                    value=f"Alert for {chart_display}: Price ${format_price(float(raw_df['Close'].iloc[-1]))}",
-                    height=288,
-                    key="tg_payload_textarea",
-                    label_visibility="collapsed"
-                )
-                tb_col1, tb_col2 = st.columns(2)
-                if tb_col1.button("Send", use_container_width=True):
-                    ok, msg = send_telegram_alert(tg_msg, st.session_state.get("tg_token"), st.session_state.get("tg_chat"))
-                    if ok: tb_col1.success("Sent!")
-                    else: tb_col1.error(msg)
-                if tb_col2.button("Test", use_container_width=True):
-                    ok, msg = send_telegram_alert("🟢 *QuantFX Terminal Test Alert*", st.session_state.get("tg_token"), st.session_state.get("tg_chat"))
-                    if ok: tb_col2.success("OK")
-                    else: tb_col2.error(msg)
-                st.markdown("</div>", unsafe_allow_html=True)
-
-                # --- 2. Compact EMA Scanner Box ---
+                # --- Compact EMA9/21 scanner box ---
                 def _ema_scanner_value_html(m):
                     color = COLOR_GREEN if m["chg"] >= 0 else COLOR_RED
                     arrow = "▲" if m["chg"] >= 0 else "▼"
                     return (
                         f"<div style='text-align:right;font-size:10px;'>"
                         f"<span style='color:{color};'>{arrow} {m['chg']:+.2f}%</span>"
-                        f"<span style='color:{COLOR_TEXT_MUTED};'> · RSI {m['rsi']:.0f}</span>"
+                        f"<span style='color:{COLOR_TEXT_MUTED};'> • RSI {m['rsi']:.0f}</span>"
                         f"</div>"
                     )
                 render_clickable_list_box(
-                    "⚡ EMA Cross Scanner", ema_scanner_hits,
-                    key_prefix="ema_cross_scan", on_click=go_to_chart, value_fmt=_ema_scanner_value_html,
+                    "⚡ EMA9↗21 Scanner", ema_scanner_hits,
+                    key_prefix="ema921scan", on_click=go_to_chart, value_fmt=_ema_scanner_value_html,
                 )
                 
-                # --- 3. 7-Day Outlook ---
+                # --- Chartink EMA screener link (under EMA scanner) ---
+                CHARTINK_EMA_SCREENER_URL = "https://chartink.com/screener/ema9-20-cross-5"
+                st.markdown(
+                    f"<div style='background-color:{COLOR_PANEL_BG};border:1px solid {COLOR_BORDER};"
+                    f"border-radius:6px;padding:8px 12px;margin-bottom:8px;'>"
+                    f"<div style='font-size:11px;color:{COLOR_TEXT_MUTED};font-weight:600;margin-bottom:4px;'>📊 Chartink Screener</div>"
+                    f"<a href='{CHARTINK_EMA_SCREENER_URL}' target='_blank' style='font-size:11px;color:{COLOR_MA_FAST};text-decoration:none;'>EMA 9/20 Cross ↗</a>"
+                    f"</div>",
+                    unsafe_allow_html=True,
+                )
+                if st.button("📨 Send Chartink link to Telegram", key="send_chartink_link_btn"):
+                    chartink_msg = (
+                        f"📊 *Chartink Screener*\n"
+                        f"[EMA 9/20 Cross]({CHARTINK_EMA_SCREENER_URL})"
+                    )
+                    ok, m = send_telegram_alert(chartink_msg, tg_token, tg_chat)
+                    st.success(m) if ok else st.error(m)
+                
+                # --- 7-Day Outlook integrated on the left side under EMA section ---
                 if outlook:
                     dir_color = COLOR_GREEN if outlook["direction"] == "Bullish" else (
                         COLOR_RED if outlook["direction"] == "Bearish" else COLOR_TEXT_MUTED
@@ -1293,48 +1300,12 @@ if active_view == "📊 Charts":
                 render_clickable_single_box(
                     "Top Forex", top_forex, key_prefix="open_top_forex", on_click=go_to_chart,
                 )
-
-                # --- 4. Combined Top 10 Box (US100 & Nifty200 in one box using tabs) ---
-                st.markdown(
-                    f"<div style='background-color:{COLOR_PANEL_BG};border:1px solid {COLOR_BORDER};"
-                    f"border-radius:6px 6px 0 0;padding:6px 10px 2px 10px;margin-bottom:0px;'>"
-                    f"<div style='font-size:11px;color:{COLOR_TEXT_MUTED};font-weight:600;'>🏆 Top 10 Rankings</div></div>",
-                    unsafe_allow_html=True,
+                render_clickable_list_box(
+                    "Top 5 US100", top_us100, key_prefix="open_us100", on_click=go_to_chart,
                 )
-                with st.container():
-                    st.markdown(
-                        f"<div style='background-color:{COLOR_PANEL_BG};border:1px solid {COLOR_BORDER};"
-                        f"border-top:none;border-radius:0 0 6px 6px;padding:6px;margin-bottom:8px;'>",
-                        unsafe_allow_html=True
-                    )
-                    tab_us100, tab_nifty = st.tabs(["US100", "Nifty200"])
-                    
-                    with tab_us100:
-                        if top_us100:
-                            for idx, m in enumerate(top_us100, start=1):
-                                color = COLOR_GREEN if m["chg"] >= 0 else COLOR_RED
-                                arrow = "▲" if m["chg"] >= 0 else "▼"
-                                st.markdown(
-                                    f"<div style='font-size:10px;display:flex;justify-content:space-between;color:{COLOR_TEXT_MAIN};padding:2px 0;'>"
-                                    f"<span>{idx}. {m['display']}</span><span style='color:{color};'>{arrow} {m['chg']:+.2f}%</span></div>",
-                                    unsafe_allow_html=True
-                                )
-                        else:
-                            st.markdown(f"<div style='font-size:10px;color:{COLOR_TEXT_MUTED};'>No data</div>", unsafe_allow_html=True)
-                            
-                    with tab_nifty:
-                        if top_nifty200:
-                            for idx, m in enumerate(top_nifty200, start=1):
-                                color = COLOR_GREEN if m["chg"] >= 0 else COLOR_RED
-                                arrow = "▲" if m["chg"] >= 0 else "▼"
-                                st.markdown(
-                                    f"<div style='font-size:10px;display:flex;justify-content:space-between;color:{COLOR_TEXT_MAIN};padding:2px 0;'>"
-                                    f"<span>{idx}. {m['display']}</span><span style='color:{color};'>{arrow} {m['chg']:+.2f}%</span></div>",
-                                    unsafe_allow_html=True
-                                )
-                        else:
-                            st.markdown(f"<div style='font-size:10px;color:{COLOR_TEXT_MUTED};'>No data</div>", unsafe_allow_html=True)
-                    st.markdown("</div>", unsafe_allow_html=True)
+                render_clickable_list_box(
+                    "Top 5 Nifty200", top_nifty200, key_prefix="open_nifty", on_click=go_to_chart,
+                )
 
 # ---- Scanner view ---------------------------------------------------------
 elif active_view == "🔎 Scanner":

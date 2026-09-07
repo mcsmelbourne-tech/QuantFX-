@@ -553,7 +553,6 @@ def export_chartink_shares_to_csv(chartink_hits):
   if not chartink_hits:
     return ""
   df_export = pd.DataFrame(chartink_hits)
-  # Clean or rearrange columns for export
   export_cols = [c for c in ["display", "symbol", "price", "chg"] if c in df_export.columns]
   return df_export[export_cols].to_csv(index=False)
 
@@ -1253,48 +1252,42 @@ def render_clickable_list_box(title, movers, key_prefix, on_click, value_fmt=Non
         args=(m["symbol"], m["display"]),
     )
 
-def render_high_conviction_combined_box(us100_results, nifty_results, key_prefix, on_click):
+def render_hc_list_box(title, results, key_prefix, on_click):
   st.markdown(
       f"<div style='background-color:{COLOR_PANEL_BG};border:1px solid {COLOR_BORDER};"
-      f"border-radius:6px;padding:8px 12px;margin-bottom:8px;'>"
-      f"<div style='font-size:11px;color:{COLOR_TEXT_MAIN};font-weight:700;margin-bottom:4px;'>🚨 High-Conviction BUY Alerts</div>"
-      f"<div style='font-size:10px;color:{COLOR_TEXT_MUTED};margin-bottom:8px;'>(Score ≥ 50%, TP1% ≥ 5%)</div>",
+      f"border-radius:6px 6px 0 0;padding:6px 10px 4px 10px;margin-bottom:0px;'>"
+      f"<div style='font-size:11px;color:{COLOR_TEXT_MAIN};font-weight:700;'>{title}</div>"
+      f"<div style='font-size:10px;color:{COLOR_TEXT_MUTED};'>(Score ≥ 50%, TP1% ≥ 5%)</div></div>",
       unsafe_allow_html=True,
   )
-  st.markdown(f"<div style='font-size:10px;color:{COLOR_TEXT_MAIN};font-weight:600;margin-bottom:4px;'>US100</div>", unsafe_allow_html=True)
-  if not us100_results:
-    st.markdown(f"<div style='font-size:10px;color:{COLOR_TEXT_MUTED};margin-bottom:6px;'>No matches</div>", unsafe_allow_html=True)
-  else:
-    for idx, m in enumerate(us100_results, start=1):
-      color = COLOR_GREEN if m["Signal"] == "BUY" else COLOR_RED
-      inner = f"<div style='font-size:10px;color:{COLOR_TEXT_MAIN};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;'>• <b>{m['Ticker']}</b>: <span style='color:{color};'>{m['Signal']}</span> | Price: {m['Price']} | Score: {m['Score']} | TP1: {m['TP1_PCT']}</div>"
-      marker = f"qfx-hc-us100-{idx}"
-      _render_clickable_html(
-          marker,
-          inner,
-          extra_style=f"background-color:{COLOR_PANEL_BG};border:1px solid {COLOR_BORDER};border-radius:4px;padding:4px 6px;margin-bottom:4px;",
-          key_prefix=f"{key_prefix}_us100_{idx}",
-          on_click=on_click,
-          args=(m["RawSymbol"], m["Ticker"]),
-      )
-  st.markdown(f"<div style='margin:8px 0;border-top:1px solid {COLOR_BORDER};'></div>", unsafe_allow_html=True)
-  st.markdown(f"<div style='font-size:10px;color:{COLOR_TEXT_MAIN};font-weight:600;margin-bottom:4px;'>Nifty200</div>", unsafe_allow_html=True)
-  if not nifty_results:
-    st.markdown(f"<div style='font-size:10px;color:{COLOR_TEXT_MUTED};margin-bottom:4px;'>No matches</div>", unsafe_allow_html=True)
-  else:
-    for idx, m in enumerate(nifty_results, start=1):
-      color = COLOR_GREEN if m["Signal"] == "BUY" else COLOR_RED
-      inner = f"<div style='font-size:10px;color:{COLOR_TEXT_MAIN};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;'>• <b>{m['Ticker']}</b>: <span style='color:{color};'>{m['Signal']}</span> | Price: {m['Price']} | Score: {m['Score']} | TP1: {m['TP1_PCT']}</div>"
-      marker = f"qfx-hc-nifty-{idx}"
-      _render_clickable_html(
-          marker,
-          inner,
-          extra_style=f"background-color:{COLOR_PANEL_BG};border:1px solid {COLOR_BORDER};border-radius:4px;padding:4px 6px;margin-bottom:4px;",
-          key_prefix=f"{key_prefix}_nifty_{idx}",
-          on_click=on_click,
-          args=(m["RawSymbol"], m["Ticker"]),
-      )
-  st.markdown("</div>", unsafe_allow_html=True)
+  if not results:
+    st.markdown(
+        f"<div style='background-color:{COLOR_PANEL_BG};border:1px solid {COLOR_BORDER};"
+        f"border-top:none;border-radius:0 0 6px 6px;padding:6px 10px;margin-bottom:8px;"
+        f"font-size:10px;color:{COLOR_TEXT_MUTED};'>No matches</div>",
+        unsafe_allow_html=True,
+    )
+    return
+  n = len(results)
+  for idx, m in enumerate(results, start=1):
+    is_last = idx == n
+    color = COLOR_GREEN if m["Signal"] == "BUY" else COLOR_RED
+    inner = (
+        f"<div style='font-size:10px;color:{COLOR_TEXT_MAIN};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;'>"
+        f"<b>{idx}. {m['Ticker']}</b>: <span style='color:{color};'>{m['Signal']}</span> | Price: {m['Price']} | Score: {m['Score']} | TP1: {m['TP1_PCT']}"
+        f"</div>"
+    )
+    radius = "0 0 6px 6px" if is_last else "0"
+    margin = "8px" if is_last else "0px"
+    marker = f"qfx-hc-{key_prefix}-{idx}"
+    _render_clickable_html(
+        marker,
+        inner,
+        extra_style=f"background-color:{COLOR_PANEL_BG};border:1px solid {COLOR_BORDER};border-top:none;border-radius:{radius};padding:5px 10px;margin-bottom:{margin};",
+        key_prefix=f"{key_prefix}_{idx}",
+        on_click=on_click,
+        args=(m["RawSymbol"], m["Ticker"]),
+    )
 
 # =====================================================================
 # SIDEBAR CONTROLS
@@ -1496,7 +1489,11 @@ if active_view == "📊 Charts":
               f"<span style='color:{COLOR_TEXT_MUTED};'> · RSI {m['rsi']:.0f}</span>"
               f"</div>"
           )
-        render_high_conviction_combined_box(hc_us100, hc_nifty, key_prefix="hc_combined", on_click=go_to_chart)
+        
+        # High-Conviction Boxes (US100 and Nifty200 unified boxes)
+        render_hc_list_box("🚨 High-Conviction — US100", hc_us100, key_prefix="hc_us100", on_click=go_to_chart)
+        render_hc_list_box("🚨 High-Conviction — Nifty200", hc_nifty, key_prefix="hc_nifty", on_click=go_to_chart)
+
         render_clickable_list_box(
             "⚡ EMA9↗21 Scanner — US100",
             ema_scanner_us100_hits,

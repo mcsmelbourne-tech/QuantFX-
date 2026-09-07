@@ -848,30 +848,28 @@ def add_buy_sell_markers(fig, x_vals, signal_series, low_series, high_series, ro
     x_arr = np.asarray(x_vals)
     low_arr = np.asarray(low_series, dtype=float)
     high_arr = np.asarray(high_series, dtype=float)
-    buy_mask = signal_arr == "BUY"
-    sell_mask = signal_arr == "SELL"
     if absolute_offset is not None:
-        buy_y = low_arr - absolute_offset
-        sell_y = high_arr + absolute_offset
+        buy_y_arr = low_arr - absolute_offset
+        sell_y_arr = high_arr + absolute_offset
     else:
-        buy_y = low_arr * buy_offset
-        sell_y = high_arr * sell_offset
-    if buy_mask.any():
-        fig.add_trace(go.Scatter(
-            x=x_arr[buy_mask], y=buy_y[buy_mask],
-            mode="markers",
-            marker=dict(symbol="triangle-up", size=size, color=COLOR_GREEN,
-                        line=dict(width=1, color="#FFFFFF")),
-            name="Buy", showlegend=False, hovertemplate="BUY<extra></extra>",
-        ), row=row, col=col)
-    if sell_mask.any():
-        fig.add_trace(go.Scatter(
-            x=x_arr[sell_mask], y=sell_y[sell_mask],
-            mode="markers",
-            marker=dict(symbol="triangle-down", size=size, color=COLOR_RED,
-                        line=dict(width=1, color="#FFFFFF")),
-            name="Sell", showlegend=False, hovertemplate="SELL<extra></extra>",
-        ), row=row, col=col)
+        buy_y_arr = low_arr * buy_offset
+        sell_y_arr = high_arr * sell_offset
+    for i in range(len(signal_arr)):
+        sig = signal_arr[i]
+        if sig == "BUY":
+            fig.add_annotation(
+                x=x_arr[i], y=buy_y_arr[i], text="<b>BUY</b>", showarrow=False,
+                font=dict(color="#0B0E11", size=9),
+                bgcolor=COLOR_GREEN, bordercolor=COLOR_GREEN, borderwidth=1,
+                borderpad=2, opacity=0.95, yanchor="top", row=row, col=col,
+            )
+        elif sig == "SELL":
+            fig.add_annotation(
+                x=x_arr[i], y=sell_y_arr[i], text="<b>SELL</b>", showarrow=False,
+                font=dict(color="#FFFFFF", size=9),
+                bgcolor=COLOR_RED, bordercolor=COLOR_RED, borderwidth=1,
+                borderpad=2, opacity=0.95, yanchor="bottom", row=row, col=col,
+            )
 
 
 def create_chart_figure(renko_df, ha_df, brick_size, display, ema_fast, ema_slow):

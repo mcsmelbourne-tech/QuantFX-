@@ -905,7 +905,22 @@ def create_chart_figure(renko_df, ha_df, brick_size, display, ema_fast, ema_slow
     x_renko = list(range(len(renko_df)))
     x_ha = x_renko
     
-    # Adjusted layout weights to allocate 85% vertical space to main charts, leaving compact room for MACD & RSI to fit on one screen
+    # Generate date tick labels for the x-axis from renko_df["Date"]
+    n_ticks = min(10, len(renko_df))
+    if n_ticks > 0 and "Date" in renko_df.columns:
+        tick_indices = np.linspace(0, len(renko_df) - 1, n_ticks, dtype=int)
+        tick_vals = [x_renko[i] for i in tick_indices]
+        tick_texts = []
+        for i in tick_indices:
+            dt = renko_df["Date"].iloc[i]
+            if hasattr(dt, "strftime"):
+                tick_texts.append(dt.strftime("%Y-%m-%d %H:%M" if (dt.hour != 0 or dt.minute != 0) else "%Y-%m-%d"))
+            else:
+                tick_texts.append(str(dt))
+    else:
+        tick_vals, tick_texts = [], []
+
+    # Adjusted layout weights to allocate 85% vertical space to main charts
     fig = make_subplots(
         rows=4, cols=1, shared_xaxes=True,
         row_heights=[0.37, 0.37, 0.13, 0.13],
@@ -1022,6 +1037,7 @@ def create_chart_figure(renko_df, ha_df, brick_size, display, ema_fast, ema_slow
     fig.add_hline(y=70, line=dict(color=COLOR_RED, width=1, dash="dash"), row=4, col=1)
     fig.add_hline(y=30, line=dict(color=COLOR_GREEN, width=1, dash="dash"), row=4, col=1)
     fig.update_yaxes(range=[0, 100], row=4, col=1)
+    
     fig.update_layout(
         height=820,
         paper_bgcolor=COLOR_BG_DARK,
@@ -1032,8 +1048,16 @@ def create_chart_figure(renko_df, ha_df, brick_size, display, ema_fast, ema_slow
         xaxis_rangeslider_visible=False,
         xaxis2_rangeslider_visible=False,
     )
+    
     for r in range(1, 5):
-        fig.update_xaxes(showgrid=False, row=r, col=1, matches="x", tickfont=dict(size=10))
+        # Apply date tick values and text to the bottom x-axis, and match across subplots
+        kwargs = {"showgrid": False, "row": r, "col": 1, "matches": "x", "tickfont": dict(size=10)}
+        if r == 4 and tick_vals:
+            kwargs["tickvals"] = tick_vals
+            kwargs["ticktext"] = tick_texts
+            kwargs["showticklabels"] = True
+        fig.update_xaxes(**kwargs)
+        
         fig.update_yaxes(
             gridcolor="#2A2F3A", side="right", row=r, col=1,
             tickformat="f", hoverformat="f", tickfont=dict(size=10),
@@ -1223,8 +1247,8 @@ ema_slow = c2.number_input("EMA Slow", min_value=1, max_value=200, value=50)
 c3, c4 = st.sidebar.columns(2)
 atr_period = c3.number_input("ATR Period", min_value=2, max_value=100, value=21)
 atr_multiplier = c4.number_input("ATR Mult.", min_value=0.1, max_value=10.0, value=3.0, step=0.1)
-
 st.sidebar.markdown("---")
+
 if "tg_token" not in st.session_state or "tg_chat" not in st.session_state:
     saved_token, saved_chat = load_telegram_config()
     st.session_state["tg_token"] = saved_token
@@ -1235,7 +1259,6 @@ with st.sidebar.expander("🔔 Telegram Alerts & Automated Triggers", expanded=F
     tg_chat = st.text_input("Chat ID", value=st.session_state.get("tg_chat", ""))
     st.session_state["tg_token"] = tg_token
     st.session_state["tg_chat"] = tg_chat
-
     bcol1, bcol2 = st.columns(2)
     if bcol1.button("💾 Save credentials", use_container_width=True):
         ok, msg = save_telegram_config(tg_token, tg_chat)
@@ -1292,6 +1315,7 @@ st.markdown(
 
 if "active_view" not in st.session_state:
     st.session_state.active_view = VIEWS[0]
+
 active_view = st.radio(
     "View", VIEWS, horizontal=True, label_visibility="collapsed", key="active_view"
 )
@@ -1409,7 +1433,6 @@ if active_view == "📊 Charts":
                         )
                     ok, m = send_telegram_alert(chartink_msg, tg_token, tg_chat)
                     st.success(m) if ok else st.error(m)
-
                 if outlook:
                     dir_color = COLOR_GREEN if outlook["direction"] == "Bullish" else (
                         COLOR_RED if outlook["direction"] == "Bearish" else COLOR_TEXT_MUTED

@@ -842,6 +842,38 @@ TIMEFRAME_PERIODS = {
 # =====================================================================
 # CHARTING
 # =====================================================================
+def add_buy_sell_markers(fig, x_vals, signal_series, low_series, high_series, row, col,
+                          buy_offset=0.995, sell_offset=1.005, size=9, absolute_offset=None):
+    signal_arr = np.asarray(signal_series)
+    x_arr = np.asarray(x_vals)
+    low_arr = np.asarray(low_series, dtype=float)
+    high_arr = np.asarray(high_series, dtype=float)
+    buy_mask = signal_arr == "BUY"
+    sell_mask = signal_arr == "SELL"
+    if absolute_offset is not None:
+        buy_y = low_arr - absolute_offset
+        sell_y = high_arr + absolute_offset
+    else:
+        buy_y = low_arr * buy_offset
+        sell_y = high_arr * sell_offset
+    if buy_mask.any():
+        fig.add_trace(go.Scatter(
+            x=x_arr[buy_mask], y=buy_y[buy_mask],
+            mode="markers",
+            marker=dict(symbol="triangle-up", size=size, color=COLOR_GREEN,
+                        line=dict(width=1, color="#FFFFFF")),
+            name="Buy", showlegend=False, hovertemplate="BUY<extra></extra>",
+        ), row=row, col=col)
+    if sell_mask.any():
+        fig.add_trace(go.Scatter(
+            x=x_arr[sell_mask], y=sell_y[sell_mask],
+            mode="markers",
+            marker=dict(symbol="triangle-down", size=size, color=COLOR_RED,
+                        line=dict(width=1, color="#FFFFFF")),
+            name="Sell", showlegend=False, hovertemplate="SELL<extra></extra>",
+        ), row=row, col=col)
+
+
 def create_chart_figure(renko_df, ha_df, brick_size, display, ema_fast, ema_slow):
     x_renko = list(range(len(renko_df)))
     x_ha = x_renko
@@ -874,6 +906,10 @@ def create_chart_figure(renko_df, ha_df, brick_size, display, ema_fast, ema_slow
         name=f"HA EMA {ema_slow}",
     ), row=1, col=1)
     
+    add_buy_sell_markers(
+        fig, x_ha, ha_df["Signal"], ha_df["Low"], ha_df["High"], row=1, col=1,
+    )
+    
     fig.add_trace(go.Candlestick(
         x=x_renko, open=renko_df["Open"], high=renko_df["High"], low=renko_df["Low"], close=renko_df["Close"],
         increasing_line_color=COLOR_BULL, decreasing_line_color=COLOR_BEAR,
@@ -888,6 +924,10 @@ def create_chart_figure(renko_df, ha_df, brick_size, display, ema_fast, ema_slow
         x=x_renko, y=renko_df["EMA_SLOW"], line=dict(color=COLOR_MA_SLOW, width=1.5),
         name=f"EMA {ema_slow}",
     ), row=2, col=1)
+    
+    add_buy_sell_markers(
+        fig, x_renko, renko_df["Confirmed_Signal"], renko_df["Low"], renko_df["High"], row=2, col=1,
+    )
     
     struct_style = {
         "BOS_DEMAND": (COLOR_BOS_DEMAND, "B-S"),
@@ -929,6 +969,17 @@ def create_chart_figure(renko_df, ha_df, brick_size, display, ema_fast, ema_slow
         x=x_renko, y=renko_df["MACD_Signal"], line=dict(color=COLOR_SIGNAL_LINE, width=1.8), name="Signal Line",
     ), row=3, col=1)
     fig.add_hline(y=0, line=dict(color=COLOR_ZERO_LINE, width=1), row=3, col=1)
+    
+    macd_vals = renko_df["MACD"].values
+    macd_finite = macd_vals[np.isfinite(macd_vals)]
+    if macd_finite.size:
+        macd_pad = (macd_finite.max() - macd_finite.min()) * 0.06 or abs(macd_finite.max()) * 0.06 or 0.001
+    else:
+        macd_pad = 0.001
+    add_buy_sell_markers(
+        fig, x_renko, renko_df["Div_Signal"], renko_df["MACD"], renko_df["MACD"], row=3, col=1,
+        absolute_offset=macd_pad,
+    )
     
     rsi_vals = renko_df["RSI"].values
     rsi_bull_y = np.where(renko_trend_bull, rsi_vals, np.nan)

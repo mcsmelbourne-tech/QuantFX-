@@ -16,7 +16,6 @@ from plotly.subplots import make_subplots
 import json
 import os
 import re
-
 # =====================================================================
 # PAGE CONFIG
 # =====================================================================
@@ -26,7 +25,6 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
 )
-
 # =====================================================================
 # COLORS – TradingView-style dark + neon
 # =====================================================================
@@ -48,7 +46,6 @@ COLOR_BOS_DEMAND = "#26FF9A"
 COLOR_BOS_SUPPLY = "#FF4F7B"
 COLOR_CHOCH_DEMAND = "#00D4FF"
 COLOR_CHOCH_SUPPLY = "#FF9900"
-
 # =====================================================================
 # GLOBAL DARK THEME CSS & BLINKING ANIMATION
 # =====================================================================
@@ -82,12 +79,10 @@ st.markdown(
     """,
     unsafe_allow_html=True,
 )
-
 # =====================================================================
 # TELEGRAM
 # =====================================================================
 TG_CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".qfx_telegram_config.json")
-
 def load_telegram_config():
     try:
         if os.path.exists(TG_CONFIG_PATH):
@@ -97,7 +92,6 @@ def load_telegram_config():
     except Exception:
         pass
     return "", ""
-
 def save_telegram_config(token, chat_id):
     try:
         with open(TG_CONFIG_PATH, "w") as f:
@@ -105,7 +99,6 @@ def save_telegram_config(token, chat_id):
         return True, "Saved."
     except Exception as e:
         return False, str(e)
-
 def send_telegram_alert(message, token, chat_id):
     token = (token or "").strip()
     chat_id = (chat_id or "").strip()
@@ -121,7 +114,6 @@ def send_telegram_alert(message, token, chat_id):
         return False, data.get("description", "Unknown Telegram API error")
     except Exception as e:
         return False, str(e)
-
 # =====================================================================
 # INDICATORS & HEIKIN ASHI / MACD
 # =====================================================================
@@ -145,7 +137,6 @@ def compute_heikin_ashi(df, ema_fast=21, ema_slow=50):
             ha_signals[i] = "SELL"
     ha["Signal"] = ha_signals
     return ha
-
 def detect_macd_crossovers(renko_df):
     macd = renko_df["MACD"].values
     signal = renko_df["MACD_Signal"].values
@@ -161,7 +152,6 @@ def detect_macd_crossovers(renko_df):
             macd_signals[i] = "SELL"
             macd_types[i] = "MACD Cross Down"
     return macd_signals, macd_types
-
 # =====================================================================
 # FULL-PRECISION PRICE FORMATTING
 # =====================================================================
@@ -187,7 +177,6 @@ def format_price(value):
     if "." in s:
         s = s.rstrip("0").rstrip(".")
     return s
-
 # =====================================================================
 # EMA CROSSOVER DETECTION
 # =====================================================================
@@ -208,7 +197,6 @@ def detect_ema_cross_signal(close_series, fast=21, slow=50, lookback=1):
             return {"direction": "SELL", "bars_ago": n - 1 - i,
                     "fast": float(f_now), "slow": float(s_now)}
     return None
-
 # =====================================================================
 # SMART MONEY STRUCTURE — BOS & CHoCH
 # =====================================================================
@@ -297,14 +285,12 @@ def detect_market_structure(high, low, close, swing_lookback=5, brick_type=None)
         "StructureSeq": seq_arr,
         "Trend": trend_arr,
     })
-
 STRUCTURE_LABELS = {
     "BOS_DEMAND": "B-S",
     "BOS_SUPPLY": "B-D",
     "CHOCH_DEMAND": "CH-S",
     "CHOCH_SUPPLY": "CH-D",
 }
-
 def latest_structure_event(struct_df, lookback=15):
     if struct_df is None or struct_df.empty or "Structure" not in struct_df.columns:
         return None
@@ -321,7 +307,6 @@ def latest_structure_event(struct_df, lookback=15):
         "level": float(hits["StructureLevel"].iloc[-1]),
         "bars_ago": int((len(struct_df) - 1) - last_idx),
     }
-
 def build_atr_renko_df(df,
                         atr_period=21,
                         atr_multiplier=3.0,
@@ -471,7 +456,6 @@ def build_atr_renko_df(df,
         [renko_df.reset_index(drop=True), struct_df.reset_index(drop=True)], axis=1
     )
     return renko_df, brick_size
-
 # =====================================================================
 # DATA SOURCE & OUTLOOK
 # =====================================================================
@@ -481,7 +465,6 @@ def fetch_live_ohlc(symbol="GC=F", period="6mo", interval="1d"):
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.get_level_values(0)
     return df
-
 @st.cache_data(ttl=300, show_spinner=False)
 def fetch_top_n_movers(symbols_tuple, n=1):
     symbols = list(symbols_tuple)
@@ -510,7 +493,6 @@ def fetch_top_n_movers(symbols_tuple, n=1):
             continue
     results.sort(key=lambda r: r["chg"], reverse=True)
     return results[:n]
-
 @st.cache_data(ttl=300, show_spinner=False)
 def fetch_chartink_screener(url):
     try:
@@ -547,7 +529,6 @@ def fetch_chartink_screener(url):
         return results
     except Exception:
         return []
-
 @st.cache_data(ttl=300, show_spinner=False)
 def compute_rsi(close_series, period=14):
     delta = close_series.diff()
@@ -555,7 +536,6 @@ def compute_rsi(close_series, period=14):
     loss = (-delta.where(delta < 0, 0.0)).rolling(period).mean()
     rs = gain / loss.replace(0, np.nan)
     return 100 - (100 / (1 + rs))
-
 @st.cache_data(ttl=300, show_spinner=False)
 def compute_vwap(df, window=20):
     typical = (df["High"] + df["Low"] + df["Close"]) / 3.0
@@ -566,7 +546,6 @@ def compute_vwap(df, window=20):
     else:
         vwap = typical.rolling(window, min_periods=1).mean()
     return vwap
-
 @st.cache_data(ttl=300, show_spinner=False)
 def compute_adx(high, low, close, period=14):
     high = pd.Series(high).reset_index(drop=True)
@@ -586,7 +565,6 @@ def compute_adx(high, low, close, period=14):
     dx = (plus_di - minus_di).abs() / (plus_di + minus_di).replace(0, np.nan) * 100
     adx = dx.ewm(alpha=1 / period, adjust=False).mean()
     return adx, plus_di, minus_di
-
 @st.cache_data(ttl=300, show_spinner=False)
 def scan_ema9_cross21_rsi_vwap_adx(symbols_tuple, ema_fast=9, ema_slow=21,
                                     rsi_threshold=51.0, adx_threshold=20.0,
@@ -627,7 +605,6 @@ def scan_ema9_cross21_rsi_vwap_adx(symbols_tuple, ema_fast=9, ema_slow=21,
             continue
     results.sort(key=lambda r: r["adx"], reverse=True)
     return results[:max_results]
-
 def evaluate_oracle_score(symbol, display=None):
     try:
         df = fetch_live_ohlc(symbol, period="1y", interval="1d")
@@ -705,7 +682,6 @@ def evaluate_oracle_score(symbol, display=None):
         }
     except Exception:
         return None
-
 def compute_7day_outlook(symbol, display, period="1y", interval="1d"):
     try:
         data = fetch_live_ohlc(symbol, period=period, interval=interval)
@@ -745,7 +721,6 @@ def compute_7day_outlook(symbol, display, period="1y", interval="1d"):
         
         reasons = []
         bias_score = 0.0
-
         # Detailed Moving Average Analysis
         if last_ema21 > last_ema50:
             bias_score += 1.5
@@ -753,7 +728,6 @@ def compute_7day_outlook(symbol, display, period="1y", interval="1d"):
         else:
             bias_score -= 1.5
             reasons.append(f"Bearish Trend Alignment: EMA21 (${format_price(last_ema21)}) trades below EMA50 (${format_price(last_ema50)}), indicating medium-term seller pressure.")
-
         # Detailed Momentum & RSI Analysis
         last_rsi = float(rsi.iloc[-1]) if not np.isnan(rsi.iloc[-1]) else 50.0
         if last_rsi > 55:
@@ -764,7 +738,6 @@ def compute_7day_outlook(symbol, display, period="1y", interval="1d"):
             reasons.append(f"Momentum Weakness: RSI is bearish at {last_rsi:.1f}, confirming persistent selling pressure.")
         else:
             reasons.append(f"Neutral Momentum: RSI rests at {last_rsi:.1f}, indicating a consolidation phase without strong directional commitment.")
-
         # MACD Histogram Outlook
         last_hist = float((macd.iloc[-1] - macd_signal.iloc[-1])) if not np.isnan(macd.iloc[-1]) else 0.0
         if last_hist > 0:
@@ -773,7 +746,6 @@ def compute_7day_outlook(symbol, display, period="1y", interval="1d"):
         else:
             bias_score -= 0.5
             reasons.append(f"MACD Histogram is negative, favoring downward continuation or corrective pullbacks.")
-
         renko_df, _ = build_atr_renko_df(
             data, atr_period=21, atr_multiplier=3.0,
             ema_fast=21, ema_slow=50,
@@ -799,7 +771,6 @@ def compute_7day_outlook(symbol, display, period="1y", interval="1d"):
                     reasons.append(f"Smart Money Structure: Bullish {structure_event['label']} identified at ${format_price(s_level)} ({recency}), acting as a key demand zone.")
                 else:
                     reasons.append(f"Smart Money Structure: Bearish {structure_event['label']} identified at ${format_price(s_level)} ({recency}), acting as a key supply zone.")
-
         direction = "Bullish" if bias_score >= 1.5 else ("Bearish" if bias_score <= -1.5 else "Neutral/Consolidation")
         weekly_move_pct = atr_pct * np.sqrt(bars_in_7_days)
         tilt = float(np.clip(bias_score / 4.0, -1, 1))
@@ -820,7 +791,6 @@ def compute_7day_outlook(symbol, display, period="1y", interval="1d"):
         }
     except Exception:
         return None
-
 # =====================================================================
 # WATCHLISTS
 # =====================================================================
@@ -852,7 +822,6 @@ nifty200_raw = [
 "TEJASNET","TIINDIA","TITAN","TMPV","TORNTPHARM","TORNTPOWER","TRENT","TVSMOTOR",
 "UBL","ULTRACEMCO","UNITDSPR","VBL","VEDL","VOLTAS","HINDCOPPER","NDIA"
 ]
-
 us100_raw = [
 "PLTR","ARM","INTC","AMD","MU","QCOM","LRCX","MCHP","AVGO","AMAT","GFS","TXN",
 "IDXX","DDOG","ZS","TRI","CSCO","ADI","PANW","ORCL","AXON","CRWD","ASML","SLV",
@@ -863,9 +832,7 @@ us100_raw = [
 "WBD","MNST","LULU","TMUS","PEP","ADP","NFLX","ABNB","COST","CTSH","MELI","TTWO",
 "META","CSGP","CEG","AMZN","ISRG","CCEP","FANG"
 ]
-
 nifty200_yf = [f"{t}.NS" for t in nifty200_raw]
-
 def convert_us100_symbol(t):
     if t == "NAS100":
         return "^NDX"
@@ -874,7 +841,6 @@ def convert_us100_symbol(t):
     if t == "US30":
         return "^DJI"
     return t
-
 us100_yf = [convert_us100_symbol(t) for t in us100_raw] + ["^IXIC"]
 COMMODITIES = [("GC=F", "GOLD"), ("SI=F", "SILVER"), ("KC=F", "COFFEE"), ("CL=F", "CRUDE"), ("NG=F", "GAS"), ("^VIX", "VIX")]
 FOREX_PAIRS = [("EURUSD=X", "EUR/USD"), ("GBPUSD=X", "GBP/USD"), ("USDJPY=X", "USD/JPY"),
@@ -894,7 +860,6 @@ TIMEFRAME_PERIODS = {
     "15m": "10d", "30m": "20d", "60m": "60d",
     "4h": "180d", "1d": "1y", "1wk": "5y",
 }
-
 # =====================================================================
 # CHARTING
 # =====================================================================
@@ -926,7 +891,6 @@ def add_buy_sell_markers(fig, x_vals, signal_series, low_series, high_series, ro
                 bgcolor=COLOR_RED, bordercolor=COLOR_RED, borderwidth=1,
                 borderpad=2, opacity=0.95, yanchor="bottom", row=row, col=col,
             )
-
 def create_chart_figure(renko_df, ha_df, brick_size, display, ema_fast, ema_slow):
     x_renko = list(range(len(renko_df)))
     x_ha = x_renko
@@ -945,7 +909,6 @@ def create_chart_figure(renko_df, ha_df, brick_size, display, ema_fast, ema_slow
                 tick_texts.append(str(dt))
     else:
         tick_vals, tick_texts = [], []
-
     fig = make_subplots(
         rows=4, cols=1, shared_xaxes=True,
         row_heights=[0.37, 0.37, 0.13, 0.13],
@@ -954,11 +917,9 @@ def create_chart_figure(renko_df, ha_df, brick_size, display, ema_fast, ema_slow
             f"{display} — Heikin Ashi",
             f"{display} — ATR Renko (brick ≈ {format_price(brick_size)})",
             "TradingView MACD (Histogram, MACD Line & Signal Line)",
-            "RSI (Synchronized Green/Red Buy & Sell Zones)",
+            "RSI (Full RSI Line with Green 30 & Red 70 Levels)",
         ),
     )
-    
-    renko_trend_bull = (renko_df["EMA_FAST"] > renko_df["EMA_SLOW"]).values
     
     fig.add_trace(go.Candlestick(
         x=x_ha, open=ha_df["Open"], high=ha_df["High"], low=ha_df["Low"], close=ha_df["Close"],
@@ -1050,14 +1011,10 @@ def create_chart_figure(renko_df, ha_df, brick_size, display, ema_fast, ema_slow
         absolute_offset=macd_pad,
     )
     
+    # --- FULL RSI LINE WITH GREEN 30 & RED 70 LINES ---
     rsi_vals = renko_df["RSI"].values
-    rsi_bull_y = np.where(renko_trend_bull, rsi_vals, np.nan)
-    rsi_bear_y = np.where(~renko_trend_bull, rsi_vals, np.nan)
     fig.add_trace(go.Scatter(
-        x=x_renko, y=rsi_bull_y, line=dict(color=COLOR_BULL, width=2.0), name="RSI Buy (Green)",
-    ), row=4, col=1)
-    fig.add_trace(go.Scatter(
-        x=x_renko, y=rsi_bear_y, line=dict(color=COLOR_BEAR, width=2.0), name="RSI Sell (Red)",
+        x=x_renko, y=rsi_vals, line=dict(color="#00D4FF", width=1.8), name="RSI",
     ), row=4, col=1)
     fig.add_hline(y=70, line=dict(color=COLOR_RED, width=1, dash="dash"), row=4, col=1)
     fig.add_hline(y=30, line=dict(color=COLOR_GREEN, width=1, dash="dash"), row=4, col=1)
@@ -1088,12 +1045,10 @@ def create_chart_figure(renko_df, ha_df, brick_size, display, ema_fast, ema_slow
             automargin=True, ticklabelposition="outside right",
         )
     return fig
-
 def go_to_chart(symbol, display):
     st.session_state.chart_symbol = symbol
     st.session_state.chart_display = display
     st.session_state.active_view = VIEWS[0]
-
 def run_chart_search():
     query = (st.session_state.get("chart_search_box") or "").strip()
     if not query:
@@ -1107,7 +1062,6 @@ def run_chart_search():
             go_to_chart(sym, disp)
             return
     go_to_chart(query, query)
-
 def render_zoomable_chart(fig, key, height=820):
     fig_json = fig.to_json()
     div_id = f"qfx_chart_{key}"
@@ -1140,7 +1094,6 @@ def render_zoomable_chart(fig, key, height=820):
     </script>
     """
     components.html(html, height=height + 60, scrolling=True)
-
 def _render_clickable_html(marker, inner_html, extra_style="", key_prefix=None, on_click=None, args=None):
     with st.container():
         st.markdown(
@@ -1174,7 +1127,6 @@ def _render_clickable_html(marker, inner_html, extra_style="", key_prefix=None, 
             unsafe_allow_html=True,
         )
         st.button(" ", key=f"{key_prefix}_btn", on_click=on_click, args=args)
-
 def render_clickable_single_box(title, movers, key_prefix, on_click):
     if not movers:
         st.markdown(
@@ -1204,7 +1156,6 @@ def render_clickable_single_box(title, movers, key_prefix, on_click):
         ),
         key_prefix=key_prefix, on_click=on_click, args=(best["symbol"], best["display"]),
     )
-
 def render_clickable_list_box(title, movers, key_prefix, on_click, value_fmt=None):
     st.markdown(
         f"<div style='background-color:{COLOR_PANEL_BG};border:1px solid {COLOR_BORDER};"
@@ -1244,7 +1195,6 @@ def render_clickable_list_box(title, movers, key_prefix, on_click, value_fmt=Non
             ),
             key_prefix=f"{key_prefix}_{idx}", on_click=on_click, args=(m["symbol"], m["display"]),
         )
-
 # =====================================================================
 # SIDEBAR CONTROLS
 # =====================================================================
@@ -1321,7 +1271,6 @@ elif current_symbol != st.session_state._prev_sidebar_symbol:
     st.session_state._prev_sidebar_symbol = current_symbol
 chart_symbol = st.session_state.chart_symbol
 chart_display = st.session_state.chart_display
-
 # =====================================================================
 # MAIN LAYOUT
 # =====================================================================
@@ -1335,7 +1284,6 @@ if "active_view" not in st.session_state:
 active_view = st.radio(
     "View", VIEWS, horizontal=True, label_visibility="collapsed", key="active_view"
 )
-
 # ---- Charts view --------------------------------------------------------
 if active_view == "📊 Charts":
     with st.spinner(f"Fetching {chart_display}..."):
@@ -1490,7 +1438,6 @@ if active_view == "📊 Charts":
                     render_clickable_list_box(
                         "Top 5 Nifty200", top_nifty200, key_prefix="open_nifty", on_click=go_to_chart,
                     )
-
 # ---- Scanner view ---------------------------------------------------------
 elif active_view == "🔎 Scanner":
     st.caption("Runs the oracle score across a watchlist. Click any result to open it in the chart view.")

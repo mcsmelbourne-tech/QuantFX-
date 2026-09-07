@@ -15,6 +15,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import json
 import os
+import re
 # =====================================================================
 # PAGE CONFIG
 # =====================================================================
@@ -492,6 +493,43 @@ def fetch_top_n_movers(symbols_tuple, n=1):
             continue
     results.sort(key=lambda r: r["chg"], reverse=True)
     return results[:n]
+@st.cache_data(ttl=300, show_spinner=False)
+def fetch_chartink_screener(url):
+    try:
+        session = requests.Session()
+        headers = {"User-Agent": "Mozilla/5.0"}
+        resp = session.get(url, headers=headers, timeout=10)
+        csrf_match = re.search(r'name="csrf-token"\s+content="([^"]+)"', resp.text)
+        clause_match = re.search(r'id="scan_clause"[^>]*value="([^"]*)"', resp.text)
+        if not clause_match:
+            clause_match = re.search(r'<textarea[^>]*id="scan_clause"[^>]*>([^<]*)</textarea>', resp.text)
+        if not csrf_match or not clause_match:
+            return []
+        scan_clause = clause_match.group(1)
+        headers["x-csrf-token"] = csrf_match.group(1)
+        resp2 = session.post(
+            "https://chartink.com/screener/process",
+            data={"scan_clause": scan_clause}, headers=headers, timeout=10,
+        )
+        rows = resp2.json().get("data", [])
+        results = []
+        for row in rows:
+            code = row.get("nsecode") or row.get("bsecode") or row.get("name") or ""
+            if not code:
+                continue
+            try:
+                price = float(row.get("close", 0) or 0)
+            except (TypeError, ValueError):
+                price = 0.0
+            try:
+                chg = float(row.get("per_chg", 0) or 0)
+            except (TypeError, ValueError):
+                chg = 0.0
+            results.append({"symbol": f"{code}.NS", "display": code, "price": price, "chg": chg})
+        return results
+    except Exception:
+        return []
+
 @st.cache_data(ttl=300, show_spinner=False)
 def compute_rsi(close_series, period=14):
     delta = close_series.diff()
@@ -1209,6 +1247,8 @@ if active_view == "📊 Charts":
                     rsi_threshold=51.0, adx_threshold=20.0, lookback=1, max_results=4,
                 )
                 outlook = compute_7day_outlook(chart_symbol, chart_display, period="1y", interval="1d")
+                CHARTINK_EMA_SCREENER_URL = "https://chartink.com/screener/ema9-20-cross-5"
+                chartink_hits = fetch_chartink_screener(CHARTINK_EMA_SCREENER_URL)
 
             fig = create_chart_figure(renko_df, ha_df, brick_size, chart_display, ema_fast, ema_slow)
             
@@ -1268,51 +1308,66 @@ if active_view == "📊 Charts":
                     key_prefix="ema921scan_nifty", on_click=go_to_chart, value_fmt=_ema_scanner_value_html,
                 )
                 
-                # --- Chartink EMA screener link (under EMA scanner) ---
-                CHARTINK_EMA_SCREENER_URL = "https://chartink.com/screener/ema9-20-cross-5"
+                render_clickable_list_box(
+                    "📊 Chartink — EMA 9/20 Cross", chartink_hits,
+                    key_prefix="chartink_ema920", on_click=go_to_chart,
+                )
                 st.markdown(
-                    f"<div style='background-color:{COLOR_PANEL_BG};border:1px solid {COLOR_BORDER};"
-                    f"border-radius:6px;padding:8px 12px;margin-bottom:8px;'>"
-                    f"<div style='font-size:11px;color:{COLOR_TEXT_MUTED};font-weight:600;margin-bottom:4px;'>📊 Chartink Screener</div>"
-                    f"<a href='{CHARTINK_EMA_SCREENER_URL}' target='_blank' style='font-size:11px;color:{COLOR_MA_FAST};text-decoration:none;'>EMA 9/20 Cross ↗</a>"
+                    f"<div style='font-size:10px;margin:-4px 0 8px 2px;'>"
+                    f"<a href='{CHARTINK_EMA_SCREENER_URL}' target='_blank' style='color:{COLOR_TEXT_MUTED};text-decoration:none;'>Open full screener on Chartink ↗</a>"
                     f"</div>",
                     unsafe_allow_html=True,
                 )
-                if st.button("📨 Send Chartink link to Telegram", key="send_chartink_link_btn"):
-                    chartink_msg = (
-                        f"📊 *Chartink Screener*\n"
-                        f"[EMA 9/20 Cross]({CHARTINK_EMA_SCREENER_URL})"
-                    )
+                if st.button("📨 Send Chartink screener to Telegram", key="send_chartink_results_btn"):
+                    if chartink_hits:
+                        lines = [f"• {h['display']}: {h['chg']:+.2f}%" for h in chartink_hits[:15]]
+                        chartink_msg = "📊 *Chartink — EMA 9/20 Cross*\n\n" + "\n".join(lines)
+                    else:
+                        chartink_msg = (
+                            f"📊 *Chartink Screener*\n"
+                            f"[EMA 9/20 Cross]({CHARTINK_EMA_SCREENER_URL})"
+                        )
                     ok, m = send_telegram_alert(chartink_msg, tg_token, tg_chat)
                     st.success(m) if ok else st.error(m)
-                
                 # --- 7-Day Outlook integrated on the left side under EMA section ---
                 if outlook:
                     dir_color = COLOR_GREEN if outlook["direction"] == "Bullish" else (
                         COLOR_RED if outlook["direction"] == "Bearish" else COLOR_TEXT_MUTED
                     )
+                    reasons_html = "".join(
+                        f"<div style='font-size:10px;color:{COLOR_TEXT_MUTED};margin-top:3px;line-height:1.3;'>• {reason}</div>"
+                        for reason in outlook.get("reasons", [])
+                    )
                     st.markdown(
                         f"<div style='background-color:{COLOR_PANEL_BG};border:1px solid {COLOR_BORDER};"
                         f"border-radius:6px;padding:8px 12px;margin-bottom:8px;'>"
                         f"<div style='font-size:11px;color:{COLOR_TEXT_MUTED};font-weight:600;margin-bottom:4px;'>🧭 7-Day Outlook</div>"
-                        f"<div style='font-size:11px;font-weight:700;color:{dir_color};'>{outlook['direction']}</div>"
+                        f"<div style='font-size:11px;font-weight:700;color:{dir_color};'>{outlook['direction']} "
+                        f"<span style='font-size:10px;color:{COLOR_TEXT_MUTED};font-weight:400;'>(bias {outlook['bias_score']:+.1f})</span></div>"
                         f"<div style='font-size:10px;color:{COLOR_TEXT_MUTED};margin-top:2px;'>Range: ${format_price(outlook['range_low'])} - ${format_price(outlook['range_high'])}</div>"
+                        f"{reasons_html}"
                         f"</div>",
                         unsafe_allow_html=True,
                     )
-                
                 render_clickable_single_box(
                     "Top Commodity", top_commodity, key_prefix="open_top_commodity", on_click=go_to_chart,
                 )
                 render_clickable_single_box(
                     "Top Forex", top_forex, key_prefix="open_top_forex", on_click=go_to_chart,
                 )
-                render_clickable_list_box(
-                    "Top 5 US100", top_us100, key_prefix="open_us100", on_click=go_to_chart,
+                st.markdown(
+                    f"<div style='font-size:11px;color:{COLOR_TEXT_MUTED};font-weight:600;margin:2px 0 2px 2px;'>🌍 Top 5 Movers</div>",
+                    unsafe_allow_html=True,
                 )
-                render_clickable_list_box(
-                    "Top 5 Nifty200", top_nifty200, key_prefix="open_nifty", on_click=go_to_chart,
-                )
+                top5_us100_tab, top5_nifty_tab = st.tabs(["US100", "Nifty200"])
+                with top5_us100_tab:
+                    render_clickable_list_box(
+                        "Top 5 US100", top_us100, key_prefix="open_us100", on_click=go_to_chart,
+                    )
+                with top5_nifty_tab:
+                    render_clickable_list_box(
+                        "Top 5 Nifty200", top_nifty200, key_prefix="open_nifty", on_click=go_to_chart,
+                    )
 
 # ---- Scanner view ---------------------------------------------------------
 elif active_view == "🔎 Scanner":

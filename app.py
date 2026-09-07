@@ -1,10 +1,9 @@
-# =====================================================================
-# QuantFX Terminal — ATR Renko & Macro Smart Money Structure
-# Streamlit rewrite with custom candle coloring, right-side axes, 
-# Heikin Ashi EMAs, single-fire pullback signals with blinking animation, 
-# blinking round dot buy/sell markers on Heikin Ashi & MACD, targeted multi-market Telegram alerts,
-# full share price display, 95% wide charts, font size 10, and right-side top mover cards (font size 11).
-# =====================================================================
+QuantFX Terminal — ATR Renko & Macro Smart Money Structure
+Streamlit rewrite with custom candle coloring, right-side axes, 
+Heikin Ashi EMAs, single-fire pullback signals with blinking animation, 
+blinking round dot buy/sell markers on Heikin Ashi & MACD, targeted multi-market Telegram alerts,
+full share price display, 95% wide charts, font size 10, and right-side top mover cards (font size 11).
+"""
 import numpy as np
 import pandas as pd
 import yfinance as yf
@@ -16,7 +15,6 @@ from plotly.subplots import make_subplots
 import json
 import os
 import re
-
 # =====================================================================
 # PAGE CONFIG
 # =====================================================================
@@ -26,7 +24,6 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
 )
-
 # =====================================================================
 # COLORS – TradingView-style dark + neon
 # =====================================================================
@@ -48,7 +45,6 @@ COLOR_BOS_DEMAND = "#26FF9A"
 COLOR_BOS_SUPPLY = "#FF4F7B"
 COLOR_CHOCH_DEMAND = "#00D4FF"
 COLOR_CHOCH_SUPPLY = "#FF9900"
-
 # =====================================================================
 # GLOBAL DARK THEME CSS & BLINKING ANIMATION
 # =====================================================================
@@ -82,12 +78,10 @@ st.markdown(
     """,
     unsafe_allow_html=True,
 )
-
 # =====================================================================
 # TELEGRAM
 # =====================================================================
 TG_CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".qfx_telegram_config.json")
-
 def load_telegram_config():
     try:
         if os.path.exists(TG_CONFIG_PATH):
@@ -97,7 +91,6 @@ def load_telegram_config():
     except Exception:
         pass
     return "", ""
-
 def save_telegram_config(token, chat_id):
     try:
         with open(TG_CONFIG_PATH, "w") as f:
@@ -105,7 +98,6 @@ def save_telegram_config(token, chat_id):
         return True, "Saved."
     except Exception as e:
         return False, str(e)
-
 def send_telegram_alert(message, token, chat_id):
     token = (token or "").strip()
     chat_id = (chat_id or "").strip()
@@ -121,7 +113,6 @@ def send_telegram_alert(message, token, chat_id):
         return False, data.get("description", "Unknown Telegram API error")
     except Exception as e:
         return False, str(e)
-
 # =====================================================================
 # INDICATORS & HEIKIN ASHI / MACD
 # =====================================================================
@@ -145,7 +136,6 @@ def compute_heikin_ashi(df, ema_fast=21, ema_slow=50):
             ha_signals[i] = "SELL"
     ha["Signal"] = ha_signals
     return ha
-
 def detect_macd_crossovers(renko_df):
     macd = renko_df["MACD"].values
     signal = renko_df["MACD_Signal"].values
@@ -161,7 +151,6 @@ def detect_macd_crossovers(renko_df):
             macd_signals[i] = "SELL"
             macd_types[i] = "MACD Cross Down"
     return macd_signals, macd_types
-
 # =====================================================================
 # FULL-PRECISION PRICE FORMATTING
 # =====================================================================
@@ -187,7 +176,6 @@ def format_price(value):
     if "." in s:
         s = s.rstrip("0").rstrip(".")
     return s
-
 # =====================================================================
 # EMA CROSSOVER DETECTION
 # =====================================================================
@@ -208,7 +196,6 @@ def detect_ema_cross_signal(close_series, fast=21, slow=50, lookback=1):
             return {"direction": "SELL", "bars_ago": n - 1 - i,
                     "fast": float(f_now), "slow": float(s_now)}
     return None
-
 # =====================================================================
 # SMART MONEY STRUCTURE — BOS & CHoCH
 # =====================================================================
@@ -297,14 +284,12 @@ def detect_market_structure(high, low, close, swing_lookback=5, brick_type=None)
         "StructureSeq": seq_arr,
         "Trend": trend_arr,
     })
-
 STRUCTURE_LABELS = {
     "BOS_DEMAND": "B-S",
     "BOS_SUPPLY": "B-D",
     "CHOCH_DEMAND": "CH-S",
     "CHOCH_SUPPLY": "CH-D",
 }
-
 def latest_structure_event(struct_df, lookback=15):
     if struct_df is None or struct_df.empty or "Structure" not in struct_df.columns:
         return None
@@ -321,7 +306,6 @@ def latest_structure_event(struct_df, lookback=15):
         "level": float(hits["StructureLevel"].iloc[-1]),
         "bars_ago": int((len(struct_df) - 1) - last_idx),
     }
-
 def build_atr_renko_df(df,
                         atr_period=21,
                         atr_multiplier=3.0,
@@ -471,7 +455,6 @@ def build_atr_renko_df(df,
         [renko_df.reset_index(drop=True), struct_df.reset_index(drop=True)], axis=1
     )
     return renko_df, brick_size
-
 # =====================================================================
 # DATA SOURCE & OUTLOOK
 # =====================================================================
@@ -481,7 +464,6 @@ def fetch_live_ohlc(symbol="GC=F", period="6mo", interval="1d"):
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.get_level_values(0)
     return df
-
 @st.cache_data(ttl=300, show_spinner=False)
 def fetch_top_n_movers(symbols_tuple, n=1):
     symbols = list(symbols_tuple)
@@ -510,7 +492,6 @@ def fetch_top_n_movers(symbols_tuple, n=1):
             continue
     results.sort(key=lambda r: r["chg"], reverse=True)
     return results[:n]
-
 @st.cache_data(ttl=300, show_spinner=False)
 def fetch_chartink_screener(url):
     try:
@@ -555,7 +536,6 @@ def compute_rsi(close_series, period=14):
     loss = (-delta.where(delta < 0, 0.0)).rolling(period).mean()
     rs = gain / loss.replace(0, np.nan)
     return 100 - (100 / (1 + rs))
-
 @st.cache_data(ttl=300, show_spinner=False)
 def compute_vwap(df, window=20):
     typical = (df["High"] + df["Low"] + df["Close"]) / 3.0
@@ -566,7 +546,6 @@ def compute_vwap(df, window=20):
     else:
         vwap = typical.rolling(window, min_periods=1).mean()
     return vwap
-
 @st.cache_data(ttl=300, show_spinner=False)
 def compute_adx(high, low, close, period=14):
     high = pd.Series(high).reset_index(drop=True)
@@ -586,7 +565,6 @@ def compute_adx(high, low, close, period=14):
     dx = (plus_di - minus_di).abs() / (plus_di + minus_di).replace(0, np.nan) * 100
     adx = dx.ewm(alpha=1 / period, adjust=False).mean()
     return adx, plus_di, minus_di
-
 @st.cache_data(ttl=300, show_spinner=False)
 def scan_ema9_cross21_rsi_vwap_adx(symbols_tuple, ema_fast=9, ema_slow=21,
                                     rsi_threshold=51.0, adx_threshold=20.0,
@@ -627,7 +605,6 @@ def scan_ema9_cross21_rsi_vwap_adx(symbols_tuple, ema_fast=9, ema_slow=21,
             continue
     results.sort(key=lambda r: r["adx"], reverse=True)
     return results[:max_results]
-
 def evaluate_oracle_score(symbol, display=None):
     try:
         df = fetch_live_ohlc(symbol, period="1y", interval="1d")
@@ -705,7 +682,6 @@ def evaluate_oracle_score(symbol, display=None):
         }
     except Exception:
         return None
-
 def compute_7day_outlook(symbol, display, period="1y", interval="1d"):
     try:
         data = fetch_live_ohlc(symbol, period=period, interval=interval)
@@ -791,7 +767,6 @@ def compute_7day_outlook(symbol, display, period="1y", interval="1d"):
         }
     except Exception:
         return None
-
 # =====================================================================
 # WATCHLISTS
 # =====================================================================
@@ -823,7 +798,6 @@ nifty200_raw = [
 "TEJASNET","TIINDIA","TITAN","TMPV","TORNTPHARM","TORNTPOWER","TRENT","TVSMOTOR",
 "UBL","ULTRACEMCO","UNITDSPR","VBL","VEDL","VOLTAS","HINDCOPPER","NDIA"
 ]
-
 us100_raw = [
 "PLTR","ARM","INTC","AMD","MU","QCOM","LRCX","MCHP","AVGO","AMAT","GFS","TXN",
 "IDXX","DDOG","ZS","TRI","CSCO","ADI","PANW","ORCL","AXON","CRWD","ASML","SLV",
@@ -834,9 +808,7 @@ us100_raw = [
 "WBD","MNST","LULU","TMUS","PEP","ADP","NFLX","ABNB","COST","CTSH","MELI","TTWO",
 "META","CSGP","CEG","AMZN","ISRG","CCEP","FANG"
 ]
-
 nifty200_yf = [f"{t}.NS" for t in nifty200_raw]
-
 def convert_us100_symbol(t):
     if t == "NAS100":
         return "^NDX"
@@ -845,7 +817,6 @@ def convert_us100_symbol(t):
     if t == "US30":
         return "^DJI"
     return t
-
 us100_yf = [convert_us100_symbol(t) for t in us100_raw] + ["^IXIC"]
 COMMODITIES = [("GC=F", "GOLD"), ("SI=F", "SILVER"), ("KC=F", "COFFEE"), ("CL=F", "CRUDE"), ("NG=F", "GAS"), ("^VIX", "VIX")]
 FOREX_PAIRS = [("EURUSD=X", "EUR/USD"), ("GBPUSD=X", "GBP/USD"), ("USDJPY=X", "USD/JPY"),
@@ -860,13 +831,12 @@ DISPLAY_TO_SYMBOL = {}
 for _cat_symbols in WATCHLIST_CATEGORIES.values():
     for _sym, _disp in _cat_symbols:
         DISPLAY_TO_SYMBOL[_disp] = _sym
-
+# Updated views without 7-Day Outlook tab
 VIEWS = ["📊 Charts", "🔎 Scanner"]
 TIMEFRAME_PERIODS = {
     "15m": "10d", "30m": "20d", "60m": "60d",
     "4h": "180d", "1d": "1y", "1wk": "5y",
 }
-
 # =====================================================================
 # CHARTING
 # =====================================================================
@@ -899,9 +869,23 @@ def add_buy_sell_markers(fig, x_vals, signal_series, low_series, high_series, ro
                 borderpad=2, opacity=0.95, yanchor="bottom", row=row, col=col,
             )
 
-def create_chart_figure(renko_df, ha_df, brick_size, display, ema_fast, ema_slow):
+
+def create_chart_figure(renko_df, ha_df, brick_size, display, ema_fast, ema_slow, raw_df=None):
     x_renko = list(range(len(renko_df)))
     x_ha = x_renko
+    
+    # Format dates as DD-MM using the raw dataframe index or renko Date column if available
+    date_labels = []
+    if raw_df is not None and not raw_df.empty and "Date" in renko_df.columns:
+        for dt in renko_df["Date"]:
+            try:
+                date_labels.append(pd.to_datetime(dt).strftime("%d-%m"))
+            except Exception:
+                date_labels.append(str(dt))
+    else:
+        for i in range(len(renko_df)):
+            date_labels.append(str(i))
+
     fig = make_subplots(
         rows=4, cols=1, shared_xaxes=True,
         row_heights=[0.33, 0.33, 0.165, 0.165],
@@ -1029,19 +1013,20 @@ def create_chart_figure(renko_df, ha_df, brick_size, display, ema_fast, ema_slow
         xaxis2_rangeslider_visible=False,
     )
     for r in range(1, 5):
-        fig.update_xaxes(showgrid=False, row=r, col=1, matches="x", tickfont=dict(size=10))
+        fig.update_xaxes(
+            showgrid=False, row=r, col=1, matches="x",
+            ticktext=date_labels, tickvals=x_renko, tickfont=dict(size=10)
+        )
         fig.update_yaxes(
             gridcolor="#2A2F3A", side="right", row=r, col=1,
             tickformat="f", hoverformat="f", tickfont=dict(size=10),
             automargin=True, ticklabelposition="outside right",
         )
     return fig
-
 def go_to_chart(symbol, display):
     st.session_state.chart_symbol = symbol
     st.session_state.chart_display = display
     st.session_state.active_view = VIEWS[0]
-
 def run_chart_search():
     query = (st.session_state.get("chart_search_box") or "").strip()
     if not query:
@@ -1055,7 +1040,6 @@ def run_chart_search():
             go_to_chart(sym, disp)
             return
     go_to_chart(query, query)
-
 def render_zoomable_chart(fig, key, height=950):
     fig_json = fig.to_json()
     div_id = f"qfx_chart_{key}"
@@ -1088,7 +1072,6 @@ def render_zoomable_chart(fig, key, height=950):
     </script>
     """
     components.html(html, height=height + 70, scrolling=True)
-
 def _render_clickable_html(marker, inner_html, extra_style="", key_prefix=None, on_click=None, args=None):
     with st.container():
         st.markdown(
@@ -1122,7 +1105,6 @@ def _render_clickable_html(marker, inner_html, extra_style="", key_prefix=None, 
             unsafe_allow_html=True,
         )
         st.button(" ", key=f"{key_prefix}_btn", on_click=on_click, args=args)
-
 def render_clickable_single_box(title, movers, key_prefix, on_click):
     if not movers:
         st.markdown(
@@ -1152,7 +1134,6 @@ def render_clickable_single_box(title, movers, key_prefix, on_click):
         ),
         key_prefix=key_prefix, on_click=on_click, args=(best["symbol"], best["display"]),
     )
-
 def render_clickable_list_box(title, movers, key_prefix, on_click, value_fmt=None):
     st.markdown(
         f"<div style='background-color:{COLOR_PANEL_BG};border:1px solid {COLOR_BORDER};"
@@ -1192,7 +1173,6 @@ def render_clickable_list_box(title, movers, key_prefix, on_click, value_fmt=Non
             ),
             key_prefix=f"{key_prefix}_{idx}", on_click=on_click, args=(m["symbol"], m["display"]),
         )
-
 # =====================================================================
 # SIDEBAR CONTROLS
 # =====================================================================
@@ -1272,7 +1252,6 @@ elif current_symbol != st.session_state._prev_sidebar_symbol:
     st.session_state._prev_sidebar_symbol = current_symbol
 chart_symbol = st.session_state.chart_symbol
 chart_display = st.session_state.chart_display
-
 # =====================================================================
 # MAIN LAYOUT
 # =====================================================================
@@ -1286,7 +1265,6 @@ if "active_view" not in st.session_state:
 active_view = st.radio(
     "View", VIEWS, horizontal=True, label_visibility="collapsed", key="active_view"
 )
-
 # ---- Charts view --------------------------------------------------------
 if active_view == "📊 Charts":
     with st.spinner(f"Fetching {chart_display}..."):
@@ -1322,7 +1300,7 @@ if active_view == "📊 Charts":
                 outlook = compute_7day_outlook(chart_symbol, chart_display, period="1y", interval="1d")
                 CHARTINK_EMA_SCREENER_URL = "https://chartink.com/screener/ema9-20-cross-5"
                 chartink_hits = fetch_chartink_screener(CHARTINK_EMA_SCREENER_URL)
-            fig = create_chart_figure(renko_df, ha_df, brick_size, chart_display, ema_fast, ema_slow)
+            fig = create_chart_figure(renko_df, ha_df, brick_size, chart_display, ema_fast, ema_slow, raw_df=raw_df)
             
             chart_col, right_panel_col = st.columns([0.80, 0.20])
             with chart_col:
@@ -1360,6 +1338,7 @@ if active_view == "📊 Charts":
                     st.success(m) if ok else st.error(m)
                     
             with right_panel_col:
+                # --- Compact EMA9/21 scanner box ---
                 def _ema_scanner_value_html(m):
                     color = COLOR_GREEN if m["chg"] >= 0 else COLOR_RED
                     arrow = "▲" if m["chg"] >= 0 else "▼"
@@ -1399,7 +1378,7 @@ if active_view == "📊 Charts":
                         )
                     ok, m = send_telegram_alert(chartink_msg, tg_token, tg_chat)
                     st.success(m) if ok else st.error(m)
-
+                # --- 7-Day Outlook integrated on the left side under EMA section ---
                 if outlook:
                     dir_color = COLOR_GREEN if outlook["direction"] == "Bullish" else (
                         COLOR_RED if outlook["direction"] == "Bearish" else COLOR_TEXT_MUTED
@@ -1438,7 +1417,6 @@ if active_view == "📊 Charts":
                     render_clickable_list_box(
                         "Top 5 Nifty200", top_nifty200, key_prefix="open_nifty", on_click=go_to_chart,
                     )
-
 # ---- Scanner view ---------------------------------------------------------
 elif active_view == "🔎 Scanner":
     st.caption("Runs the oracle score across a watchlist. Click any result to open it in the chart view.")

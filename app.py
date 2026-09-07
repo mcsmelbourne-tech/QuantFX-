@@ -162,9 +162,6 @@ def detect_macd_crossovers(renko_df):
             macd_types[i] = "MACD Cross Down"
     return macd_signals, macd_types
 
-# =====================================================================
-# FULL-PRECISION PRICE FORMATTING
-# =====================================================================
 def format_price(value):
     try:
         value = float(value)
@@ -188,9 +185,6 @@ def format_price(value):
         s = s.rstrip("0").rstrip(".")
     return s
 
-# =====================================================================
-# EMA CROSSOVER DETECTION
-# =====================================================================
 def detect_ema_cross_signal(close_series, fast=21, slow=50, lookback=1):
     if close_series is None or len(close_series) < slow + 2:
         return None
@@ -209,9 +203,6 @@ def detect_ema_cross_signal(close_series, fast=21, slow=50, lookback=1):
                     "fast": float(f_now), "slow": float(s_now)}
     return None
 
-# =====================================================================
-# SMART MONEY STRUCTURE — BOS & CHoCH
-# =====================================================================
 def detect_market_structure(high, low, close, swing_lookback=5, brick_type=None):
     high = pd.Series(high).reset_index(drop=True)
     low = pd.Series(low).reset_index(drop=True)
@@ -706,6 +697,22 @@ def evaluate_oracle_score(symbol, display=None):
     except Exception:
         return None
 
+@st.cache_data(ttl=300, show_spinner=False)
+def fetch_high_conviction_results(symbols_tuple, min_score=50.0, min_tp1=5.0, max_results=4):
+    results = []
+    for sym, disp in symbols_tuple:
+        res = evaluate_oracle_score(sym, disp)
+        if res:
+            try:
+                score_val = float(res["Score"].rstrip("%"))
+                tp1_pct_val = float(res["TP1_PCT"].rstrip("%"))
+                if score_val >= min_score and tp1_pct_val >= min_tp1 and res["Signal"] == "BUY":
+                    results.append(res)
+            except Exception:
+                continue
+    results.sort(key=lambda r: float(r["Score"].rstrip("%")), reverse=True)
+    return results[:max_results]
+
 def compute_7day_outlook(symbol, display, period="1y", interval="1d"):
     try:
         data = fetch_live_ohlc(symbol, period=period, interval=interval)
@@ -848,7 +855,6 @@ nifty200_raw = [
 "TEJASNET","TIINDIA","TITAN","TMPV","TORNTPHARM","TORNTPOWER","TRENT","TVSMOTOR",
 "UBL","ULTRACEMCO","UNITDSPR","VBL","VEDL","VOLTAS","HINDCOPPER","NDIA"
 ]
-
 us100_raw = [
 "PLTR","ARM","INTC","AMD","MU","QCOM","LRCX","MCHP","AVGO","AMAT","GFS","TXN",
 "IDXX","DDOG","ZS","TRI","CSCO","ADI","PANW","ORCL","AXON","CRWD","ASML","SLV",
@@ -859,9 +865,7 @@ us100_raw = [
 "WBD","MNST","LULU","TMUS","PEP","ADP","NFLX","ABNB","COST","CTSH","MELI","TTWO",
 "META","CSGP","CEG","AMZN","ISRG","CCEP","FANG"
 ]
-
 nifty200_yf = [f"{t}.NS" for t in nifty200_raw]
-
 def convert_us100_symbol(t):
     if t == "NAS100":
         return "^NDX"
@@ -870,7 +874,6 @@ def convert_us100_symbol(t):
     if t == "US30":
         return "^DJI"
     return t
-
 us100_yf = [convert_us100_symbol(t) for t in us100_raw] + ["^IXIC"]
 COMMODITIES = [("GC=F", "GOLD"), ("SI=F", "SILVER"), ("KC=F", "COFFEE"), ("CL=F", "CRUDE"), ("NG=F", "GAS"), ("^VIX", "VIX")]
 FOREX_PAIRS = [("EURUSD=X", "EUR/USD"), ("GBPUSD=X", "GBP/USD"), ("USDJPY=X", "USD/JPY"),
@@ -940,7 +943,6 @@ def create_chart_figure(renko_df, ha_df, brick_size, display, ema_fast, ema_slow
                 tick_texts.append(str(dt))
     else:
         tick_vals, tick_texts = [], []
-
     fig = make_subplots(
         rows=4, cols=1, shared_xaxes=True,
         row_heights=[0.37, 0.37, 0.13, 0.13],
@@ -1056,7 +1058,7 @@ def create_chart_figure(renko_df, ha_df, brick_size, display, ema_fast, ema_slow
         paper_bgcolor=COLOR_BG_DARK,
         plot_bgcolor=COLOR_BG_DARK,
         font=dict(color=COLOR_TEXT_MUTED, size=10),
-        showlegend=False,  # Legend line removed
+        showlegend=False,
         margin=dict(l=10, r=70, t=40, b=10),
         xaxis_rangeslider_visible=False,
         xaxis2_rangeslider_visible=False,
@@ -1233,6 +1235,59 @@ def render_clickable_list_box(title, movers, key_prefix, on_click, value_fmt=Non
             key_prefix=f"{key_prefix}_{idx}", on_click=on_click, args=(m["symbol"], m["display"]),
         )
 
+def render_high_conviction_combined_box(us100_results, nifty_results, key_prefix, on_click):
+    st.markdown(
+        f"<div style='background-color:{COLOR_PANEL_BG};border:1px solid {COLOR_BORDER};"
+        f"border-radius:6px;padding:8px 12px;margin-bottom:8px;'>"
+        f"<div style='font-size:11px;color:{COLOR_TEXT_MAIN};font-weight:700;margin-bottom:4px;'>🚨 High-Conviction BUY Alerts</div>"
+        f"<div style='font-size:10px;color:{COLOR_TEXT_MUTED};margin-bottom:8px;'>(Score ≥ 50%, TP1% ≥ 5%)</div>",
+        unsafe_allow_html=True,
+    )
+    
+    # US100 Section
+    st.markdown(f"<div style='font-size:10px;color:{COLOR_TEXT_MAIN};font-weight:600;margin-bottom:4px;'>US100</div>", unsafe_allow_html=True)
+    if not us100_results:
+        st.markdown(f"<div style='font-size:10px;color:{COLOR_TEXT_MUTED};margin-bottom:6px;'>No matches</div>", unsafe_allow_html=True)
+    else:
+        for idx, m in enumerate(us100_results, start=1):
+            color = COLOR_GREEN if m["Signal"] == "BUY" else COLOR_RED
+            inner = (
+                f"<div style='font-size:10px;color:{COLOR_TEXT_MAIN};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;'>"
+                f"• <b>{m['Ticker']}</b>: <span style='color:{color};'>{m['Signal']}</span> | "
+                f"Price: {m['Price']} | Score: {m['Score']} | TP1: {m['TP1_PCT']}"
+                f"</div>"
+            )
+            marker = f"qfx-hc-us100-{idx}"
+            _render_clickable_html(
+                marker, inner,
+                extra_style=f"background-color:{COLOR_PANEL_BG};border:1px solid {COLOR_BORDER};border-radius:4px;padding:4px 6px;margin-bottom:4px;",
+                key_prefix=f"{key_prefix}_us100_{idx}", on_click=on_click, args=(m["RawSymbol"], m["Ticker"]),
+            )
+            
+    st.markdown(f"<div style='margin:8px 0;border-top:1px solid {COLOR_BORDER};'></div>", unsafe_allow_html=True)
+    
+    # Nifty200 Section
+    st.markdown(f"<div style='font-size:10px;color:{COLOR_TEXT_MAIN};font-weight:600;margin-bottom:4px;'>Nifty200</div>", unsafe_allow_html=True)
+    if not nifty_results:
+        st.markdown(f"<div style='font-size:10px;color:{COLOR_TEXT_MUTED};margin-bottom:4px;'>No matches</div>", unsafe_allow_html=True)
+    else:
+        for idx, m in enumerate(nifty_results, start=1):
+            color = COLOR_GREEN if m["Signal"] == "BUY" else COLOR_RED
+            inner = (
+                f"<div style='font-size:10px;color:{COLOR_TEXT_MAIN};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;'>"
+                f"• <b>{m['Ticker']}</b>: <span style='color:{color};'>{m['Signal']}</span> | "
+                f"Price: {m['Price']} | Score: {m['Score']} | TP1: {m['TP1_PCT']}"
+                f"</div>"
+            )
+            marker = f"qfx-hc-nifty-{idx}"
+            _render_clickable_html(
+                marker, inner,
+                extra_style=f"background-color:{COLOR_PANEL_BG};border:1px solid {COLOR_BORDER};border-radius:4px;padding:4px 6px;margin-bottom:4px;",
+                key_prefix=f"{key_prefix}_nifty_{idx}", on_click=on_click, args=(m["RawSymbol"], m["Ticker"]),
+            )
+            
+    st.markdown("</div>", unsafe_allow_html=True)
+
 # =====================================================================
 # SIDEBAR CONTROLS
 # =====================================================================
@@ -1299,7 +1354,6 @@ with st.sidebar.expander("🔔 Telegram Alerts & Automated Triggers", expanded=F
 if st.sidebar.button("🔄 Refresh data", use_container_width=True):
     st.cache_data.clear()
     st.rerun()
-
 if "chart_symbol" not in st.session_state:
     st.session_state.chart_symbol = current_symbol
     st.session_state.chart_display = current_display
@@ -1345,8 +1399,8 @@ if active_view == "📊 Charts":
             with st.spinner("Scanning watchlists..."):
                 top_commodity = fetch_top_n_movers(tuple(COMMODITIES), n=1)
                 top_forex = fetch_top_n_movers(tuple(FOREX_PAIRS), n=1)
-                top_us100 = fetch_top_n_movers(tuple(zip(us100_yf, us100_raw + ["IXIC"])), n=5)
-                top_nifty200 = fetch_top_n_movers(tuple(zip(nifty200_yf, nifty200_raw)), n=5)
+                hc_us100 = fetch_high_conviction_results(tuple(zip(us100_yf, us100_raw + ["IXIC"])), min_score=50.0, min_tp1=5.0, max_results=4)
+                hc_nifty = fetch_high_conviction_results(tuple(zip(nifty200_yf, nifty200_raw)), min_score=50.0, min_tp1=5.0, max_results=4)
                 ema_scanner_us100_watchlist = tuple(zip(us100_yf, us100_raw + ["IXIC"]))
                 ema_scanner_nifty_watchlist = tuple(zip(nifty200_yf, nifty200_raw))
                 ema_scanner_us100_hits = scan_ema9_cross21_rsi_vwap_adx(
@@ -1408,6 +1462,10 @@ if active_view == "📊 Charts":
                         f"<span style='color:{COLOR_TEXT_MUTED};'> · RSI {m['rsi']:.0f}</span>"
                         f"</div>"
                     )
+                
+                # Combined Screenshot 2 High-Conviction Box for US100 and Nifty200 with click-to-open
+                render_high_conviction_combined_box(hc_us100, hc_nifty, key_prefix="hc_combined", on_click=go_to_chart)
+                
                 render_clickable_list_box(
                     "⚡ EMA9↗21 Scanner — US100", ema_scanner_us100_hits,
                     key_prefix="ema921scan_us100", on_click=go_to_chart, value_fmt=_ema_scanner_value_html,
@@ -1427,17 +1485,6 @@ if active_view == "📊 Charts":
                     f"</div>",
                     unsafe_allow_html=True,
                 )
-                if st.button("📨 Send Chartink screener to Telegram", key="send_chartink_results_btn"):
-                    if chartink_hits:
-                        lines = [f"• {h['display']}: {h['chg']:+.2f}%" for h in chartink_hits[:15]]
-                        chartink_msg = "📊 *Chartink — EMA 9/20 Cross*\n\n" + "\n".join(lines)
-                    else:
-                        chartink_msg = (
-                            f"📊 *Chartink Screener*\n"
-                            f"[EMA 9/20 Cross]({CHARTINK_EMA_SCREENER_URL})"
-                        )
-                    ok, m = send_telegram_alert(chartink_msg, tg_token, tg_chat)
-                    st.success(m) if ok else st.error(m)
                 
                 if outlook:
                     dir_color = COLOR_GREEN if outlook["direction"] == "Bullish" else (
@@ -1465,19 +1512,6 @@ if active_view == "📊 Charts":
                 render_clickable_single_box(
                     "Top Forex", top_forex, key_prefix="open_top_forex", on_click=go_to_chart,
                 )
-                st.markdown(
-                    f"<div style='font-size:11px;color:{COLOR_TEXT_MUTED};font-weight:600;margin:2px 0 2px 2px;'>🌍 Top 5 Movers</div>",
-                    unsafe_allow_html=True,
-                )
-                top5_us100_tab, top5_nifty_tab = st.tabs(["US100", "Nifty200"])
-                with top5_us100_tab:
-                    render_clickable_list_box(
-                        "Top 5 US100", top_us100, key_prefix="open_us100", on_click=go_to_chart,
-                    )
-                with top5_nifty_tab:
-                    render_clickable_list_box(
-                        "Top 5 Nifty200", top_nifty200, key_prefix="open_nifty", on_click=go_to_chart,
-                    )
 
 # ---- Scanner view ---------------------------------------------------------
 elif active_view == "🔎 Scanner":

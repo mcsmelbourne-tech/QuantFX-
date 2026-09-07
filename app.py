@@ -742,14 +742,38 @@ def compute_7day_outlook(symbol, display, period="1y", interval="1d"):
         else:
             avg_bar_minutes = 1440.0
         bars_in_7_days = max((7 * 24 * 60) / avg_bar_minutes, 1.0)
+        
         reasons = []
         bias_score = 0.0
+
+        # Detailed Moving Average Analysis
         if last_ema21 > last_ema50:
-            bias_score += 1
-            reasons.append(f"EMA21 (${format_price(last_ema21)}) is above EMA50 (${format_price(last_ema50)}), keeping trend bullish.")
+            bias_score += 1.5
+            reasons.append(f"Bullish Trend Alignment: EMA21 (${format_price(last_ema21)}) trades above EMA50 (${format_price(last_ema50)}), indicating medium-term buyer control.")
         else:
-            bias_score -= 1
-            reasons.append(f"EMA21 (${format_price(last_ema21)}) is below EMA50 (${format_price(last_ema50)}), keeping trend bearish.")
+            bias_score -= 1.5
+            reasons.append(f"Bearish Trend Alignment: EMA21 (${format_price(last_ema21)}) trades below EMA50 (${format_price(last_ema50)}), indicating medium-term seller pressure.")
+
+        # Detailed Momentum & RSI Analysis
+        last_rsi = float(rsi.iloc[-1]) if not np.isnan(rsi.iloc[-1]) else 50.0
+        if last_rsi > 55:
+            bias_score += 0.5
+            reasons.append(f"Momentum Strength: RSI is bullish at {last_rsi:.1f}, reflecting positive underlying buying momentum.")
+        elif last_rsi < 45:
+            bias_score -= 0.5
+            reasons.append(f"Momentum Weakness: RSI is bearish at {last_rsi:.1f}, confirming persistent selling pressure.")
+        else:
+            reasons.append(f"Neutral Momentum: RSI rests at {last_rsi:.1f}, indicating a consolidation phase without strong directional commitment.")
+
+        # MACD Histogram Outlook
+        last_hist = float((macd.iloc[-1] - macd_signal.iloc[-1])) if not np.isnan(macd.iloc[-1]) else 0.0
+        if last_hist > 0:
+            bias_score += 0.5
+            reasons.append(f"MACD Histogram is positive, favoring continuation of upward price impulses over the 7-day window.")
+        else:
+            bias_score -= 0.5
+            reasons.append(f"MACD Histogram is negative, favoring downward continuation or corrective pullbacks.")
+
         renko_df, _ = build_atr_renko_df(
             data, atr_period=21, atr_multiplier=3.0,
             ema_fast=21, ema_slow=50,
@@ -771,13 +795,18 @@ def compute_7day_outlook(symbol, display, period="1y", interval="1d"):
                 bars_ago = structure_event["bars_ago"]
                 bias_score += structure_weight.get(s_type, 0.0)
                 recency = "on latest brick" if bars_ago == 0 else f"{bars_ago} bricks ago"
-                reasons.append(f"Structure {structure_event['label']} at ${format_price(s_level)} ({recency}).")
-        direction = "Bullish" if bias_score >= 2.0 else ("Bearish" if bias_score <= -2.0 else "Neutral")
+                if "DEMAND" in s_type:
+                    reasons.append(f"Smart Money Structure: Bullish {structure_event['label']} identified at ${format_price(s_level)} ({recency}), acting as a key demand zone.")
+                else:
+                    reasons.append(f"Smart Money Structure: Bearish {structure_event['label']} identified at ${format_price(s_level)} ({recency}), acting as a key supply zone.")
+
+        direction = "Bullish" if bias_score >= 1.5 else ("Bearish" if bias_score <= -1.5 else "Neutral/Consolidation")
         weekly_move_pct = atr_pct * np.sqrt(bars_in_7_days)
-        tilt = float(np.clip(bias_score / 3.0, -1, 1))
+        tilt = float(np.clip(bias_score / 4.0, -1, 1))
         center_shift_pct = weekly_move_pct * 0.35 * tilt
         range_low = last_close * (1 - weekly_move_pct / 100 + center_shift_pct / 100)
         range_high = last_close * (1 + weekly_move_pct / 100 + center_shift_pct / 100)
+        
         return {
             "display": display,
             "direction": direction,
@@ -850,19 +879,16 @@ us100_yf = [convert_us100_symbol(t) for t in us100_raw] + ["^IXIC"]
 COMMODITIES = [("GC=F", "GOLD"), ("SI=F", "SILVER"), ("KC=F", "COFFEE"), ("CL=F", "CRUDE"), ("NG=F", "GAS"), ("^VIX", "VIX")]
 FOREX_PAIRS = [("EURUSD=X", "EUR/USD"), ("GBPUSD=X", "GBP/USD"), ("USDJPY=X", "USD/JPY"),
                ("AUDUSD=X", "AUD/USD"), ("USDCAD=X", "USD/CAD")]
-
 WATCHLIST_CATEGORIES = {
     "Commodities": COMMODITIES,
     "Forex": FOREX_PAIRS,
     "Nifty200": list(zip(nifty200_yf, nifty200_raw)),
     "US100": list(zip(us100_yf, us100_raw + ["IXIC"])),
 }
-
 DISPLAY_TO_SYMBOL = {}
 for _cat_symbols in WATCHLIST_CATEGORIES.values():
     for _sym, _disp in _cat_symbols:
         DISPLAY_TO_SYMBOL[_disp] = _sym
-
 VIEWS = ["📊 Charts", "🔎 Scanner"]
 TIMEFRAME_PERIODS = {
     "15m": "10d", "30m": "20d", "60m": "60d",
@@ -905,7 +931,7 @@ def create_chart_figure(renko_df, ha_df, brick_size, display, ema_fast, ema_slow
     x_renko = list(range(len(renko_df)))
     x_ha = x_renko
     
-    # Generate date tick labels for the x-axis from renko_df["Date"]
+    # Generate DD-MM formatted date tick labels for the x-axis from renko_df["Date"]
     n_ticks = min(10, len(renko_df))
     if n_ticks > 0 and "Date" in renko_df.columns:
         tick_indices = np.linspace(0, len(renko_df) - 1, n_ticks, dtype=int)
@@ -914,13 +940,12 @@ def create_chart_figure(renko_df, ha_df, brick_size, display, ema_fast, ema_slow
         for i in tick_indices:
             dt = renko_df["Date"].iloc[i]
             if hasattr(dt, "strftime"):
-                tick_texts.append(dt.strftime("%Y-%m-%d %H:%M" if (dt.hour != 0 or dt.minute != 0) else "%Y-%m-%d"))
+                tick_texts.append(dt.strftime("%d-%m %H:%M" if (dt.hour != 0 or dt.minute != 0) else "%d-%m"))
             else:
                 tick_texts.append(str(dt))
     else:
         tick_vals, tick_texts = [], []
 
-    # Adjusted layout weights to allocate 85% vertical space to main charts
     fig = make_subplots(
         rows=4, cols=1, shared_xaxes=True,
         row_heights=[0.37, 0.37, 0.13, 0.13],
@@ -1050,7 +1075,6 @@ def create_chart_figure(renko_df, ha_df, brick_size, display, ema_fast, ema_slow
     )
     
     for r in range(1, 5):
-        # Apply date tick values and text to the bottom x-axis, and match across subplots
         kwargs = {"showgrid": False, "row": r, "col": 1, "matches": "x", "tickfont": dict(size=10)}
         if r == 4 and tick_vals:
             kwargs["tickvals"] = tick_vals
@@ -1235,7 +1259,6 @@ if symbol_mode == "Presets":
 else:
     current_symbol = st.sidebar.text_input("Yahoo Finance symbol", value="GC=F")
     current_display = st.sidebar.text_input("Display name", value=current_symbol)
-
 interval = st.sidebar.select_slider(
     "Timeframe", options=list(TIMEFRAME_PERIODS.keys()), value="1d"
 )
@@ -1248,12 +1271,10 @@ c3, c4 = st.sidebar.columns(2)
 atr_period = c3.number_input("ATR Period", min_value=2, max_value=100, value=21)
 atr_multiplier = c4.number_input("ATR Mult.", min_value=0.1, max_value=10.0, value=3.0, step=0.1)
 st.sidebar.markdown("---")
-
 if "tg_token" not in st.session_state or "tg_chat" not in st.session_state:
     saved_token, saved_chat = load_telegram_config()
     st.session_state["tg_token"] = saved_token
     st.session_state["tg_chat"] = saved_chat
-
 with st.sidebar.expander("🔔 Telegram Alerts & Automated Triggers", expanded=False):
     tg_token = st.text_input("Bot Token", value=st.session_state.get("tg_token", ""), type="password")
     tg_chat = st.text_input("Chat ID", value=st.session_state.get("tg_chat", ""))
@@ -1287,11 +1308,9 @@ with st.sidebar.expander("🔔 Telegram Alerts & Automated Triggers", expanded=F
             st.success(f"Dispatched {len(triggered_messages)} alert(s)!") if ok else st.error(m)
         else:
             st.info("No new active triggers matching rules.")
-
 if st.sidebar.button("🔄 Refresh data", use_container_width=True):
     st.cache_data.clear()
     st.rerun()
-
 if "chart_symbol" not in st.session_state:
     st.session_state.chart_symbol = current_symbol
     st.session_state.chart_display = current_display
@@ -1300,7 +1319,6 @@ elif current_symbol != st.session_state._prev_sidebar_symbol:
     st.session_state.chart_symbol = current_symbol
     st.session_state.chart_display = current_display
     st.session_state._prev_sidebar_symbol = current_symbol
-
 chart_symbol = st.session_state.chart_symbol
 chart_display = st.session_state.chart_display
 
@@ -1312,10 +1330,8 @@ st.markdown(
     f"<span style='color:{COLOR_TEXT_MUTED};font-size:10px;'>({chart_symbol}) • {interval}</span></h2>",
     unsafe_allow_html=True,
 )
-
 if "active_view" not in st.session_state:
     st.session_state.active_view = VIEWS[0]
-
 active_view = st.radio(
     "View", VIEWS, horizontal=True, label_visibility="collapsed", key="active_view"
 )
@@ -1433,21 +1449,24 @@ if active_view == "📊 Charts":
                         )
                     ok, m = send_telegram_alert(chartink_msg, tg_token, tg_chat)
                     st.success(m) if ok else st.error(m)
+                
+                # Expanded 7-Day Outlook Panel with Bullish/Bearish Breakdown
                 if outlook:
                     dir_color = COLOR_GREEN if outlook["direction"] == "Bullish" else (
                         COLOR_RED if outlook["direction"] == "Bearish" else COLOR_TEXT_MUTED
                     )
                     reasons_html = "".join(
-                        f"<div style='font-size:10px;color:{COLOR_TEXT_MUTED};margin-top:3px;line-height:1.3;'>• {reason}</div>"
+                        f"<div style='font-size:10px;color:{COLOR_TEXT_MUTED};margin-top:4px;line-height:1.3;'>• {reason}</div>"
                         for reason in outlook.get("reasons", [])
                     )
                     st.markdown(
                         f"<div style='background-color:{COLOR_PANEL_BG};border:1px solid {COLOR_BORDER};"
-                        f"border-radius:6px;padding:8px 12px;margin-bottom:8px;'>"
-                        f"<div style='font-size:11px;color:{COLOR_TEXT_MUTED};font-weight:600;margin-bottom:4px;'>🧭 7-Day Outlook</div>"
+                        f"border-radius:6px;padding:10px 12px;margin-bottom:8px;'>"
+                        f"<div style='font-size:11px;color:{COLOR_TEXT_MAIN};font-weight:700;margin-bottom:6px;'>🧭 7-Day Detailed Outlook</div>"
                         f"<div style='font-size:11px;font-weight:700;color:{dir_color};'>{outlook['direction']} "
-                        f"<span style='font-size:10px;color:{COLOR_TEXT_MUTED};font-weight:400;'>(bias {outlook['bias_score']:+.1f})</span></div>"
-                        f"<div style='font-size:10px;color:{COLOR_TEXT_MUTED};margin-top:2px;'>Range: ${format_price(outlook['range_low'])} - ${format_price(outlook['range_high'])}</div>"
+                        f"<span style='font-size:10px;color:{COLOR_TEXT_MUTED};font-weight:400;'>(Bias Score: {outlook['bias_score']:+.1f})</span></div>"
+                        f"<div style='font-size:10px;color:{COLOR_TEXT_MUTED};margin-top:3px;'>Projected Range: ${format_price(outlook['range_low'])} – ${format_price(outlook['range_high'])}</div>"
+                        f"<div style='font-size:10px;color:{COLOR_TEXT_MAIN};font-weight:600;margin-top:6px;'>Bullish / Bearish Drivers:</div>"
                         f"{reasons_html}"
                         f"</div>",
                         unsafe_allow_html=True,

@@ -15,6 +15,7 @@ from plotly.subplots import make_subplots
 import requests
 import streamlit as st
 import streamlit.components.v1 as components
+import yfinance as yf  # <-- ADD THIS LINE
 
 # =====================================================================
 # PAGE CONFIG

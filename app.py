@@ -3,7 +3,7 @@ QuantFX Terminal — ATR Renko & Macro Smart Money Structure
 Streamlit rewrite with custom candle coloring, right-side axes, 
 Heikin Ashi EMAs, single-fire pullback signals with blinking animation, 
 blinking round dot buy/sell markers on Heikin Ashi & MACD, targeted multi-market Telegram alerts,
-full share price display, 95% wide charts, font size 10, and right-side top mover cards (font size 11).
+full share price display, 85% reduced chart box scaling, font size 10, and right-side top mover cards (font size 11).
 """
 import numpy as np
 import pandas as pd
@@ -901,25 +901,15 @@ def add_buy_sell_markers(fig, x_vals, signal_series, low_series, high_series, ro
                 borderpad=2, opacity=0.95, yanchor="bottom", row=row, col=col,
             )
 
-def create_chart_figure(renko_df, ha_df, brick_size, display, ema_fast, ema_slow, raw_df=None):
+def create_chart_figure(renko_df, ha_df, brick_size, display, ema_fast, ema_slow):
     x_renko = list(range(len(renko_df)))
     x_ha = x_renko
     
-    date_labels = []
-    if raw_df is not None and not raw_df.empty and "Date" in renko_df.columns:
-        for dt in renko_df["Date"]:
-            try:
-                date_labels.append(pd.to_datetime(dt).strftime("%d-%m"))
-            except Exception:
-                date_labels.append(str(dt))
-    else:
-        for i in range(len(renko_df)):
-            date_labels.append(str(i))
-
+    # Adjusted layout weights to allocate 85% vertical space to main charts, leaving compact room for MACD & RSI to fit on one screen
     fig = make_subplots(
         rows=4, cols=1, shared_xaxes=True,
-        row_heights=[0.33, 0.33, 0.165, 0.165],
-        vertical_spacing=0.05,
+        row_heights=[0.37, 0.37, 0.13, 0.13],
+        vertical_spacing=0.03,
         subplot_titles=(
             f"{display} — Heikin Ashi",
             f"{display} — ATR Renko (brick ≈ {format_price(brick_size)})",
@@ -1033,20 +1023,17 @@ def create_chart_figure(renko_df, ha_df, brick_size, display, ema_fast, ema_slow
     fig.add_hline(y=30, line=dict(color=COLOR_GREEN, width=1, dash="dash"), row=4, col=1)
     fig.update_yaxes(range=[0, 100], row=4, col=1)
     fig.update_layout(
-        height=950,
+        height=820,
         paper_bgcolor=COLOR_BG_DARK,
         plot_bgcolor=COLOR_BG_DARK,
         font=dict(color=COLOR_TEXT_MUTED, size=10),
         legend=dict(orientation="h", y=1.02, x=0, bgcolor="rgba(0,0,0,0)", font=dict(size=10)),
-        margin=dict(l=10, r=70, t=50, b=10),
+        margin=dict(l=10, r=70, t=40, b=10),
         xaxis_rangeslider_visible=False,
         xaxis2_rangeslider_visible=False,
     )
     for r in range(1, 5):
-        fig.update_xaxes(
-            showgrid=False, row=r, col=1, matches="x",
-            ticktext=date_labels, tickvals=x_renko, tickfont=dict(size=10)
-        )
+        fig.update_xaxes(showgrid=False, row=r, col=1, matches="x", tickfont=dict(size=10))
         fig.update_yaxes(
             gridcolor="#2A2F3A", side="right", row=r, col=1,
             tickformat="f", hoverformat="f", tickfont=dict(size=10),
@@ -1073,7 +1060,7 @@ def run_chart_search():
             return
     go_to_chart(query, query)
 
-def render_zoomable_chart(fig, key, height=950):
+def render_zoomable_chart(fig, key, height=820):
     fig_json = fig.to_json()
     div_id = f"qfx_chart_{key}"
     html = f"""
@@ -1104,7 +1091,7 @@ def render_zoomable_chart(fig, key, height=950):
       }})();
     </script>
     """
-    components.html(html, height=height + 70, scrolling=True)
+    components.html(html, height=height + 60, scrolling=True)
 
 def _render_clickable_html(marker, inner_html, extra_style="", key_prefix=None, on_click=None, args=None):
     with st.container():
@@ -1224,6 +1211,7 @@ if symbol_mode == "Presets":
 else:
     current_symbol = st.sidebar.text_input("Yahoo Finance symbol", value="GC=F")
     current_display = st.sidebar.text_input("Display name", value=current_symbol)
+
 interval = st.sidebar.select_slider(
     "Timeframe", options=list(TIMEFRAME_PERIODS.keys()), value="1d"
 )
@@ -1304,7 +1292,6 @@ st.markdown(
 
 if "active_view" not in st.session_state:
     st.session_state.active_view = VIEWS[0]
-
 active_view = st.radio(
     "View", VIEWS, horizontal=True, label_visibility="collapsed", key="active_view"
 )
@@ -1344,8 +1331,8 @@ if active_view == "📊 Charts":
                 outlook = compute_7day_outlook(chart_symbol, chart_display, period="1y", interval="1d")
                 CHARTINK_EMA_SCREENER_URL = "https://chartink.com/screener/ema9-20-cross-5"
                 chartink_hits = fetch_chartink_screener(CHARTINK_EMA_SCREENER_URL)
-
-            fig = create_chart_figure(renko_df, ha_df, brick_size, chart_display, ema_fast, ema_slow, raw_df=raw_df)
+            
+            fig = create_chart_figure(renko_df, ha_df, brick_size, chart_display, ema_fast, ema_slow)
             
             chart_col, right_panel_col = st.columns([0.80, 0.20])
             with chart_col:
@@ -1359,7 +1346,7 @@ if active_view == "📊 Charts":
                     "🔍 Open chart", key="chart_search_btn", use_container_width=True,
                     on_click=run_chart_search,
                 )
-                render_zoomable_chart(fig, key=chart_symbol.replace("=", "_").replace("^", "idx"), height=950)
+                render_zoomable_chart(fig, key=chart_symbol.replace("=", "_").replace("^", "idx"), height=820)
                 
                 last_signal = renko_df["Signal"].iloc[-1]
                 last_pullback = renko_df["Pullback_Signal"].iloc[-1]

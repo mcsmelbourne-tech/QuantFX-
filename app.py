@@ -794,8 +794,6 @@ DISPLAY_TO_SYMBOL = {}
 for _cat_symbols in WATCHLIST_CATEGORIES.values():
     for _sym, _disp in _cat_symbols:
         DISPLAY_TO_SYMBOL[_disp] = _sym
-
-# Updated views without 7-Day Outlook tab
 VIEWS = ["📊 Charts", "🔎 Scanner"]
 TIMEFRAME_PERIODS = {
     "15m": "10d", "30m": "20d", "60m": "60d",
@@ -922,12 +920,10 @@ def create_chart_figure(renko_df, ha_df, brick_size, display, ema_fast, ema_slow
             automargin=True, ticklabelposition="outside right",
         )
     return fig
-
 def go_to_chart(symbol, display):
     st.session_state.chart_symbol = symbol
     st.session_state.chart_display = display
     st.session_state.active_view = VIEWS[0]
-
 def run_chart_search():
     query = (st.session_state.get("chart_search_box") or "").strip()
     if not query:
@@ -941,7 +937,6 @@ def run_chart_search():
             go_to_chart(sym, disp)
             return
     go_to_chart(query, query)
-
 def render_zoomable_chart(fig, key, height=950):
     fig_json = fig.to_json()
     div_id = f"qfx_chart_{key}"
@@ -974,7 +969,6 @@ def render_zoomable_chart(fig, key, height=950):
     </script>
     """
     components.html(html, height=height + 70, scrolling=True)
-
 def _render_clickable_html(marker, inner_html, extra_style="", key_prefix=None, on_click=None, args=None):
     with st.container():
         st.markdown(
@@ -1008,7 +1002,6 @@ def _render_clickable_html(marker, inner_html, extra_style="", key_prefix=None, 
             unsafe_allow_html=True,
         )
         st.button(" ", key=f"{key_prefix}_btn", on_click=on_click, args=args)
-
 def render_clickable_single_box(title, movers, key_prefix, on_click):
     if not movers:
         st.markdown(
@@ -1038,7 +1031,6 @@ def render_clickable_single_box(title, movers, key_prefix, on_click):
         ),
         key_prefix=key_prefix, on_click=on_click, args=(best["symbol"], best["display"]),
     )
-
 def render_clickable_list_box(title, movers, key_prefix, on_click, value_fmt=None):
     st.markdown(
         f"<div style='background-color:{COLOR_PANEL_BG};border:1px solid {COLOR_BORDER};"
@@ -1078,7 +1070,6 @@ def render_clickable_list_box(title, movers, key_prefix, on_click, value_fmt=Non
             ),
             key_prefix=f"{key_prefix}_{idx}", on_click=on_click, args=(m["symbol"], m["display"]),
         )
-
 # =====================================================================
 # SIDEBAR CONTROLS
 # =====================================================================
@@ -1104,11 +1095,9 @@ ema_slow = c2.number_input("EMA Slow", min_value=1, max_value=200, value=50)
 c3, c4 = st.sidebar.columns(2)
 atr_period = c3.number_input("ATR Period", min_value=2, max_value=100, value=21)
 atr_multiplier = c4.number_input("ATR Mult.", min_value=0.1, max_value=10.0, value=3.0, step=0.1)
-
 if st.sidebar.button("🔄 Refresh data", use_container_width=True):
     st.cache_data.clear()
     st.rerun()
-
 if "chart_symbol" not in st.session_state:
     st.session_state.chart_symbol = current_symbol
     st.session_state.chart_display = current_display
@@ -1119,7 +1108,6 @@ elif current_symbol != st.session_state._prev_sidebar_symbol:
     st.session_state._prev_sidebar_symbol = current_symbol
 chart_symbol = st.session_state.chart_symbol
 chart_display = st.session_state.chart_display
-
 # =====================================================================
 # MAIN LAYOUT
 # =====================================================================
@@ -1128,13 +1116,11 @@ st.markdown(
     f"<span style='color:{COLOR_TEXT_MUTED};font-size:10px;'>({chart_symbol}) • {interval}</span></h2>",
     unsafe_allow_html=True,
 )
-
 if "active_view" not in st.session_state:
     st.session_state.active_view = VIEWS[0]
 active_view = st.radio(
     "View", VIEWS, horizontal=True, label_visibility="collapsed", key="active_view"
 )
-
 # ---- Charts view --------------------------------------------------------
 if active_view == "📊 Charts":
     with st.spinner(f"Fetching {chart_display}..."):
@@ -1155,8 +1141,8 @@ if active_view == "📊 Charts":
             with st.spinner("Scanning watchlists..."):
                 top_commodity = fetch_top_n_movers(tuple(COMMODITIES), n=1)
                 top_forex = fetch_top_n_movers(tuple(FOREX_PAIRS), n=1)
-                top_us100 = fetch_top_n_movers(tuple(zip(us100_yf, us100_raw + ["IXIC"])), n=5)
-                top_nifty200 = fetch_top_n_movers(tuple(zip(nifty200_yf, nifty200_raw)), n=5)
+                top_us100 = fetch_top_n_movers(tuple(zip(us100_yf, us100_raw + ["IXIC"])), n=10)
+                top_nifty200 = fetch_top_n_movers(tuple(zip(nifty200_yf, nifty200_raw)), n=10)
                 ema_scanner_watchlist = tuple(
                     list(zip(us100_yf, us100_raw + ["IXIC"])) + list(zip(nifty200_yf, nifty200_raw))
                 )
@@ -1165,52 +1151,64 @@ if active_view == "📊 Charts":
                     rsi_threshold=51.0, adx_threshold=20.0, lookback=1, max_results=4,
                 )
                 outlook = compute_7day_outlook(chart_symbol, chart_display, period="1y", interval="1d")
-
             fig = create_chart_figure(renko_df, ha_df, brick_size, chart_display, ema_fast, ema_slow)
             
             chart_col, right_panel_col = st.columns([0.80, 0.20])
             with chart_col:
-                # --- Moved Telegram configuration & triggers above the chart ---
+                # --- Telegram button structured identically to scanner toggle buttons ---
                 if "tg_token" not in st.session_state or "tg_chat" not in st.session_state:
                     saved_token, saved_chat = load_telegram_config()
                     st.session_state["tg_token"] = saved_token
                     st.session_state["tg_chat"] = saved_chat
 
-                with st.expander("🔔 Telegram Alerts & Automated Triggers", expanded=False):
-                    tc1, tc2 = st.columns(2)
-                    tg_token = tc1.text_input("Bot Token", value=st.session_state.get("tg_token", ""), type="password")
-                    tg_chat = tc2.text_input("Chat ID", value=st.session_state.get("tg_chat", ""))
-                    st.session_state["tg_token"] = tg_token
-                    st.session_state["tg_chat"] = tg_chat
-                    
-                    bcol1, bcol2, bcol3 = st.columns(3)
-                    if bcol1.button("💾 Save credentials"):
-                        ok, msg = save_telegram_config(tg_token, tg_chat)
-                        st.success("Saved.") if ok else st.error(msg)
-                    if bcol2.button("Test Connection"):
-                        ok, msg = send_telegram_alert("🟢 *QuantFX Terminal Test Alert*", tg_token, tg_chat)
-                        st.success(msg) if ok else st.error(msg)
-                    if bcol3.button("🚀 Run Auto Scan & Send"):
-                        triggered_messages = []
-                        fx_comm_watchlist = [("Commodities", COMMODITIES), ("Forex", FOREX_PAIRS)]
-                        for cat_name, symbols in fx_comm_watchlist:
-                            for sym, disp in symbols:
-                                try:
-                                    df = fetch_live_ohlc(sym, period="10d", interval="30m")
-                                    if not df.empty:
-                                        r_df, _ = build_atr_renko_df(df, atr_period=int(atr_period), atr_multiplier=float(atr_multiplier))
-                                        ev = latest_structure_event(r_df, lookback=3)
-                                        if ev and ev["type"] in ["CHOCH_DEMAND", "CHOCH_SUPPLY", "BOS_DEMAND", "BOS_SUPPLY"]:
-                                            if ev["bars_ago"] <= 1:
-                                                triggered_messages.append(f"🚨 *[30m]* *{disp}* triggered *{ev['label']}* at `${format_price(ev['level'])}`")
-                                except Exception:
-                                    continue
-                        if triggered_messages:
-                            combined_msg = "📢 *QuantFX Automated Triggers*\n\n" + "\n".join(triggered_messages)
-                            ok, m = send_telegram_alert(combined_msg, tg_token, tg_chat)
-                            st.success(f"Dispatched {len(triggered_messages)} alert(s)!") if ok else st.error(m)
-                        else:
-                            st.info("No new active triggers matching rules.")
+                tg_col1, tg_col2 = st.columns([0.75, 0.25])
+                with tg_col1:
+                    with st.expander("🔔 Telegram Alerts & Automated Triggers Setup", expanded=False):
+                        tc1, tc2 = st.columns(2)
+                        tg_token = tc1.text_input("Bot Token", value=st.session_state.get("tg_token", ""), type="password")
+                        tg_chat = tc2.text_input("Chat ID", value=st.session_state.get("tg_chat", ""))
+                        st.session_state["tg_token"] = tg_token
+                        st.session_state["tg_chat"] = tg_chat
+                        
+                        bcol1, bcol2, bcol3 = st.columns(3)
+                        if bcol1.button("💾 Save credentials", use_container_width=True):
+                            ok, msg = save_telegram_config(tg_token, tg_chat)
+                            st.success("Saved.") if ok else st.error(msg)
+                        if bcol2.button("Test Connection", use_container_width=True):
+                            ok, msg = send_telegram_alert("🟢 *QuantFX Terminal Test Alert*", tg_token, tg_chat)
+                            st.success(msg) if ok else st.error(msg)
+                        if bcol3.button("🚀 Run Auto Scan & Send", use_container_width=True):
+                            triggered_messages = []
+                            fx_comm_watchlist = [("Commodities", COMMODITIES), ("Forex", FOREX_PAIRS)]
+                            for cat_name, symbols in fx_comm_watchlist:
+                                for sym, disp in symbols:
+                                    try:
+                                        df = fetch_live_ohlc(sym, period="10d", interval="30m")
+                                        if not df.empty:
+                                            r_df, _ = build_atr_renko_df(df, atr_period=int(atr_period), atr_multiplier=float(atr_multiplier))
+                                            ev = latest_structure_event(r_df, lookback=3)
+                                            if ev and ev["type"] in ["CHOCH_DEMAND", "CHOCH_SUPPLY", "BOS_DEMAND", "BOS_SUPPLY"]:
+                                                if ev["bars_ago"] <= 1:
+                                                    triggered_messages.append(f"🚨 *[30m]* *{disp}* triggered *{ev['label']}* at `${format_price(ev['level'])}`")
+                                    except Exception:
+                                        continue
+                            if triggered_messages:
+                                combined_msg = "📢 *QuantFX Automated Triggers*\n\n" + "\n".join(triggered_messages)
+                                ok, m = send_telegram_alert(combined_msg, tg_token, tg_chat)
+                                st.success(f"Dispatched {len(triggered_messages)} alert(s)!") if ok else st.error(m)
+                            else:
+                                st.info("No new active triggers matching rules.")
+                with tg_col2:
+                    if st.button("📨 Send to Telegram", use_container_width=True):
+                        msg = (
+                            f"*{chart_display}* ({chart_symbol})\n"
+                            f"Price: ${format_price(float(raw_df['Close'].iloc[-1]))}\n"
+                            f"Confirmed Signal: {renko_df['Confirmed_Signal'].iloc[-1]}\n"
+                            f"EMA Signal: {renko_df['Signal'].iloc[-1]}\n"
+                            f"Structure: {struct_event['label'] if struct_event else '—'}"
+                        )
+                        ok, m = send_telegram_alert(msg, st.session_state.get("tg_token"), st.session_state.get("tg_chat"))
+                        st.success("Sent!") if ok else st.error(m)
 
                 search_col, search_btn_col = st.columns([0.85, 0.15])
                 search_col.text_input(
@@ -1234,16 +1232,6 @@ if active_view == "📊 Charts":
                     f"&nbsp;&nbsp;•&nbsp;&nbsp;Raw pullback: <b>{last_pullback}</b>",
                     unsafe_allow_html=True,
                 )
-                if st.button("📨 Send current signal to Telegram"):
-                    msg = (
-                        f"*{chart_display}* ({chart_symbol})\n"
-                        f"Price: ${format_price(float(raw_df['Close'].iloc[-1]))}\n"
-                        f"Confirmed Signal: {last_confirmed}\n"
-                        f"EMA Signal: {last_signal}\n"
-                        f"Structure: {struct_event['label'] if struct_event else '—'}"
-                    )
-                    ok, m = send_telegram_alert(msg, tg_token, tg_chat)
-                    st.success(m) if ok else st.error(m)
                     
             with right_panel_col:
                 # --- Compact EMA9/21 scanner box ---
@@ -1283,12 +1271,11 @@ if active_view == "📊 Charts":
                     "Top Forex", top_forex, key_prefix="open_top_forex", on_click=go_to_chart,
                 )
                 render_clickable_list_box(
-                    "Top 5 US100", top_us100, key_prefix="open_us100", on_click=go_to_chart,
+                    "Top 10 US100", top_us100, key_prefix="open_us100", on_click=go_to_chart,
                 )
                 render_clickable_list_box(
-                    "Top 5 Nifty200", top_nifty200, key_prefix="open_nifty", on_click=go_to_chart,
+                    "Top 10 Nifty200", top_nifty200, key_prefix="open_nifty", on_click=go_to_chart,
                 )
-
 # ---- Scanner view ---------------------------------------------------------
 elif active_view == "🔎 Scanner":
     st.caption("Runs the oracle score across a watchlist. Click any result to open it in the chart view.")

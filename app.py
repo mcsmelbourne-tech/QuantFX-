@@ -88,6 +88,27 @@ st.markdown(
     .js-plotly-plot .plotly .annotation text {{
         font-size: 10px !important;
     }}
+
+    /* Tighten vertical whitespace in the header: title / view tabs / search box */
+    .block-container {{
+        padding-top: 0.6rem !important;
+        padding-bottom: 0.6rem !important;
+    }}
+    div[data-testid="stVerticalBlock"] {{
+        gap: 0.15rem !important;
+    }}
+    div[data-testid="stElementContainer"] {{
+        margin-bottom: 0 !important;
+    }}
+    div[data-testid="stRadio"] {{
+        margin-top: -0.5rem !important;
+        margin-bottom: -0.5rem !important;
+    }}
+    h2 {{
+        margin-top: 0 !important;
+        margin-bottom: 0 !important;
+        padding-bottom: 0 !important;
+    }}
     </style>
     """,
     unsafe_allow_html=True,
@@ -137,7 +158,7 @@ def send_telegram_alert(message, token, chat_id):
 # =====================================================================
 # INDICATORS & HEIKIN ASHI / MACD
 # =====================================================================
-def compute_heikin_ashi(df, ema_fast=21, ema_slow=50):
+def compute_heikin_ashi(df, ema_fast=21, ema_slow=50, ema_mid=None):
   ha = pd.DataFrame(index=df.index)
   ha["Close"] = (df["Open"] + df["High"] + df["Low"] + df["Close"]) / 4.0
   ha_open = [(df["Open"].iloc[0] + df["Close"].iloc[0]) / 2.0]
@@ -152,6 +173,8 @@ def compute_heikin_ashi(df, ema_fast=21, ema_slow=50):
   )
   ha["EMA_FAST"] = ha["Close"].ewm(span=ema_fast, adjust=False).mean()
   ha["EMA_SLOW"] = ha["Close"].ewm(span=ema_slow, adjust=False).mean()
+  if ema_mid is not None:
+    ha["EMA_MID"] = ha["Close"].ewm(span=ema_mid, adjust=False).mean()
   ha_signals = ["HOLD"] * len(ha)
   for i in range(1, len(ha)):
     if (
@@ -272,25 +295,25 @@ def detect_triple_ema_cross_signal(close_series, fast=9, mid=21, slow=50, lookba
       }
   return None
 @st.cache_data(ttl=300, show_spinner=False)
-def fetch_4h_ohlc(symbol, period="60d"):
-  """Yahoo Finance has no native 4h bar, so pull 60m candles and resample."""
+def fetch_2h_ohlc(symbol, period="60d"):
+  """Yahoo Finance has no native 2h bar, so pull 60m candles and resample."""
   df = fetch_live_ohlc(symbol, period=period, interval="60m")
   if df.empty:
     return df
   agg = {"Open": "first", "High": "max", "Low": "min", "Close": "last"}
   if "Volume" in df.columns:
     agg["Volume"] = "sum"
-  df_4h = df.resample("4h").agg(agg).dropna(subset=["Close"])
-  return df_4h
+  df_2h = df.resample("2h").agg(agg).dropna(subset=["Close"])
+  return df_2h
 @st.cache_data(ttl=300, show_spinner=False)
-def scan_triple_ema_cross_4h(
+def scan_triple_ema_cross_2h(
     symbols_tuple, ema_fast=9, ema_mid=21, ema_slow=50, lookback=1, max_results=6
 ):
-  """Only returns symbols whose 4H chart just fired a fresh 3-EMA cross."""
+  """Only returns symbols whose 2H chart just fired a fresh 3-EMA cross."""
   results = []
   for sym, disp in symbols_tuple:
     try:
-      df = fetch_4h_ohlc(sym, period="60d")
+      df = fetch_2h_ohlc(sym, period="60d")
       if df.empty or len(df) < ema_slow + 5:
         continue
       close = df["Close"]
@@ -461,6 +484,7 @@ def build_atr_renko_df(
     atr_multiplier=3.0,
     ema_fast=21,
     ema_slow=50,
+    ema_mid=None,
     macd_fast=12,
     macd_slow=26,
     macd_signal=9,
@@ -508,6 +532,8 @@ def build_atr_renko_df(
   r_close = renko_df["Close"]
   renko_df["EMA_FAST"] = r_close.ewm(span=ema_fast, adjust=False).mean()
   renko_df["EMA_SLOW"] = r_close.ewm(span=ema_slow, adjust=False).mean()
+  if ema_mid is not None:
+    renko_df["EMA_MID"] = r_close.ewm(span=ema_mid, adjust=False).mean()
   real_exp1 = closes.ewm(span=macd_fast, adjust=False).mean()
   real_exp2 = closes.ewm(span=macd_slow, adjust=False).mean()
   real_macd = real_exp1 - real_exp2
@@ -1266,7 +1292,7 @@ def add_buy_sell_markers(
       )
 
 def create_chart_figure(
-    renko_df, ha_df, brick_size, display, ema_fast, ema_slow
+    renko_df, ha_df, brick_size, display, ema_fast, ema_slow, ema_mid=None
 ):
   x_renko = list(range(len(renko_df)))
   x_ha = x_renko
@@ -1339,6 +1365,18 @@ def create_chart_figure(
       row=1,
       col=1,
   )
+  if ema_mid is not None and "EMA_MID" in ha_df.columns:
+    fig.add_trace(
+        go.Scatter(
+            x=x_ha,
+            y=ha_df["EMA_MID"],
+            line=dict(color="#FFFFFF", width=1.3),
+            name=f"HA EMA {ema_mid}",
+            showlegend=False,
+        ),
+        row=1,
+        col=1,
+    )
   add_buy_sell_markers(
       fig,
       x_ha,
@@ -1387,6 +1425,18 @@ def create_chart_figure(
       row=2,
       col=1,
   )
+  if ema_mid is not None and "EMA_MID" in renko_df.columns:
+    fig.add_trace(
+        go.Scatter(
+            x=x_renko,
+            y=renko_df["EMA_MID"],
+            line=dict(color="#FFFFFF", width=1.3),
+            name=f"EMA {ema_mid}",
+            showlegend=False,
+        ),
+        row=2,
+        col=1,
+    )
   add_buy_sell_markers(
       fig,
       x_renko,
@@ -1512,7 +1562,7 @@ def create_chart_figure(
   )
   fig.update_yaxes(range=[0, 100], row=4, col=1)
   fig.update_layout(
-      height=820,
+      height=700,
       paper_bgcolor=COLOR_BG_DARK,
       plot_bgcolor=COLOR_BG_DARK,
       font=dict(color=COLOR_TEXT_MUTED, size=10),
@@ -1566,7 +1616,7 @@ def run_chart_search():
       return
   go_to_chart(query, query)
 
-def render_zoomable_chart(fig, key, height=820):
+def render_zoomable_chart(fig, key, height=700):
   fig_json = fig.to_json()
   div_id = f"qfx_chart_{key}"
   html = f"""
@@ -1650,16 +1700,18 @@ def _render_clickable_html(
     )
     st.button(" ", key=f"{key_prefix}_btn", on_click=on_click, args=args)
 
-def render_clickable_single_box(title, movers, key_prefix, on_click):
+def render_clickable_single_box(title, movers, key_prefix, on_click, compact=False):
+  pad = "3px 8px" if compact else "8px 12px"
+  font_sz = "10px" if compact else "11px"
+  margin_b = "0px" if compact else "8px"
   if not movers:
     st.markdown(
         f"<div style='background-color:{COLOR_PANEL_BG};border:1px solid"
         f" {COLOR_BORDER};"
-        f"border-radius:6px;padding:8px 12px;margin-bottom:8px;'>"
+        f"border-radius:6px;padding:{pad};margin-bottom:{margin_b};'>"
         f"<div"
-        f" style='font-size:11px;color:{COLOR_TEXT_MUTED};margin-bottom:4px;font-weight:600;'>{title}</div>"
-        f"<div"
-        f" style='font-size:11px;color:{COLOR_TEXT_MUTED};'>No data</div></div>",
+        f" style='font-size:{font_sz};color:{COLOR_TEXT_MUTED};font-weight:600;'>{title}:"
+        f" <span style='color:{COLOR_TEXT_MUTED};font-weight:400;'>No data</span></div></div>",
         unsafe_allow_html=True,
     )
     return
@@ -1667,16 +1719,26 @@ def render_clickable_single_box(title, movers, key_prefix, on_click):
   color = COLOR_GREEN if best["chg"] >= 0 else COLOR_RED
   arrow = "▲" if best["chg"] >= 0 else "▼"
   price_str = f"${format_price(best['price'])}"
-  inner = (
-      f"<div"
-      f" style='font-size:11px;color:{COLOR_TEXT_MUTED};margin-bottom:4px;font-weight:600;'>{title}</div>"
-      f"<div"
-      f" style='font-size:11px;font-weight:700;color:{COLOR_TEXT_MAIN};'>{best['display']}</div>"
-      f"<div"
-      f" style='font-size:11px;color:{COLOR_TEXT_MUTED};'>{price_str}</div>"
-      f"<div style='font-size:11px;color:{color};'>{arrow}"
-      f" {best['chg']:+.2f}%</div>"
-  )
+  if compact:
+    inner = (
+        f"<div style='font-size:{font_sz};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;'>"
+        f"<span style='color:{COLOR_TEXT_MUTED};font-weight:600;'>{title}:</span>"
+        f" <span style='font-weight:700;color:{COLOR_TEXT_MAIN};'>{best['display']}</span>"
+        f" <span style='color:{COLOR_TEXT_MUTED};'>{price_str}</span>"
+        f" <span style='color:{color};'>{arrow} {best['chg']:+.2f}%</span>"
+        f"</div>"
+    )
+  else:
+    inner = (
+        f"<div"
+        f" style='font-size:11px;color:{COLOR_TEXT_MUTED};margin-bottom:4px;font-weight:600;'>{title}</div>"
+        f"<div"
+        f" style='font-size:11px;font-weight:700;color:{COLOR_TEXT_MAIN};'>{best['display']}</div>"
+        f"<div"
+        f" style='font-size:11px;color:{COLOR_TEXT_MUTED};'>{price_str}</div>"
+        f"<div style='font-size:11px;color:{color};'>{arrow}"
+        f" {best['chg']:+.2f}%</div>"
+    )
   marker = f"qfx-hit-{key_prefix}"
   _render_clickable_html(
       marker,
@@ -1684,7 +1746,7 @@ def render_clickable_single_box(title, movers, key_prefix, on_click):
       extra_style=(
           f"background-color:{COLOR_PANEL_BG};border:1px solid"
           f" {COLOR_BORDER};"
-          f"border-radius:6px;padding:8px 12px;margin-bottom:8px;"
+          f"border-radius:6px;padding:{pad};margin-bottom:{margin_b};"
       ),
       key_prefix=key_prefix,
       on_click=on_click,
@@ -1871,8 +1933,26 @@ atr_multiplier = c4.number_input(
     "ATR Mult.", min_value=0.1, max_value=10.0, value=3.0, step=0.1
 )
 st.sidebar.caption(
-    "EMA Mid powers the 3-EMA scanner boxes and the 4H/30m Telegram triggers."
+    "EMA Mid powers the 3-EMA scanner boxes and the 2H/30m Telegram triggers."
 )
+st.sidebar.markdown("---")
+CHARTINK_EMA_SCREENER_URL = "https://chartink.com/screener/ema9-20-cross-5"
+with st.sidebar:
+  _sidebar_chartink_hits = fetch_chartink_screener(CHARTINK_EMA_SCREENER_URL)
+  render_clickable_list_box(
+      "📊 Chartink — EMA 9/20 Cross",
+      _sidebar_chartink_hits,
+      key_prefix="chartink_ema920_sidebar",
+      on_click=go_to_chart,
+  )
+  st.markdown(
+      f"<div style='font-size:10px;margin:-4px 0 8px 2px;'>"
+      f"<a href='{CHARTINK_EMA_SCREENER_URL}' target='_blank'"
+      f" style='color:{COLOR_TEXT_MUTED};text-decoration:none;'>Open full"
+      " screener on Chartink ↗</a>"
+      f"</div>",
+      unsafe_allow_html=True,
+  )
 st.sidebar.markdown("---")
 if "tg_token" not in st.session_state or "tg_chat" not in st.session_state:
   saved_token, saved_chat = load_telegram_config()
@@ -1914,13 +1994,13 @@ with st.sidebar.expander("🔔 Telegram Alerts & Automated Triggers", expanded=F
               f"🚨 *[30m 3-EMA Cross]* *{h['display']}* → *{h['direction']}*"
               f" (EMA {int(ema_fast)}/{int(ema_mid)}/{int(ema_slow)})"
           )
-    # US100 & Nifty200: alert only on a fresh 3-EMA cross on the 4H chart.
+    # US100 & Nifty200: alert only on a fresh 3-EMA cross on the 2H chart.
     idx_watchlist = [
         ("US100", list(zip(us100_yf, us100_raw + ["IXIC"]))),
         ("Nifty200", list(zip(nifty200_yf, nifty200_raw))),
     ]
     for cat_name, symbols in idx_watchlist:
-      hits = scan_triple_ema_cross_4h(
+      hits = scan_triple_ema_cross_2h(
           tuple(symbols),
           ema_fast=int(ema_fast),
           ema_mid=int(ema_mid),
@@ -1931,7 +2011,7 @@ with st.sidebar.expander("🔔 Telegram Alerts & Automated Triggers", expanded=F
       for h in hits:
         if h["bars_ago"] <= 1:
           triggered_messages.append(
-              f"🚨 *[4H 3-EMA Cross]* *{h['display']}* → *{h['direction']}*"
+              f"🚨 *[2H 3-EMA Cross]* *{h['display']}* → *{h['direction']}*"
               f" (EMA {int(ema_fast)}/{int(ema_mid)}/{int(ema_slow)})"
           )
     if triggered_messages:
@@ -1965,7 +2045,7 @@ chart_display = st.session_state.chart_display
 # =====================================================================
 _header_top_commodity = fetch_top_n_movers(tuple(COMMODITIES), n=1)
 _header_top_forex = fetch_top_n_movers(tuple(FOREX_PAIRS), n=1)
-title_col, top_commodity_col, top_forex_col = st.columns([0.6, 0.2, 0.2])
+title_col, top_commodity_col, top_forex_col = st.columns([0.5, 0.25, 0.25])
 with title_col:
   st.markdown(
       f"<h2 style='color:#FFFFFF;margin-bottom:0;'>{chart_display} "
@@ -1980,6 +2060,7 @@ with top_commodity_col:
       _header_top_commodity,
       key_prefix="header_top_commodity",
       on_click=go_to_chart,
+      compact=True,
   )
 with top_forex_col:
   render_clickable_single_box(
@@ -1987,6 +2068,7 @@ with top_forex_col:
       _header_top_forex,
       key_prefix="header_top_forex",
       on_click=go_to_chart,
+      compact=True,
   )
 if "active_view" not in st.session_state:
   st.session_state.active_view = VIEWS[0]
@@ -2008,6 +2090,7 @@ if active_view == "📊 Charts":
         atr_multiplier=atr_multiplier,
         ema_fast=ema_fast,
         ema_slow=ema_slow,
+        ema_mid=ema_mid,
     )
     if renko_df.empty:
       st.warning(
@@ -2015,7 +2098,7 @@ if active_view == "📊 Charts":
       )
     else:
       ha_df = compute_heikin_ashi(
-          renko_df, ema_fast=ema_fast, ema_slow=ema_slow
+          renko_df, ema_fast=ema_fast, ema_slow=ema_slow, ema_mid=ema_mid
       )
       struct_event = latest_structure_event(renko_df, lookback=15)
       with st.spinner("Scanning watchlists..."):
@@ -2035,8 +2118,8 @@ if active_view == "📊 Charts":
             zip(us100_yf, us100_raw + ["IXIC"])
         )
         ema_scanner_nifty_watchlist = tuple(zip(nifty200_yf, nifty200_raw))
-        # 3-EMA cross scanner, 4H timeframe — only symbols with a fresh cross show up.
-        ema_scanner_us100_hits = scan_triple_ema_cross_4h(
+        # 3-EMA cross scanner, 2H timeframe — only symbols with a fresh cross show up.
+        ema_scanner_us100_hits = scan_triple_ema_cross_2h(
             ema_scanner_us100_watchlist,
             ema_fast=ema_fast,
             ema_mid=ema_mid,
@@ -2044,21 +2127,23 @@ if active_view == "📊 Charts":
             lookback=1,
             max_results=6,
         )
-        ema_scanner_nifty_hits = scan_triple_ema_cross_4h(
+        ema_scanner_nifty_hits_all = scan_triple_ema_cross_2h(
             ema_scanner_nifty_watchlist,
             ema_fast=ema_fast,
             ema_mid=ema_mid,
             ema_slow=ema_slow,
             lookback=1,
-            max_results=6,
+            max_results=len(ema_scanner_nifty_watchlist),
         )
+        # Nifty200 box only ever shows BUY signals.
+        ema_scanner_nifty_hits = [
+            h for h in ema_scanner_nifty_hits_all if h["direction"] == "BUY"
+        ][:6]
         outlook = compute_7day_outlook(
             chart_symbol, chart_display, period="1y", interval="1d"
         )
-        CHARTINK_EMA_SCREENER_URL = "https://chartink.com/screener/ema9-20-cross-5"
-        chartink_hits = fetch_chartink_screener(CHARTINK_EMA_SCREENER_URL)
       fig = create_chart_figure(
-          renko_df, ha_df, brick_size, chart_display, ema_fast, ema_slow
+          renko_df, ha_df, brick_size, chart_display, ema_fast, ema_slow, ema_mid
       )
       chart_col, right_panel_col = st.columns([0.80, 0.20])
       with chart_col:
@@ -2082,7 +2167,7 @@ if active_view == "📊 Charts":
         render_zoomable_chart(
             fig,
             key=chart_symbol.replace("=", "_").replace("^", "idx"),
-            height=820,
+            height=700,
         )
         last_signal = renko_df["Signal"].iloc[-1]
         last_pullback = renko_df["Pullback_Signal"].iloc[-1]
@@ -2169,32 +2254,18 @@ if active_view == "📊 Charts":
             hc_us100, hc_nifty, key_prefix="hc_combined", on_click=go_to_chart
         )
         render_clickable_list_box(
-            "⚡ 3-EMA Cross Scanner (4H) — US100",
+            "⚡ 3-EMA Cross Scanner (2H) — US100",
             ema_scanner_us100_hits,
             key_prefix="ema3scan_us100",
             on_click=go_to_chart,
             value_fmt=_triple_ema_scanner_value_html,
         )
         render_clickable_list_box(
-            "⚡ 3-EMA Cross Scanner (4H) — Nifty200",
+            "⚡ 3-EMA Cross Scanner (2H) — Nifty200 (BUY only)",
             ema_scanner_nifty_hits,
             key_prefix="ema3scan_nifty",
             on_click=go_to_chart,
             value_fmt=_triple_ema_scanner_value_html,
-        )
-        render_clickable_list_box(
-            "📊 Chartink — EMA 9/20 Cross",
-            chartink_hits,
-            key_prefix="chartink_ema920",
-            on_click=go_to_chart,
-        )
-        st.markdown(
-            f"<div style='font-size:10px;margin:-4px 0 8px 2px;'>"
-            f"<a href='{CHARTINK_EMA_SCREENER_URL}' target='_blank'"
-            f" style='color:{COLOR_TEXT_MUTED};text-decoration:none;'>Open full"
-            " screener on Chartink ↗</a>"
-            f"</div>",
-            unsafe_allow_html=True,
         )
 
 # ---- Scanner view ---------------------------------------------------------

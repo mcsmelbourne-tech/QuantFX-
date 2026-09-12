@@ -90,8 +90,8 @@ st.markdown(
     }}
 
     /* Trim header whitespace without hiding content */
-    .block-container {{
-        padding-top: 1rem !important;
+    .block-container, section.main > div.block-container {{
+        padding-top: 2.2rem !important;
         padding-bottom: 0.8rem !important;
     }}
     div[data-testid="stVerticalBlock"] {{
@@ -101,7 +101,9 @@ st.markdown(
         margin-top: 0 !important;
         margin-bottom: 0.2rem !important;
         padding-bottom: 0 !important;
-        line-height: 1.3 !important;
+        padding-top: 4px !important;
+        font-size: 1.35rem !important;
+        line-height: 1.5 !important;
         overflow: visible !important;
     }}
     </style>
@@ -185,20 +187,65 @@ def compute_heikin_ashi(df, ema_fast=21, ema_slow=50, ema_mid=None):
   ha["Signal"] = ha_signals
   return ha
 
-def detect_macd_crossovers(renko_df):
+def detect_macd_crossovers(
+    renko_df,
+    ema_fast_col="EMA_FAST",
+    ema_slow_col="EMA_SLOW",
+    min_gap_pct=0.10,
+    cooldown=3,
+):
+  """MACD crossover detection with basic noise filtering:
+  - ignores a crossover if the MACD/Signal gap right after it is tiny
+    relative to the recent MACD range (flat, choppy crosses)
+  - ignores a crossover that fights the prevailing EMA trend (e.g. a SELL
+    cross while price is still in a bullish fast>slow EMA trend)
+  - enforces a minimum bar cooldown between fired signals to stop rapid
+    back-to-back flips
+  """
   macd = renko_df["MACD"].values
   signal = renko_df["MACD_Signal"].values
-  macd_signals = ["HOLD"] * len(renko_df)
-  macd_types = [None] * len(renko_df)
-  if len(renko_df) < 2:
+  n = len(renko_df)
+  macd_signals = ["HOLD"] * n
+  macd_types = [None] * n
+  if n < 2:
     return macd_signals, macd_types
-  for i in range(1, len(renko_df)):
-    if macd[i] > signal[i] and macd[i - 1] <= signal[i - 1]:
+  finite_macd = macd[np.isfinite(macd)]
+  macd_range = (
+      (finite_macd.max() - finite_macd.min()) if finite_macd.size else 0.0
+  )
+  noise_floor = macd_range * min_gap_pct if macd_range else 0.0
+  has_trend = ema_fast_col in renko_df.columns and ema_slow_col in renko_df.columns
+  ema_fast_arr = renko_df[ema_fast_col].values if has_trend else None
+  ema_slow_arr = renko_df[ema_slow_col].values if has_trend else None
+  last_fired = -cooldown - 1
+  for i in range(1, n):
+    if not (
+        np.isfinite(macd[i])
+        and np.isfinite(signal[i])
+        and np.isfinite(macd[i - 1])
+        and np.isfinite(signal[i - 1])
+    ):
+      continue
+    crossed_up = macd[i] > signal[i] and macd[i - 1] <= signal[i - 1]
+    crossed_down = macd[i] < signal[i] and macd[i - 1] >= signal[i - 1]
+    if not (crossed_up or crossed_down):
+      continue
+    if abs(macd[i] - signal[i]) < noise_floor:
+      continue
+    if i - last_fired < cooldown:
+      continue
+    if crossed_up:
+      if has_trend and ema_fast_arr[i] < ema_slow_arr[i]:
+        continue
       macd_signals[i] = "BUY"
       macd_types[i] = "MACD Cross Up"
-    elif macd[i] < signal[i] and macd[i - 1] >= signal[i - 1]:
+      last_fired = i
+    elif crossed_down:
+      if has_trend and ema_fast_arr[i] > ema_slow_arr[i]:
+        continue
       macd_signals[i] = "SELL"
       macd_types[i] = "MACD Cross Down"
+      last_fired = i
   return macd_signals, macd_types
 
 def format_price(value):
@@ -546,8 +593,8 @@ def build_atr_renko_df(
   )
   renko_df["MACD_Hist"] = renko_df["MACD"] - renko_df["MACD_Signal"]
   delta = r_close.diff()
-  gain = (delta.where(delta > 0, 0.0)).rolling(rsi_period).mean()
-  loss = (-delta.where(delta < 0, 0.0)).rolling(rsi_period).mean()
+  gain = (delta.where(delta > 0, 0.0)).rolling(rsi_period, min_periods=1).mean()
+  loss = (-delta.where(delta < 0, 0.0)).rolling(rsi_period, min_periods=1).mean()
   rs = gain / loss.replace(0, np.nan)
   renko_df["RSI"] = 100 - (100 / (1 + rs))
   signals = []

@@ -89,25 +89,20 @@ st.markdown(
         font-size: 10px !important;
     }}
 
-    /* Tighten vertical whitespace in the header: title / view tabs / search box */
+    /* Trim header whitespace without hiding content */
     .block-container {{
-        padding-top: 0.6rem !important;
-        padding-bottom: 0.6rem !important;
+        padding-top: 1rem !important;
+        padding-bottom: 0.8rem !important;
     }}
     div[data-testid="stVerticalBlock"] {{
-        gap: 0.15rem !important;
-    }}
-    div[data-testid="stElementContainer"] {{
-        margin-bottom: 0 !important;
-    }}
-    div[data-testid="stRadio"] {{
-        margin-top: -0.5rem !important;
-        margin-bottom: -0.5rem !important;
+        gap: 0.35rem !important;
     }}
     h2 {{
         margin-top: 0 !important;
-        margin-bottom: 0 !important;
+        margin-bottom: 0.2rem !important;
         padding-bottom: 0 !important;
+        line-height: 1.3 !important;
+        overflow: visible !important;
     }}
     </style>
     """,
@@ -1759,18 +1754,18 @@ def render_clickable_list_box(
   st.markdown(
       f"<div style='background-color:{COLOR_PANEL_BG};border:1px solid"
       f" {COLOR_BORDER};"
-      f"border-radius:6px 6px 0 0;padding:6px 10px 4px 10px;margin-bottom:0px;'>"
+      f"border-radius:6px 6px 0 0;padding:8px 12px 6px 12px;margin-bottom:0px;'>"
       f"<div"
-      f" style='font-size:11px;color:{COLOR_TEXT_MUTED};font-weight:600;'>{title}</div></div>",
+      f" style='font-size:12px;color:{COLOR_TEXT_MUTED};font-weight:600;'>{title}</div></div>",
       unsafe_allow_html=True,
   )
   if not movers:
     st.markdown(
         f"<div style='background-color:{COLOR_PANEL_BG};border:1px solid"
         f" {COLOR_BORDER};"
-        f"border-top:none;border-radius:0 0 6px 6px;padding:6px"
-        f" 10px;margin-bottom:8px;"
-        f"font-size:11px;color:{COLOR_TEXT_MUTED};'>No data</div>",
+        f"border-top:none;border-radius:0 0 6px 6px;padding:8px"
+        f" 12px;margin-bottom:14px;"
+        f"font-size:12px;color:{COLOR_TEXT_MUTED};'>No data</div>",
         unsafe_allow_html=True,
     )
     return
@@ -1789,11 +1784,11 @@ def render_clickable_list_box(
       )
     inner = (
         f"<div"
-        f" style='font-size:11px;display:flex;justify-content:space-between;gap:6px;color:{COLOR_TEXT_MAIN};'>"
+        f" style='font-size:12px;display:flex;justify-content:space-between;gap:8px;color:{COLOR_TEXT_MAIN};line-height:1.6;'>"
         f"<span>{idx}. {m['display']}</span>{value_html}</div>"
     )
     radius = "0 0 6px 6px" if is_last else "0"
-    margin = "8px" if is_last else "0px"
+    margin = "14px" if is_last else "0px"
     marker = f"qfx-hit-{key_prefix}-{idx}"
     _render_clickable_html(
         marker,
@@ -1801,7 +1796,7 @@ def render_clickable_list_box(
         extra_style=(
             f"background-color:{COLOR_PANEL_BG};border:1px solid"
             f" {COLOR_BORDER};border-top:none;"
-            f"border-radius:{radius};padding:5px 10px;margin-bottom:{margin};"
+            f"border-radius:{radius};padding:7px 12px;margin-bottom:{margin};"
         ),
         key_prefix=f"{key_prefix}_{idx}",
         on_click=on_click,
@@ -1814,24 +1809,24 @@ def render_high_conviction_combined_box(
   st.markdown(
       f"<div style='background-color:{COLOR_PANEL_BG};border:1px solid"
       f" {COLOR_BORDER};"
-      f"border-radius:6px;padding:8px 12px;margin-bottom:8px;'>"
+      f"border-radius:6px;padding:10px 14px;margin-bottom:14px;'>"
       f"<div"
-      f" style='font-size:11px;color:{COLOR_TEXT_MAIN};font-weight:700;margin-bottom:4px;'>🚨"
+      f" style='font-size:12px;color:{COLOR_TEXT_MAIN};font-weight:700;margin-bottom:6px;'>🚨"
       " High-Conviction BUY Alerts</div>"
       f"<div"
-      f" style='font-size:10px;color:{COLOR_TEXT_MUTED};margin-bottom:8px;'>(Score"
+      f" style='font-size:11px;color:{COLOR_TEXT_MUTED};margin-bottom:10px;'>(Score"
       " ≥ 50%, TP1% ≥ 5%)</div>",
       unsafe_allow_html=True,
   )
   st.markdown(
       f"<div"
-      f" style='font-size:10px;color:{COLOR_TEXT_MAIN};font-weight:600;margin-bottom:4px;'>US100</div>",
+      f" style='font-size:11px;color:{COLOR_TEXT_MAIN};font-weight:600;margin-bottom:6px;'>US100</div>",
       unsafe_allow_html=True,
   )
   if not us100_results:
     st.markdown(
         f"<div"
-        f" style='font-size:10px;color:{COLOR_TEXT_MUTED};margin-bottom:6px;'>No"
+        f" style='font-size:11px;color:{COLOR_TEXT_MUTED};margin-bottom:8px;'>No"
         " matches</div>",
         unsafe_allow_html=True,
     )
@@ -1840,7 +1835,7 @@ def render_high_conviction_combined_box(
       color = COLOR_GREEN if m["Signal"] == "BUY" else COLOR_RED
       inner = (
           f"<div"
-          f" style='font-size:10px;color:{COLOR_TEXT_MAIN};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;'>"
+          f" style='font-size:11px;color:{COLOR_TEXT_MAIN};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.5;'>"
           f"• <b>{m['Ticker']}</b>: <span"
           f" style='color:{color};'>{m['Signal']}</span> | Price: {m['Price']}"
           f" | Score: {m['Score']} | TP1: {m['TP1_PCT']}"
@@ -1852,8 +1847,8 @@ def render_high_conviction_combined_box(
           inner,
           extra_style=(
               f"background-color:{COLOR_PANEL_BG};border:1px solid"
-              f" {COLOR_BORDER};border-radius:4px;padding:4px"
-              " 6px;margin-bottom:4px;"
+              f" {COLOR_BORDER};border-radius:4px;padding:6px"
+              " 10px;margin-bottom:6px;"
           ),
           key_prefix=f"{key_prefix}_us100_{idx}",
           on_click=on_click,
@@ -1861,18 +1856,18 @@ def render_high_conviction_combined_box(
       )
   st.markdown(
       f"<div"
-      f" style='margin:8px 0;border-top:1px solid {COLOR_BORDER};'></div>",
+      f" style='margin:10px 0;border-top:1px solid {COLOR_BORDER};'></div>",
       unsafe_allow_html=True,
   )
   st.markdown(
       f"<div"
-      f" style='font-size:10px;color:{COLOR_TEXT_MAIN};font-weight:600;margin-bottom:4px;'>Nifty200</div>",
+      f" style='font-size:11px;color:{COLOR_TEXT_MAIN};font-weight:600;margin-bottom:6px;'>Nifty200</div>",
       unsafe_allow_html=True,
   )
   if not nifty_results:
     st.markdown(
         f"<div"
-        f" style='font-size:10px;color:{COLOR_TEXT_MUTED};margin-bottom:4px;'>No"
+        f" style='font-size:11px;color:{COLOR_TEXT_MUTED};margin-bottom:6px;'>No"
         " matches</div>",
         unsafe_allow_html=True,
     )
@@ -1881,7 +1876,7 @@ def render_high_conviction_combined_box(
       color = COLOR_GREEN if m["Signal"] == "BUY" else COLOR_RED
       inner = (
           f"<div"
-          f" style='font-size:10px;color:{COLOR_TEXT_MAIN};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;'>"
+          f" style='font-size:11px;color:{COLOR_TEXT_MAIN};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.5;'>"
           f"• <b>{m['Ticker']}</b>: <span"
           f" style='color:{color};'>{m['Signal']}</span> | Price: {m['Price']}"
           f" | Score: {m['Score']} | TP1: {m['TP1_PCT']}"
@@ -1893,8 +1888,8 @@ def render_high_conviction_combined_box(
           inner,
           extra_style=(
               f"background-color:{COLOR_PANEL_BG};border:1px solid"
-              f" {COLOR_BORDER};border-radius:4px;padding:4px"
-              " 6px;margin-bottom:4px;"
+              f" {COLOR_BORDER};border-radius:4px;padding:6px"
+              " 10px;margin-bottom:6px;"
           ),
           key_prefix=f"{key_prefix}_nifty_{idx}",
           on_click=on_click,
@@ -1938,15 +1933,20 @@ st.sidebar.caption(
 st.sidebar.markdown("---")
 CHARTINK_EMA_SCREENER_URL = "https://chartink.com/screener/ema9-20-cross-5"
 with st.sidebar:
+  st.markdown(
+      f"<div style='font-size:11px;color:{COLOR_TEXT_MUTED};font-weight:600;margin-bottom:6px;'>"
+      "📊 Chartink Screener</div>",
+      unsafe_allow_html=True,
+  )
   _sidebar_chartink_hits = fetch_chartink_screener(CHARTINK_EMA_SCREENER_URL)
   render_clickable_list_box(
-      "📊 Chartink — EMA 9/20 Cross",
+      "Chartink — EMA 9/20 Cross",
       _sidebar_chartink_hits,
       key_prefix="chartink_ema920_sidebar",
       on_click=go_to_chart,
   )
   st.markdown(
-      f"<div style='font-size:10px;margin:-4px 0 8px 2px;'>"
+      f"<div style='font-size:11px;margin:2px 0 10px 2px;'>"
       f"<a href='{CHARTINK_EMA_SCREENER_URL}' target='_blank'"
       f" style='color:{COLOR_TEXT_MUTED};text-decoration:none;'>Open full"
       " screener on Chartink ↗</a>"
@@ -2145,7 +2145,7 @@ if active_view == "📊 Charts":
       fig = create_chart_figure(
           renko_df, ha_df, brick_size, chart_display, ema_fast, ema_slow, ema_mid
       )
-      chart_col, right_panel_col = st.columns([0.80, 0.20])
+      chart_col, right_panel_col = st.columns([0.74, 0.26])
       with chart_col:
         search_col, search_btn_col = st.columns([0.85, 0.15])
         search_col.text_input(
@@ -2205,7 +2205,7 @@ if active_view == "📊 Charts":
           arrow = "▲" if m["direction"] == "BUY" else "▼"
           recency = "latest" if m["bars_ago"] == 0 else f"{m['bars_ago']} bars ago"
           return (
-              f"<div style='text-align:right;font-size:10px;'>"
+              f"<div style='text-align:right;font-size:11px;'>"
               f"<span style='color:{color};'>{arrow} {m['direction']}</span>"
               f"<span style='color:{COLOR_TEXT_MUTED};'> · {recency}</span>"
               f"</div>"
@@ -2223,28 +2223,28 @@ if active_view == "📊 Charts":
           )
           reasons_html = "".join(
               "<div"
-              f" style='font-size:10px;color:{COLOR_TEXT_MUTED};margin-top:4px;line-height:1.3;'>•"
+              f" style='font-size:11px;color:{COLOR_TEXT_MUTED};margin-top:6px;line-height:1.5;'>•"
               f" {reason}</div>"
               for reason in outlook.get("reasons", [])
           )
           st.markdown(
               f"<div style='background-color:{COLOR_PANEL_BG};border:1px solid"
               f" {COLOR_BORDER};"
-              f"border-radius:6px;padding:10px 12px;margin-bottom:8px;'>"
+              f"border-radius:6px;padding:12px 14px;margin-bottom:14px;'>"
               f"<div"
-              f" style='font-size:11px;color:{COLOR_TEXT_MAIN};font-weight:700;margin-bottom:6px;'>🧭"
+              f" style='font-size:12px;color:{COLOR_TEXT_MAIN};font-weight:700;margin-bottom:8px;'>🧭"
               " 7-Day Detailed Outlook</div>"
               f"<div"
-              f" style='font-size:11px;font-weight:700;color:{dir_color};'>{outlook['direction']}"
+              f" style='font-size:12px;font-weight:700;color:{dir_color};'>{outlook['direction']}"
               f" <span"
-              f" style='font-size:10px;color:{COLOR_TEXT_MUTED};font-weight:400;'>(Bias"
+              f" style='font-size:11px;color:{COLOR_TEXT_MUTED};font-weight:400;'>(Bias"
               f" Score: {outlook['bias_score']:+.1f})</span></div>"
               f"<div"
-              f" style='font-size:10px;color:{COLOR_TEXT_MUTED};margin-top:3px;'>Projected"
+              f" style='font-size:11px;color:{COLOR_TEXT_MUTED};margin-top:5px;'>Projected"
               f" Range: ${format_price(outlook['range_low'])} –"
               f" ${format_price(outlook['range_high'])}</div>"
               f"<div"
-              f" style='font-size:10px;color:{COLOR_TEXT_MAIN};font-weight:600;margin-top:6px;'>Bullish"
+              f" style='font-size:11px;color:{COLOR_TEXT_MAIN};font-weight:600;margin-top:8px;'>Bullish"
               " / Bearish Drivers:</div>"
               f"{reasons_html}"
               f"</div>",

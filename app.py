@@ -1709,7 +1709,7 @@ if active_view == "📊 Charts":
         ema_scanner_us100_watchlist = tuple(zip(us100_yf, us100_raw + ["IXIC"]))
         ema_scanner_nifty_watchlist = tuple(zip(nifty200_yf, nifty200_raw))
         
-        ema_scanner_us100_hits = scan_triple_ema_cross_2h(
+       from scanner_module import scan_triple_ema_cross_2h
             ema_scanner_us100_watchlist,
             ema_fast=ema_fast,
             ema_mid=ema_mid,

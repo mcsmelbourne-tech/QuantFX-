@@ -232,6 +232,107 @@ def detect_ema_cross_signal(close_series, fast=21, slow=50, lookback=1):
       }
   return None
 
+def detect_triple_ema_cross_signal(close_series, fast=9, mid=21, slow=50, lookback=1):
+  """Detect a 3-EMA cross: fast/mid/slow flip from non-stacked into a fully
+  bullish (fast>mid>slow) or fully bearish (fast<mid<slow) stack within the
+  lookback window. Returns the most recent flip, or None."""
+  if close_series is None or len(close_series) < slow + 2:
+    return None
+  ema_fast_s = close_series.ewm(span=fast, adjust=False).mean()
+  ema_mid_s = close_series.ewm(span=mid, adjust=False).mean()
+  ema_slow_s = close_series.ewm(span=slow, adjust=False).mean()
+  n = len(close_series)
+  earliest = max(n - 1 - lookback, 1)
+  for i in range(n - 1, earliest - 1, -1):
+    f_now, m_now, s_now = ema_fast_s.iloc[i], ema_mid_s.iloc[i], ema_slow_s.iloc[i]
+    f_prev, m_prev, s_prev = (
+        ema_fast_s.iloc[i - 1],
+        ema_mid_s.iloc[i - 1],
+        ema_slow_s.iloc[i - 1],
+    )
+    bullish_now = f_now > m_now > s_now
+    bearish_now = f_now < m_now < s_now
+    bullish_prev = f_prev > m_prev > s_prev
+    bearish_prev = f_prev < m_prev < s_prev
+    if bullish_now and not bullish_prev:
+      return {
+          "direction": "BUY",
+          "bars_ago": n - 1 - i,
+          "fast": float(f_now),
+          "mid": float(m_now),
+          "slow": float(s_now),
+      }
+    if bearish_now and not bearish_prev:
+      return {
+          "direction": "SELL",
+          "bars_ago": n - 1 - i,
+          "fast": float(f_now),
+          "mid": float(m_now),
+          "slow": float(s_now),
+      }
+  return None
+@st.cache_data(ttl=300, show_spinner=False)
+def fetch_4h_ohlc(symbol, period="60d"):
+  """Yahoo Finance has no native 4h bar, so pull 60m candles and resample."""
+  df = fetch_live_ohlc(symbol, period=period, interval="60m")
+  if df.empty:
+    return df
+  agg = {"Open": "first", "High": "max", "Low": "min", "Close": "last"}
+  if "Volume" in df.columns:
+    agg["Volume"] = "sum"
+  df_4h = df.resample("4h").agg(agg).dropna(subset=["Close"])
+  return df_4h
+@st.cache_data(ttl=300, show_spinner=False)
+def scan_triple_ema_cross_4h(
+    symbols_tuple, ema_fast=9, ema_mid=21, ema_slow=50, lookback=1, max_results=6
+):
+  """Only returns symbols whose 4H chart just fired a fresh 3-EMA cross."""
+  results = []
+  for sym, disp in symbols_tuple:
+    try:
+      df = fetch_4h_ohlc(sym, period="60d")
+      if df.empty or len(df) < ema_slow + 5:
+        continue
+      close = df["Close"]
+      cross = detect_triple_ema_cross_signal(
+          close, fast=ema_fast, mid=ema_mid, slow=ema_slow, lookback=lookback
+      )
+      if not cross:
+        continue
+      last_price = float(close.iloc[-1])
+      prev_price = float(close.iloc[-2]) if len(close) > 1 else last_price
+      chg = ((last_price - prev_price) / prev_price) * 100 if prev_price else 0.0
+      results.append({
+          "symbol": sym,
+          "display": disp,
+          "price": last_price,
+          "chg": chg,
+          "direction": cross["direction"],
+          "bars_ago": cross["bars_ago"],
+      })
+    except Exception:
+      continue
+  results.sort(key=lambda r: r["bars_ago"])
+  return results[:max_results]
+@st.cache_data(ttl=300, show_spinner=False)
+def scan_triple_ema_cross_30m(
+    symbols_tuple, ema_fast=9, ema_mid=21, ema_slow=50, lookback=1
+):
+  """Used for the 30-minute Commodities/Forex Telegram trigger scan."""
+  results = []
+  for sym, disp in symbols_tuple:
+    try:
+      df = fetch_live_ohlc(sym, period="10d", interval="30m")
+      if df.empty or len(df) < ema_slow + 5:
+        continue
+      cross = detect_triple_ema_cross_signal(
+          df["Close"], fast=ema_fast, mid=ema_mid, slow=ema_slow, lookback=lookback
+      )
+      if cross:
+        results.append({"symbol": sym, "display": disp, **cross})
+    except Exception:
+      continue
+  return results
 def detect_market_structure(high, low, close, swing_lookback=5, brick_type=None):
   high = pd.Series(high).reset_index(drop=True)
   low = pd.Series(low).reset_index(drop=True)
@@ -1760,13 +1861,17 @@ interval = st.sidebar.select_slider(
 )
 period = TIMEFRAME_PERIODS[interval]
 st.sidebar.markdown("---")
-c1, c2 = st.sidebar.columns(2)
+c1, c2, c2b = st.sidebar.columns(3)
 ema_fast = c1.number_input("EMA Fast", min_value=1, max_value=200, value=21)
-ema_slow = c2.number_input("EMA Slow", min_value=1, max_value=200, value=50)
+ema_mid = c2.number_input("EMA Mid", min_value=1, max_value=200, value=34)
+ema_slow = c2b.number_input("EMA Slow", min_value=1, max_value=200, value=50)
 c3, c4 = st.sidebar.columns(2)
 atr_period = c3.number_input("ATR Period", min_value=2, max_value=100, value=21)
 atr_multiplier = c4.number_input(
     "ATR Mult.", min_value=0.1, max_value=10.0, value=3.0, step=0.1
+)
+st.sidebar.caption(
+    "EMA Mid powers the 3-EMA scanner boxes and the 4H/30m Telegram triggers."
 )
 st.sidebar.markdown("---")
 if "tg_token" not in st.session_state or "tg_chat" not in st.session_state:
@@ -1793,31 +1898,42 @@ with st.sidebar.expander("🔔 Telegram Alerts & Automated Triggers", expanded=F
     st.success(msg) if ok else st.error(msg)
   if st.button("🚀 Run Auto Scan & Send", use_container_width=True):
     triggered_messages = []
+    # Commodities & Forex: alert only on a fresh 3-EMA cross on the 30-minute chart.
     fx_comm_watchlist = [("Commodities", COMMODITIES), ("Forex", FOREX_PAIRS)]
     for cat_name, symbols in fx_comm_watchlist:
-      for sym, disp in symbols:
-        try:
-          df = fetch_live_ohlc(sym, period="10d", interval="30m")
-          if not df.empty:
-            r_df, _ = build_atr_renko_df(
-                df,
-                atr_period=int(atr_period),
-                atr_multiplier=float(atr_multiplier),
-            )
-            ev = latest_structure_event(r_df, lookback=3)
-            if ev and ev["type"] in [
-                "CHOCH_DEMAND",
-                "CHOCH_SUPPLY",
-                "BOS_DEMAND",
-                "BOS_SUPPLY",
-            ]:
-              if ev["bars_ago"] <= 1:
-                triggered_messages.append(
-                    f"🚨 *[30m]* *{disp}* triggered *{ev['label']}* at"
-                    f" `${format_price(ev['level'])}`"
-                )
-        except Exception:
-          continue
+      hits = scan_triple_ema_cross_30m(
+          tuple(symbols),
+          ema_fast=int(ema_fast),
+          ema_mid=int(ema_mid),
+          ema_slow=int(ema_slow),
+          lookback=1,
+      )
+      for h in hits:
+        if h["bars_ago"] <= 1:
+          triggered_messages.append(
+              f"🚨 *[30m 3-EMA Cross]* *{h['display']}* → *{h['direction']}*"
+              f" (EMA {int(ema_fast)}/{int(ema_mid)}/{int(ema_slow)})"
+          )
+    # US100 & Nifty200: alert only on a fresh 3-EMA cross on the 4H chart.
+    idx_watchlist = [
+        ("US100", list(zip(us100_yf, us100_raw + ["IXIC"]))),
+        ("Nifty200", list(zip(nifty200_yf, nifty200_raw))),
+    ]
+    for cat_name, symbols in idx_watchlist:
+      hits = scan_triple_ema_cross_4h(
+          tuple(symbols),
+          ema_fast=int(ema_fast),
+          ema_mid=int(ema_mid),
+          ema_slow=int(ema_slow),
+          lookback=1,
+          max_results=len(symbols),
+      )
+      for h in hits:
+        if h["bars_ago"] <= 1:
+          triggered_messages.append(
+              f"🚨 *[4H 3-EMA Cross]* *{h['display']}* → *{h['direction']}*"
+              f" (EMA {int(ema_fast)}/{int(ema_mid)}/{int(ema_slow)})"
+          )
     if triggered_messages:
       combined_msg = (
           "📢 *QuantFX Automated Triggers*\n\n" + "\n".join(triggered_messages)
@@ -1847,13 +1963,31 @@ chart_display = st.session_state.chart_display
 # =====================================================================
 # MAIN LAYOUT
 # =====================================================================
-st.markdown(
-    f"<h2 style='color:#FFFFFF;margin-bottom:0;'>{chart_display} "
-    f"<span"
-    f" style='color:{COLOR_TEXT_MUTED};font-size:10px;'>({chart_symbol}) •"
-    f" {interval}</span></h2>",
-    unsafe_allow_html=True,
-)
+_header_top_commodity = fetch_top_n_movers(tuple(COMMODITIES), n=1)
+_header_top_forex = fetch_top_n_movers(tuple(FOREX_PAIRS), n=1)
+title_col, top_commodity_col, top_forex_col = st.columns([0.6, 0.2, 0.2])
+with title_col:
+  st.markdown(
+      f"<h2 style='color:#FFFFFF;margin-bottom:0;'>{chart_display} "
+      f"<span"
+      f" style='color:{COLOR_TEXT_MUTED};font-size:10px;'>({chart_symbol}) •"
+      f" {interval}</span></h2>",
+      unsafe_allow_html=True,
+  )
+with top_commodity_col:
+  render_clickable_single_box(
+      "Top Commodity",
+      _header_top_commodity,
+      key_prefix="header_top_commodity",
+      on_click=go_to_chart,
+  )
+with top_forex_col:
+  render_clickable_single_box(
+      "Top Forex",
+      _header_top_forex,
+      key_prefix="header_top_forex",
+      on_click=go_to_chart,
+  )
 if "active_view" not in st.session_state:
   st.session_state.active_view = VIEWS[0]
 
@@ -1885,8 +2019,6 @@ if active_view == "📊 Charts":
       )
       struct_event = latest_structure_event(renko_df, lookback=15)
       with st.spinner("Scanning watchlists..."):
-        top_commodity = fetch_top_n_movers(tuple(COMMODITIES), n=1)
-        top_forex = fetch_top_n_movers(tuple(FOREX_PAIRS), n=1)
         hc_us100 = fetch_high_conviction_results(
             tuple(zip(us100_yf, us100_raw + ["IXIC"])),
             min_score=50.0,
@@ -1903,23 +2035,22 @@ if active_view == "📊 Charts":
             zip(us100_yf, us100_raw + ["IXIC"])
         )
         ema_scanner_nifty_watchlist = tuple(zip(nifty200_yf, nifty200_raw))
-        ema_scanner_us100_hits = scan_ema9_cross21_rsi_vwap_adx(
+        # 3-EMA cross scanner, 4H timeframe — only symbols with a fresh cross show up.
+        ema_scanner_us100_hits = scan_triple_ema_cross_4h(
             ema_scanner_us100_watchlist,
-            ema_fast=9,
-            ema_slow=21,
-            rsi_threshold=51.0,
-            adx_threshold=20.0,
+            ema_fast=ema_fast,
+            ema_mid=ema_mid,
+            ema_slow=ema_slow,
             lookback=1,
-            max_results=4,
+            max_results=6,
         )
-        ema_scanner_nifty_hits = scan_ema9_cross21_rsi_vwap_adx(
+        ema_scanner_nifty_hits = scan_triple_ema_cross_4h(
             ema_scanner_nifty_watchlist,
-            ema_fast=9,
-            ema_slow=21,
-            rsi_threshold=51.0,
-            adx_threshold=20.0,
+            ema_fast=ema_fast,
+            ema_mid=ema_mid,
+            ema_slow=ema_slow,
             lookback=1,
-            max_results=4,
+            max_results=6,
         )
         outlook = compute_7day_outlook(
             chart_symbol, chart_display, period="1y", interval="1d"
@@ -1984,47 +2115,17 @@ if active_view == "📊 Charts":
           ok, m = send_telegram_alert(msg, tg_token, tg_chat)
           st.success(m) if ok else st.error(m)
       with right_panel_col:
-        def _ema_scanner_value_html(m):
-          color = COLOR_GREEN if m["chg"] >= 0 else COLOR_RED
-          arrow = "▲" if m["chg"] >= 0 else "▼"
+        def _triple_ema_scanner_value_html(m):
+          color = COLOR_GREEN if m["direction"] == "BUY" else COLOR_RED
+          arrow = "▲" if m["direction"] == "BUY" else "▼"
+          recency = "latest" if m["bars_ago"] == 0 else f"{m['bars_ago']} bars ago"
           return (
               f"<div style='text-align:right;font-size:10px;'>"
-              f"<span style='color:{color};'>{arrow} {m['chg']:+.2f}%</span>"
-              f"<span style='color:{COLOR_TEXT_MUTED};'> · RSI"
-              f" {m['rsi']:.0f}</span>"
+              f"<span style='color:{color};'>{arrow} {m['direction']}</span>"
+              f"<span style='color:{COLOR_TEXT_MUTED};'> · {recency}</span>"
               f"</div>"
           )
-        render_high_conviction_combined_box(
-            hc_us100, hc_nifty, key_prefix="hc_combined", on_click=go_to_chart
-        )
-        render_clickable_list_box(
-            "⚡ EMA9↗21 Scanner — US100",
-            ema_scanner_us100_hits,
-            key_prefix="ema921scan_us100",
-            on_click=go_to_chart,
-            value_fmt=_ema_scanner_value_html,
-        )
-        render_clickable_list_box(
-            "⚡ EMA9↗21 Scanner — Nifty200",
-            ema_scanner_nifty_hits,
-            key_prefix="ema921scan_nifty",
-            on_click=go_to_chart,
-            value_fmt=_ema_scanner_value_html,
-        )
-        render_clickable_list_box(
-            "📊 Chartink — EMA 9/20 Cross",
-            chartink_hits,
-            key_prefix="chartink_ema920",
-            on_click=go_to_chart,
-        )
-        st.markdown(
-            f"<div style='font-size:10px;margin:-4px 0 8px 2px;'>"
-            f"<a href='{CHARTINK_EMA_SCREENER_URL}' target='_blank'"
-            f" style='color:{COLOR_TEXT_MUTED};text-decoration:none;'>Open full"
-            " screener on Chartink ↗</a>"
-            f"</div>",
-            unsafe_allow_html=True,
-        )
+        # 7-Day Outlook now sits at the top of the right-hand panel.
         if outlook:
           dir_color = (
               COLOR_GREEN
@@ -2064,17 +2165,36 @@ if active_view == "📊 Charts":
               f"</div>",
               unsafe_allow_html=True,
           )
-        render_clickable_single_box(
-            "Top Commodity",
-            top_commodity,
-            key_prefix="open_top_commodity",
+        render_high_conviction_combined_box(
+            hc_us100, hc_nifty, key_prefix="hc_combined", on_click=go_to_chart
+        )
+        render_clickable_list_box(
+            "⚡ 3-EMA Cross Scanner (4H) — US100",
+            ema_scanner_us100_hits,
+            key_prefix="ema3scan_us100",
+            on_click=go_to_chart,
+            value_fmt=_triple_ema_scanner_value_html,
+        )
+        render_clickable_list_box(
+            "⚡ 3-EMA Cross Scanner (4H) — Nifty200",
+            ema_scanner_nifty_hits,
+            key_prefix="ema3scan_nifty",
+            on_click=go_to_chart,
+            value_fmt=_triple_ema_scanner_value_html,
+        )
+        render_clickable_list_box(
+            "📊 Chartink — EMA 9/20 Cross",
+            chartink_hits,
+            key_prefix="chartink_ema920",
             on_click=go_to_chart,
         )
-        render_clickable_single_box(
-            "Top Forex",
-            top_forex,
-            key_prefix="open_top_forex",
-            on_click=go_to_chart,
+        st.markdown(
+            f"<div style='font-size:10px;margin:-4px 0 8px 2px;'>"
+            f"<a href='{CHARTINK_EMA_SCREENER_URL}' target='_blank'"
+            f" style='color:{COLOR_TEXT_MUTED};text-decoration:none;'>Open full"
+            " screener on Chartink ↗</a>"
+            f"</div>",
+            unsafe_allow_html=True,
         )
 
 # ---- Scanner view ---------------------------------------------------------

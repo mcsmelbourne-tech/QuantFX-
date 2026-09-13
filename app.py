@@ -608,6 +608,35 @@ def latest_structure_event(struct_df, lookback=15):
       "bars_ago": int((len(struct_df) - 1) - last_idx),
   }
 
+def compute_macd_line_cross_signal(renko_df, cooldown=1):
+  """
+  The literal "blue line crosses orange line" signal: fires BUY the bar the
+  MACD line (blue) crosses above the Signal line (orange), and SELL the bar
+  it crosses below — no EMA-trend gate, no RSI filter. This is what drives
+  the BUY/SELL buttons on every panel (Heikin Ashi, Renko, MACD, RSI) so
+  what you see is exactly every real MACD/Signal crossover.
+  cooldown=1 means every distinct crossing bar fires; raise it only if you
+  want to thin out rapid back-to-back crosses.
+  """
+  n = len(renko_df)
+  out = ["HOLD"] * n
+  if n < 2 or "MACD" not in renko_df.columns or "MACD_Signal" not in renko_df.columns:
+    return out
+  macd = renko_df["MACD"].values
+  sig = renko_df["MACD_Signal"].values
+  last_fired = -cooldown - 1
+  for i in range(1, n):
+    if not (np.isfinite(macd[i]) and np.isfinite(sig[i]) and np.isfinite(macd[i - 1]) and np.isfinite(sig[i - 1])):
+      continue
+    crossed_up = macd[i] > sig[i] and macd[i - 1] <= sig[i - 1]
+    crossed_down = macd[i] < sig[i] and macd[i - 1] >= sig[i - 1]
+    if crossed_up and (i - last_fired) >= cooldown:
+      out[i] = "BUY"
+      last_fired = i
+    elif crossed_down and (i - last_fired) >= cooldown:
+      out[i] = "SELL"
+      last_fired = i
+  return out
 def compute_master_signal(renko_df, cooldown=5, rsi_overbought=70.0, rsi_oversold=30.0):
   """
   Single source of truth for BUY/SELL used across the Heikin Ashi, Renko,
@@ -825,9 +854,12 @@ def build_atr_renko_df(
   renko_df["RSI_Type"] = rsi_types
   
   # Unified, noise-filtered signal (EMA9/21/50 alignment + MACD agreement +
-  # RSI exhaustion filter + cooldown) — this is what actually gets drawn on
-  # every panel so Heikin Ashi, Renko, MACD, and RSI always agree.
+  # RSI exhaustion filter + cooldown) — kept for reference / scanners.
   renko_df["Master_Signal"] = compute_master_signal(renko_df, cooldown=signal_cooldown)
+  # The literal "blue crosses orange" signal — this is what's actually
+  # drawn on the charts now, since it's guaranteed to show every real
+  # MACD/Signal-line crossover.
+  renko_df["MACD_Cross_Signal"] = compute_macd_line_cross_signal(renko_df, cooldown=1)
   
   struct_df = detect_market_structure(
       renko_df["High"],
@@ -1239,6 +1271,7 @@ TIMEFRAME_PERIODS = {
     "30m": "20d",
     "60m": "60d",
     "1h": "60d",
+    "2h": "60d",
     "4h": "180d",
     "1d": "1y",
     "1wk": "5y",
@@ -1334,8 +1367,9 @@ def create_chart_figure(
   
   # Single unified signal, computed once in build_atr_renko_df, reused by
   # every panel below so Heikin Ashi / Renko / MACD / RSI never disagree.
-  if "Master_Signal" in renko_df.columns:
-    master_signal = renko_df["Master_Signal"]
+  # This is the literal blue-line-crosses-orange-line MACD/Signal cross.
+  if "MACD_Cross_Signal" in renko_df.columns:
+    master_signal = renko_df["MACD_Cross_Signal"]
   else:
     master_signal = pd.Series(["HOLD"] * len(renko_df))
   
@@ -1348,10 +1382,10 @@ def create_chart_figure(
       row_heights=[0.30, 0.30, 0.20, 0.20],
       vertical_spacing=0.03,
       subplot_titles=(
-          f"{display} — Heikin Ashi (EMA 9/21/50 + MACD + RSI confirmed)",
-          f"{display} — ATR Renko (EMA 9/21/50 + MACD + RSI confirmed)",
-          "Smoothed MACD (Histogram Boxes & Buy/Sell Buttons)",
-          "RSI (Buy/Sell aligned to Master Signal & Green 30 / Red 70 Levels)",
+          f"{display} — Heikin Ashi (Buy/Sell = MACD/Signal Cross)",
+          f"{display} — ATR Renko (Buy/Sell = MACD/Signal Cross)",
+          "Smoothed MACD (Blue crosses Orange = Buy/Sell Buttons)",
+          "RSI (Buy/Sell aligned to MACD/Signal Cross & Green 30 / Red 70 Levels)",
       ),
   )
   
@@ -2014,7 +2048,10 @@ with top_forex_col:
 # ---- Charts view --------------------------------------------------------
 if active_view == "📊 Charts":
   with st.spinner(f"Fetching {chart_display}..."):
-    raw_df = fetch_live_ohlc(chart_symbol, period=period, interval=interval)
+    if interval == "2h":
+      raw_df = fetch_2h_ohlc(chart_symbol, period=period)
+    else:
+      raw_df = fetch_live_ohlc(chart_symbol, period=period, interval=interval)
   if raw_df.empty:
     st.error(f"No data returned for {chart_display} ({chart_symbol}).")
   else:
@@ -2146,19 +2183,19 @@ if active_view == "📊 Charts":
         )
         
         if st.button("📨 Send current signal to Telegram"):
-          master_col = renko_df["Master_Signal"]
-          nonhold = master_col[master_col != "HOLD"]
+          cross_col = renko_df["MACD_Cross_Signal"]
+          nonhold = cross_col[cross_col != "HOLD"]
           if not nonhold.empty:
             last_idx = nonhold.index[-1]
-            last_master = nonhold.iloc[-1]
+            last_cross = nonhold.iloc[-1]
             bricks_ago = (len(renko_df) - 1) - last_idx
-            signal_line = f"{last_master} ({'latest brick' if bricks_ago == 0 else f'{bricks_ago} bricks ago'})"
+            signal_line = f"{last_cross} ({'latest brick' if bricks_ago == 0 else f'{bricks_ago} bricks ago'})"
           else:
-            signal_line = "No confirmed signal yet"
+            signal_line = "No MACD/Signal cross yet"
           msg = (
               f"*{chart_display}* ({chart_symbol})\n"
               f"Price: ${format_price(float(raw_df['Close'].iloc[-1]))}\n"
-              f"Signal (EMA9/21/50 + MACD + RSI): {signal_line}\n"
+              f"MACD/Signal Cross: {signal_line}\n"
               f"Structure: {struct_event['label'] if struct_event else '—'}"
           )
           ok, m = send_telegram_alert(msg, tg_token, tg_chat)

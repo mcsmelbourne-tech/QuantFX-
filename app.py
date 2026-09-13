@@ -2,7 +2,7 @@
 QuantFX Terminal — ATR Renko & Macro Smart Money Structure
 Streamlit rewrite with custom candle coloring, right-side axes,
 Heikin Ashi EMAs, single-fire pullback signals with blinking animation,
-blinking/ticking buy/sell markers on Heikin Ashi, Renko, MACD, and RSI,
+blinking/ticking buy/sell markers on Heikin Ashi, Renko, MACD, RSI & Master Consensus,
 expanded box heights, targeted multi-market Telegram alerts,
 full share price display, and right-side top mover cards.
 """
@@ -1133,21 +1133,32 @@ def create_chart_figure(
   else:
     tick_vals, tick_texts = [], []
 
-  # Compute MACD crossovers
   macd_sigs, macd_types = detect_macd_crossovers(renko_df)
+  master_signals = []
+  for i in range(len(renko_df)):
+    h_s = ha_df["Signal"].iloc[i] if i < len(ha_df) else "HOLD"
+    r_s = renko_df["Confirmed_Signal"].iloc[i]
+    m_s = macd_sigs[i]
+    if h_s == "BUY" and r_s == "BUY" and m_s == "BUY":
+      master_signals.append("BUY")
+    elif h_s == "SELL" and r_s == "SELL" and m_s == "SELL":
+      master_signals.append("SELL")
+    else:
+      master_signals.append("HOLD")
 
-  # 4 Subplots: HA, Renko, MACD, and RSI (Master Consensus Box removed)
+  # 5 Subplots: HA, Renko, MACD, RSI, and Master Consensus Box
   fig = make_subplots(
-      rows=4,
+      rows=5,
       cols=1,
       shared_xaxes=True,
-      row_heights=[0.30, 0.30, 0.20, 0.20],
+      row_heights=[0.24, 0.24, 0.18, 0.18, 0.16],
       vertical_spacing=0.03,
       subplot_titles=(
           f"{display} — Heikin Ashi (Buy/Sell Signals)",
           f"{display} — ATR Renko (Buy/Sell Signals)",
           "TradingView MACD (Green/Red Histogram Boxes & Combined Renko + MACD Buy/Sell Buttons)",
-          "RSI (Buy/Sell Signals & Green 30 / Red 70 Levels)",
+          "RSI (Aligned with Heikin Ashi, Renko & MACD, Buy/Sell Signals & Levels)",
+          "Master Consensus Box (Buy/Sell when Heikin Ashi, Renko & MACD align)",
       ),
   )
 
@@ -1295,7 +1306,7 @@ def create_chart_figure(
   macd_pad = ((macd_finite.max() - macd_finite.min()) * 0.06 or 0.001) if macd_finite.size else 0.001
   add_buy_sell_markers(fig, x_renko, renko_df["Combined_Renko_MACD_Signal"], renko_df["MACD"], renko_df["MACD"], row=3, col=1, absolute_offset=macd_pad)
 
-  # Subplot 4: RSI with RSI Buy/Sell Signals & 70/30 Levels
+  # Subplot 4: RSI (Aligned with Heikin Ashi, Renko & MACD)
   rsi_vals = renko_df["RSI"].values
   fig.add_trace(
       go.Scatter(x=x_renko, y=rsi_vals, line=dict(color="#00D4FF", width=1.8), name="RSI", showlegend=False),
@@ -1307,8 +1318,17 @@ def create_chart_figure(
   fig.update_yaxes(range=[0, 100], row=4, col=1)
   add_buy_sell_markers(fig, x_renko, renko_df["RSI_Signal"], renko_df["RSI"], renko_df["RSI"], row=4, col=1, absolute_offset=12.0)
 
+  # Subplot 5: Master Consensus Box (HA + Renko + MACD Buy/Sell alignment)
+  fig.add_trace(
+      go.Scatter(x=x_renko, y=[0]*len(x_renko), mode="lines", line=dict(color=COLOR_ZERO_LINE, width=1), showlegend=False),
+      row=5,
+      col=1,
+  )
+  add_buy_sell_markers(fig, x_renko, master_signals, [0]*len(x_renko), [0]*len(x_renko), row=5, col=1, absolute_offset=0.2)
+  fig.update_yaxes(range=[-1, 1], showticklabels=False, row=5, col=1)
+
   fig.update_layout(
-      height=950,
+      height=1000,
       paper_bgcolor=COLOR_BG_DARK,
       plot_bgcolor=COLOR_BG_DARK,
       font=dict(color=COLOR_TEXT_MUTED, size=10),
@@ -1317,16 +1337,16 @@ def create_chart_figure(
       xaxis_rangeslider_visible=False,
       xaxis2_rangeslider_visible=False,
   )
-  for r in range(1, 5):
+  for r in range(1, 6):
     kwargs = {"showgrid": False, "row": r, "col": 1, "matches": "x", "tickfont": dict(size=10)}
-    if r == 4 and tick_vals:
+    if r == 5 and tick_vals:
       kwargs["tickvals"] = tick_vals
       kwargs["ticktext"] = tick_texts
       kwargs["showticklabels"] = True
     else:
-      kwargs["showticklabels"] = (r == 4)
+      kwargs["showticklabels"] = (r == 5)
     fig.update_xaxes(**kwargs)
-    if r < 4:
+    if r < 5:
       fig.update_yaxes(
           gridcolor="#2A2F3A",
           side="right",
@@ -1359,7 +1379,7 @@ def run_chart_search():
       return
   go_to_chart(query, query)
 
-def render_zoomable_chart(fig, key, height=950):
+def render_zoomable_chart(fig, key, height=1000):
   fig_json = fig.to_json()
   div_id = f"qfx_chart_{key}"
   html = f"""
@@ -1514,59 +1534,6 @@ def render_clickable_list_box(title, movers, key_prefix, on_click, value_fmt=Non
         args=(m["symbol"], m["display"]),
     )
 
-def render_high_conviction_combined_box(us100_results, nifty_results, key_prefix, on_click):
-  st.markdown(
-      f"<div style='background-color:{COLOR_PANEL_BG};border:1px solid {COLOR_BORDER};"
-      f"border-radius:6px;padding:10px 14px;margin-bottom:14px;'>"
-      f"<div style='font-size:12px;color:{COLOR_TEXT_MAIN};font-weight:700;margin-bottom:6px;'>🚨 High-Conviction BUY Alerts</div>"
-      f"<div style='font-size:11px;color:{COLOR_TEXT_MUTED};margin-bottom:10px;'>(Score ≥ 50%, TP1% ≥ 5%)</div>",
-      unsafe_allow_html=True,
-  )
-  st.markdown(f"<div style='font-size:11px;color:{COLOR_TEXT_MAIN};font-weight:600;margin-bottom:6px;'>US100</div>", unsafe_allow_html=True)
-  if not us100_results:
-    st.markdown(f"<div style='font-size:11px;color:{COLOR_TEXT_MUTED};margin-bottom:8px;'>No matches</div>", unsafe_allow_html=True)
-  else:
-    for idx, m in enumerate(us100_results, start=1):
-      color = COLOR_GREEN if m["Signal"] == "BUY" else COLOR_RED
-      inner = (
-          f"<div style='font-size:11px;color:{COLOR_TEXT_MAIN};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.5;'>"
-          f"• <b>{m['Ticker']}</b>: <span style='color:{color};'>{m['Signal']}</span> | Price: {m['Price']}"
-          f" | Score: {m['Score']} | TP1: {m['TP1_PCT']}"
-          f"</div>"
-      )
-      marker = f"qfx-hc-us100-{idx}"
-      _render_clickable_html(
-          marker,
-          inner,
-          extra_style=f"background-color:{COLOR_PANEL_BG};border:1px solid {COLOR_BORDER};border-radius:4px;padding:6px 10px;margin-bottom:6px;",
-          key_prefix=f"{key_prefix}_us100_{idx}",
-          on_click=on_click,
-          args=(m["RawSymbol"], m["Ticker"]),
-      )
-  st.markdown(f"<div style='margin:10px 0;border-top:1px solid {COLOR_BORDER};'></div>", unsafe_allow_html=True)
-  st.markdown(f"<div style='font-size:11px;color:{COLOR_TEXT_MAIN};font-weight:600;margin-bottom:6px;'>Nifty200</div>", unsafe_allow_html=True)
-  if not nifty_results:
-    st.markdown(f"<div style='font-size:11px;color:{COLOR_TEXT_MUTED};margin-bottom:6px;'>No matches</div>", unsafe_allow_html=True)
-  else:
-    for idx, m in enumerate(nifty_results, start=1):
-      color = COLOR_GREEN if m["Signal"] == "BUY" else COLOR_RED
-      inner = (
-          f"<div style='font-size:11px;color:{COLOR_TEXT_MAIN};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.5;'>"
-          f"• <b>{m['Ticker']}</b>: <span style='color:{color};'>{m['Signal']}</span> | Price: {m['Price']}"
-          f" | Score: {m['Score']} | TP1: {m['TP1_PCT']}"
-          f"</div>"
-      )
-      marker = f"qfx-hc-nifty-{idx}"
-      _render_clickable_html(
-          marker,
-          inner,
-          extra_style=f"background-color:{COLOR_PANEL_BG};border:1px solid {COLOR_BORDER};border-radius:4px;padding:6px 10px;margin-bottom:6px;",
-          key_prefix=f"{key_prefix}_nifty_{idx}",
-          on_click=on_click,
-          args=(m["RawSymbol"], m["Ticker"]),
-      )
-  st.markdown("</div>", unsafe_allow_html=True)
-
 # =====================================================================
 # SIDEBAR CONTROLS
 # =====================================================================
@@ -1675,6 +1642,7 @@ with st.sidebar.expander("🔔 Telegram Alerts & Automated Triggers", expanded=F
 if st.sidebar.button("🔄 Refresh data", use_container_width=True):
   st.cache_data.clear()
   st.rerun()
+
 if "chart_symbol" not in st.session_state:
   st.session_state.chart_symbol = current_symbol
   st.session_state.chart_display = current_display
@@ -1683,29 +1651,50 @@ elif current_symbol != st.session_state._prev_sidebar_symbol:
   st.session_state.chart_symbol = current_symbol
   st.session_state.chart_display = current_display
   st.session_state._prev_sidebar_symbol = current_symbol
+
 chart_symbol = st.session_state.chart_symbol
 chart_display = st.session_state.chart_display
 
 # =====================================================================
 # MAIN LAYOUT
 # =====================================================================
+try:
+  live_df = fetch_live_ohlc(chart_symbol, period="5d", interval="1d")
+  live_price = float(live_df["Close"].iloc[-1]) if not live_df.empty else 0.0
+  prev_price = float(live_df["Close"].iloc[-2]) if len(live_df) > 1 else live_price
+  live_chg = ((live_price - prev_price) / prev_price) * 100 if prev_price else 0.0
+except Exception:
+  live_price = 0.0
+  live_chg = 0.0
+
 _header_top_commodity = fetch_top_n_movers(tuple(COMMODITIES), n=1)
 _header_top_forex = fetch_top_n_movers(tuple(FOREX_PAIRS), n=1)
-title_col, top_commodity_col, top_forex_col = st.columns([0.5, 0.25, 0.25])
-with title_col:
-  st.markdown(
-      f"<h2 style='color:#FFFFFF;margin-bottom:0;'>{chart_display} "
-      f"<span style='color:{COLOR_TEXT_MUTED};font-size:10px;'>({chart_symbol}) • {interval}</span></h2>",
-      unsafe_allow_html=True,
-  )
-with top_commodity_col:
-  render_clickable_single_box("Top Commodity", _header_top_commodity, key_prefix="header_top_commodity", on_click=go_to_chart, compact=True)
-with top_forex_col:
-  render_clickable_single_box("Top Forex", _header_top_forex, key_prefix="header_top_forex", on_click=go_to_chart, compact=True)
+
+view_col, title_price_col, top_commodity_col, top_forex_col = st.columns([0.22, 0.38, 0.20, 0.20])
 
 if "active_view" not in st.session_state:
   st.session_state.active_view = VIEWS[0]
-active_view = st.radio("View", VIEWS, horizontal=True, label_visibility="collapsed", key="active_view")
+
+with view_col:
+  active_view = st.radio("View", VIEWS, horizontal=True, label_visibility="collapsed", key="active_view")
+
+with title_price_col:
+  price_color = COLOR_GREEN if live_chg >= 0 else COLOR_RED
+  price_arrow = "▲" if live_chg >= 0 else "▼"
+  st.markdown(
+      f"<div style='padding-top:4px;font-size:13px;font-weight:700;color:{COLOR_TEXT_MAIN};'>"
+      f"{chart_display} <span style='color:{COLOR_TEXT_MUTED};font-size:10px;'>({chart_symbol}) • {interval}</span> "
+      f"<span style='color:{COLOR_TEXT_MAIN};margin-left:8px;'>${format_price(live_price)}</span> "
+      f"<span style='color:{price_color};font-size:11px;margin-left:4px;'>{price_arrow} {live_chg:+.2f}%</span>"
+      f"</div>",
+      unsafe_allow_html=True,
+  )
+
+with top_commodity_col:
+  render_clickable_single_box("Top Commodity", _header_top_commodity, key_prefix="header_top_commodity", on_click=go_to_chart, compact=True)
+
+with top_forex_col:
+  render_clickable_single_box("Top Forex", _header_top_forex, key_prefix="header_top_forex", on_click=go_to_chart, compact=True)
 
 # ---- Charts view --------------------------------------------------------
 if active_view == "📊 Charts":
@@ -1731,43 +1720,6 @@ if active_view == "📊 Charts":
       ha_df = compute_heikin_ashi(renko_df, ema_fast=ema_fast, ema_slow=ema_slow, ema_mid=ema_mid)
       struct_event = latest_structure_event(renko_df, lookback=15)
       with st.spinner("Scanning watchlists..."):
-        hc_us100 = fetch_high_conviction_results(
-            tuple(zip(us100_yf, us100_raw + ["IXIC"])),
-            min_score=50.0,
-            min_tp1=5.0,
-            max_results=4,
-            macd_fast=macd_fast,
-            macd_slow=macd_slow,
-            macd_signal=macd_signal,
-        )
-        hc_nifty = fetch_high_conviction_results(
-            tuple(zip(nifty200_yf, nifty200_raw)),
-            min_score=50.0,
-            min_tp1=5.0,
-            max_results=4,
-            macd_fast=macd_fast,
-            macd_slow=macd_slow,
-            macd_signal=macd_signal,
-        )
-        ema_scanner_us100_watchlist = tuple(zip(us100_yf, us100_raw + ["IXIC"]))
-        ema_scanner_nifty_watchlist = tuple(zip(nifty200_yf, nifty200_raw))
-        ema_scanner_us100_hits = scan_triple_ema_cross_2h(
-            ema_scanner_us100_watchlist,
-            ema_fast=ema_fast,
-            ema_mid=ema_mid,
-            ema_slow=ema_slow,
-            lookback=1,
-            max_results=6,
-        )
-        ema_scanner_nifty_hits_all = scan_triple_ema_cross_2h(
-            ema_scanner_nifty_watchlist,
-            ema_fast=ema_fast,
-            ema_mid=ema_mid,
-            ema_slow=ema_slow,
-            lookback=1,
-            max_results=len(ema_scanner_nifty_watchlist),
-        )
-        ema_scanner_nifty_hits = [h for h in ema_scanner_nifty_hits_all if h["direction"] == "BUY"][:6]
         outlook = compute_7day_outlook(
             chart_symbol,
             chart_display,
@@ -1797,7 +1749,7 @@ if active_view == "📊 Charts":
         render_zoomable_chart(
             fig,
             key=chart_symbol.replace("=", "_").replace("^", "idx"),
-            height=950,
+            height=1000,
         )
         
         if st.button("📨 Send current signal to Telegram"):
@@ -1813,16 +1765,6 @@ if active_view == "📊 Charts":
           ok, m = send_telegram_alert(msg, tg_token, tg_chat)
           st.success(m) if ok else st.error(m)
       with right_panel_col:
-        def _triple_ema_scanner_value_html(m):
-          color = COLOR_GREEN if m["direction"] == "BUY" else COLOR_RED
-          arrow = "▲" if m["direction"] == "BUY" else "▼"
-          recency = "latest" if m["bars_ago"] == 0 else f"{m['bars_ago']} bars ago"
-          return (
-              f"<div style='text-align:right;font-size:11px;'>"
-              f"<span style='color:{color};'>{arrow} {m['direction']}</span>"
-              f"<span style='color:{COLOR_TEXT_MUTED};'> · {recency}</span>"
-              f"</div>"
-          )
         if outlook:
           dir_color = (
               COLOR_GREEN
@@ -1840,63 +1782,47 @@ if active_view == "📊 Charts":
               f"<div style='font-size:12px;font-weight:700;color:{dir_color};'>{outlook['direction']}"
               f" <span style='font-size:11px;color:{COLOR_TEXT_MUTED};font-weight:400;'>(Bias Score: {outlook['bias_score']:+.1f})</span></div>"
               f"<div style='font-size:11px;color:{COLOR_TEXT_MUTED};margin-top:5px;'>Projected Range: ${format_price(outlook['range_low'])} – ${format_price(outlook['range_high'])}</div>"
-              f"<div style='font-size:11px;color:{COLOR_TEXT_MAIN};font-weight:600;margin-top:8px;'>Bullish / Bearish Drivers:</div>"
+              f"<div style='margin-top:8px;border-top:1px solid {COLOR_BORDER};'></div>"
               f"{reasons_html}"
               f"</div>",
               unsafe_allow_html=True,
           )
-        render_high_conviction_combined_box(hc_us100, hc_nifty, key_prefix="hc_combined", on_click=go_to_chart)
-        render_clickable_list_box(
-            "⚡ 3-EMA Cross Scanner (2H) — US100",
-            ema_scanner_us100_hits,
-            key_prefix="ema3scan_us100",
-            on_click=go_to_chart,
-            value_fmt=_triple_ema_scanner_value_html,
-        )
-        render_clickable_list_box(
-            "⚡ 3-EMA Cross Scanner (2H) — Nifty200 (BUY only)",
-            ema_scanner_nifty_hits,
-            key_prefix="ema3scan_nifty",
-            on_click=go_to_chart,
-            value_fmt=_triple_ema_scanner_value_html,
-        )
 
-# ---- Scanner view ---------------------------------------------------------
+# ---- Scanner view --------------------------------------------------------
 elif active_view == "🔎 Scanner":
-  st.caption("Runs the oracle score across a watchlist. Click any result to open it in the chart view.")
-  cats = st.multiselect("Watchlists to scan", list(WATCHLIST_CATEGORIES.keys()), default=["Commodities", "Forex"])
-  if st.button("▶️ Run scanner", type="primary"):
-    if not cats:
-      st.warning("Pick at least one watchlist.")
+  st.markdown(f"### 🔎 Market Scanner & High-Conviction Setups")
+  sc_col1, sc_col2 = st.columns(2)
+  with sc_col1:
+    st.markdown("#### US100 High-Conviction Setups")
+    with st.spinner("Scanning US100..."):
+      hc_us100 = fetch_high_conviction_results(
+          tuple(zip(us100_yf, us100_raw + ["IXIC"])),
+          min_score=50.0,
+          min_tp1=5.0,
+          max_results=8,
+          macd_fast=macd_fast,
+          macd_slow=macd_slow,
+          macd_signal=macd_signal,
+      )
+    if not hc_us100:
+      st.info("No US100 high-conviction matches currently.")
     else:
-      results = []
-      for cat in cats:
-        for sym, disp in WATCHLIST_CATEGORIES[cat]:
-          res = evaluate_oracle_score(sym, disp, macd_fast=macd_fast, macd_slow=macd_slow, macd_signal=macd_signal)
-          if res:
-            results.append(res)
-      df_res = pd.DataFrame(results)
-      st.session_state["scanner_results"] = df_res
-  df_res = st.session_state.get("scanner_results")
-  if df_res is not None and not df_res.empty:
-    display_cols = ["Ticker", "Price", "ChangePct", "Signal", "Structure", "Score", "SL", "TP1", "TP1_PCT", "TP2"]
-    def _row_style(row):
-      color = COLOR_GREEN if row["Signal"] == "BUY" else COLOR_RED
-      return [f"color: {color}" if col == "Signal" else "" for col in row.index]
-    st.dataframe(
-        df_res[display_cols].style.apply(_row_style, axis=1),
-        use_container_width=True,
-        hide_index=True,
-    )
-    oc1, oc2 = st.columns([0.7, 0.3])
-    sel_ticker = oc1.selectbox("Open a result in the chart", df_res["Ticker"].tolist(), key="scanner_open_select")
-    sel_row = df_res[df_res["Ticker"] == sel_ticker].iloc[0]
-    oc2.button(
-        "📈 Open chart",
-        key="scanner_open_btn",
-        use_container_width=True,
-        on_click=go_to_chart,
-        args=(sel_row["RawSymbol"], sel_row["Ticker"]),
-    )
-  elif df_res is not None:
-    st.info("No results — data source may be rate-limiting.")
+      for m in hc_us100:
+        st.markdown(f"- **{m['Ticker']}** | Price: {m['Price']} | Score: {m['Score']} | TP1: {m['TP1_PCT']}")
+  with sc_col2:
+    st.markdown("#### Nifty200 High-Conviction Setups")
+    with st.spinner("Scanning Nifty200..."):
+      hc_nifty = fetch_high_conviction_results(
+          tuple(zip(nifty200_yf, nifty200_raw)),
+          min_score=50.0,
+          min_tp1=5.0,
+          max_results=8,
+          macd_fast=macd_fast,
+          macd_slow=macd_slow,
+          macd_signal=macd_signal,
+      )
+    if not hc_nifty:
+      st.info("No Nifty200 high-conviction matches currently.")
+    else:
+      for m in hc_nifty:
+        st.markdown(f"- **{m['Ticker']}** | Price: {m['Price']} | Score: {m['Score']} | TP1: {m['TP1_PCT']}")

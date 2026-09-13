@@ -87,21 +87,19 @@ st.markdown(
     .js-plotly-plot .plotly .annotation text {{
         font-size: 10px !important;
     }}
-    /* Trim header whitespace without hiding content */
+    /* Trim header whitespace with comfortable padding to keep stock name visible */
     .block-container, section.main > div.block-container {{
-        padding-top: 2.2rem !important;
+        padding-top: 3.5rem !important;
         padding-bottom: 0.8rem !important;
     }}
     div[data-testid="stVerticalBlock"] {{
         gap: 0.35rem !important;
     }}
-    h2 {{
+    h2, h3 {{
         margin-top: 0 !important;
         margin-bottom: 0.2rem !important;
         padding-bottom: 0 !important;
         padding-top: 4px !important;
-        font-size: 1.35rem !important;
-        line-height: 1.5 !important;
         overflow: visible !important;
     }}
     </style>
@@ -653,13 +651,6 @@ def fetch_live_ohlc(symbol="GC=F", period="6mo", interval="1d"):
     df.columns = df.columns.get_level_values(0)
   return df
 
-@st.cache_data(ttl=60, show_spinner=False)
-def get_latest_price(symbol):
-  df = fetch_live_ohlc(symbol, period="5d", interval="1d")
-  if not df.empty and "Close" in df.columns:
-    return float(df["Close"].iloc[-1])
-  return 0.0
-
 @st.cache_data(ttl=300, show_spinner=False)
 def fetch_top_n_movers(symbols_tuple, n=1):
   symbols = list(symbols_tuple)
@@ -982,7 +973,6 @@ us100_raw = [
     "CSGP", "CEG", "AMZN", "ISRG", "CCEP", "FANG",
 ]
 nifty200_yf = [f"{t}.NS" for t in nifty200_raw]
-
 def convert_us100_symbol(t):
   if t == "NAS100":
     return "^NDX"
@@ -991,7 +981,6 @@ def convert_us100_symbol(t):
   if t == "US30":
     return "^DJI"
   return t
-
 us100_yf = [convert_us100_symbol(t) for t in us100_raw] + ["^IXIC"]
 COMMODITIES = [
     ("GC=F", "GOLD"),
@@ -1018,7 +1007,6 @@ DISPLAY_TO_SYMBOL = {}
 for _cat_symbols in WATCHLIST_CATEGORIES.values():
   for _sym, _disp in _cat_symbols:
     DISPLAY_TO_SYMBOL[_disp] = _sym
-
 VIEWS = ["📊 Charts", "🔎 Scanner"]
 TIMEFRAME_PERIODS = {
     "15m": "10d",
@@ -1108,7 +1096,6 @@ def create_chart_figure(
         tick_texts.append(str(dt))
   else:
     tick_vals, tick_texts = [], []
-  
   fig = make_subplots(
       rows=4,
       cols=1,
@@ -1118,11 +1105,10 @@ def create_chart_figure(
       subplot_titles=(
           f"{display} — Heikin Ashi (Blinking Buy/Sell Signals)",
           f"{display} — ATR Renko (Blinking Buy/Sell Signals)",
-          "TradingView MACD (Vertical Green & Red Thin Histogram Boxes)",
+          "TradingView MACD (Histogram in Thin Green/Red Boxes)",
           "RSI (Full RSI Line with Green 30 & Red 70 Levels)",
       ),
   )
-
   # Subplot 1: Heikin Ashi
   fig.add_trace(
       go.Candlestick(
@@ -1236,16 +1222,16 @@ def create_chart_figure(
           yshift=14 if s_type in ("BOS_DEMAND", "CHOCH_DEMAND") else -14,
       )
 
-  # Subplot 3: MACD with Histogram as Vertical Green and Red Thin Boxes
+  # Subplot 3: MACD with Histogram in Thin Vertical Green/Red Boxes (Bars)
   hist_vals = renko_df["MACD_Hist"].values
-  hist_colors = [COLOR_GREEN if v >= 0 else COLOR_RED for v in hist_vals]
+  bar_colors = [COLOR_GREEN if v >= 0 else COLOR_RED for v in hist_vals]
   fig.add_trace(
       go.Bar(
           x=x_renko,
           y=hist_vals,
-          marker_color=hist_colors,
+          marker_color=bar_colors,
           name="MACD Histogram",
-          width=0.38,
+          width=0.4,
           opacity=0.9,
           showlegend=False,
       ),
@@ -1278,7 +1264,6 @@ def create_chart_figure(
   fig.add_hline(y=70, line=dict(color=COLOR_RED, width=1, dash="dash"), row=4, col=1)
   fig.add_hline(y=30, line=dict(color=COLOR_GREEN, width=1, dash="dash"), row=4, col=1)
   fig.update_yaxes(range=[0, 100], row=4, col=1)
-
   fig.update_layout(
       height=700,
       paper_bgcolor=COLOR_BG_DARK,
@@ -1550,7 +1535,6 @@ if symbol_mode == "Presets":
 else:
   current_symbol = st.sidebar.text_input("Yahoo Finance symbol", value="GC=F")
   current_display = st.sidebar.text_input("Display name", value=current_symbol)
-
 interval = st.sidebar.select_slider("Timeframe", options=list(TIMEFRAME_PERIODS.keys()), value="1d")
 period = TIMEFRAME_PERIODS[interval]
 st.sidebar.markdown("---")
@@ -1571,7 +1555,6 @@ macd_slow = mc2.number_input("Slow", min_value=1, max_value=200, value=26)
 macd_signal = mc3.number_input("Signal", min_value=1, max_value=100, value=9)
 st.sidebar.caption("EMA Mid powers the 3-EMA scanner boxes and the 2H/30m Telegram triggers.")
 st.sidebar.markdown("---")
-
 CHARTINK_EMA_SCREENER_URL = "https://chartink.com/screener/ema9-20-cross-5"
 with st.sidebar:
   st.markdown(f"<div style='font-size:11px;color:{COLOR_TEXT_MUTED};font-weight:600;margin-bottom:6px;'>📊 Chartink Screener</div>", unsafe_allow_html=True)
@@ -1588,13 +1571,11 @@ with st.sidebar:
       f"</div>",
       unsafe_allow_html=True,
   )
-
 st.sidebar.markdown("---")
 if "tg_token" not in st.session_state or "tg_chat" not in st.session_state:
   saved_token, saved_chat = load_telegram_config()
   st.session_state["tg_token"] = saved_token
   st.session_state["tg_chat"] = saved_chat
-
 with st.sidebar.expander("🔔 Telegram Alerts & Automated Triggers", expanded=False):
   tg_token = st.text_input("Bot Token", value=st.session_state.get("tg_token", ""), type="password")
   tg_chat = st.text_input("Chat ID", value=st.session_state.get("tg_chat", ""))
@@ -1647,7 +1628,6 @@ with st.sidebar.expander("🔔 Telegram Alerts & Automated Triggers", expanded=F
       st.success(f"Dispatched {len(triggered_messages)} alert(s)!") if ok else st.error(m)
     else:
       st.info("No new active triggers matching rules.")
-
 if st.sidebar.button("🔄 Refresh data", use_container_width=True):
   st.cache_data.clear()
   st.rerun()
@@ -1670,15 +1650,16 @@ chart_display = st.session_state.chart_display
 _header_top_commodity = fetch_top_n_movers(tuple(COMMODITIES), n=1)
 _header_top_forex = fetch_top_n_movers(tuple(FOREX_PAIRS), n=1)
 
-current_price = get_latest_price(chart_symbol)
-price_str = f"${format_price(current_price)}" if current_price else ""
+# Fetch quick price for header display
+raw_df_preview = fetch_live_ohlc(chart_symbol, period="5d", interval="1d")
+current_price_str = format_price(float(raw_df_preview["Close"].iloc[-1])) if not raw_df_preview.empty else "—"
 
 title_col, top_commodity_col, top_forex_col = st.columns([0.5, 0.25, 0.25])
 with title_col:
-  price_display_html = f" <span style='color:{COLOR_BULL};font-size:14px;font-weight:700;'>{price_str}</span>" if current_price else ""
   st.markdown(
-      f"<h2 style='color:#FFFFFF;margin-bottom:0;'>{chart_display}{price_display_html} "
-      f"<span style='color:{COLOR_TEXT_MUTED};font-size:10px;'>({chart_symbol}) • {interval}</span></h2>",
+      f"<h3 style='color:#FFFFFF;margin-top:4px;margin-bottom:0;font-size:1.15rem;'>"
+      f"{chart_display} <span style='color:{COLOR_BULL};font-size:1.05rem;margin-left:8px;'>${current_price_str}</span> "
+      f"<span style='color:{COLOR_TEXT_MUTED};font-size:9px;'>({chart_symbol}) • {interval}</span></h3>",
       unsafe_allow_html=True,
   )
 with top_commodity_col:
@@ -1760,12 +1741,9 @@ if active_view == "📊 Charts":
             macd_slow=macd_slow,
             macd_signal=macd_signal,
         )
-      
       fig = create_chart_figure(renko_df, ha_df, brick_size, chart_display, ema_fast, ema_slow, ema_mid)
       chart_col, right_panel_col = st.columns([0.74, 0.26])
       with chart_col:
-        # Move chart slightly down to ensure stock name header is clearly visible and uncluttered
-        st.markdown("<div style='margin-top: 14px;'></div>", unsafe_allow_html=True)
         search_col, search_btn_col = st.columns([0.85, 0.15])
         search_col.text_input(
             "Quick search",

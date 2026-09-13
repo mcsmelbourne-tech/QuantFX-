@@ -653,6 +653,13 @@ def fetch_live_ohlc(symbol="GC=F", period="6mo", interval="1d"):
     df.columns = df.columns.get_level_values(0)
   return df
 
+@st.cache_data(ttl=60, show_spinner=False)
+def get_latest_price(symbol):
+  df = fetch_live_ohlc(symbol, period="5d", interval="1d")
+  if not df.empty and "Close" in df.columns:
+    return float(df["Close"].iloc[-1])
+  return 0.0
+
 @st.cache_data(ttl=300, show_spinner=False)
 def fetch_top_n_movers(symbols_tuple, n=1):
   symbols = list(symbols_tuple)
@@ -721,44 +728,6 @@ def fetch_chartink_screener(url):
     return []
 
 @st.cache_data(ttl=300, show_spinner=False)
-def compute_rsi(close_series, period=14):
-  delta = close_series.diff()
-  gain = delta.where(delta > 0, 0.0).rolling(period).mean()
-  loss = (-delta.where(delta < 0, 0.0)).rolling(period).mean()
-  rs = gain / loss.replace(0, np.nan)
-  return 100 - (100 / (1 + rs))
-
-@st.cache_data(ttl=300, show_spinner=False)
-def compute_vwap(df, window=20):
-  typical = (df["High"] + df["Low"] + df["Close"]) / 3.0
-  if "Volume" in df.columns and df["Volume"].fillna(0).sum() > 0:
-    vol = df["Volume"].replace(0, np.nan)
-    pv = typical * vol
-    vwap = pv.rolling(window, min_periods=1).sum() / vol.rolling(window, min_periods=1).sum()
-  else:
-    vwap = typical.rolling(window, min_periods=1).mean()
-  return vwap
-
-@st.cache_data(ttl=300, show_spinner=False)
-def compute_adx(high, low, close, period=14):
-  high = pd.Series(high).reset_index(drop=True)
-  low = pd.Series(low).reset_index(drop=True)
-  close = pd.Series(close).reset_index(drop=True)
-  up_move = high.diff()
-  down_move = -low.diff()
-  plus_dm = np.where((up_move > down_move) & (up_move > 0), up_move, 0.0)
-  minus_dm = np.where((down_move > up_move) & (down_move > 0), down_move, 0.0)
-  tr1 = high - low
-  tr2 = (high - close.shift(1)).abs()
-  tr3 = (low - close.shift(1)).abs()
-  tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
-  atr = tr.ewm(alpha=1 / period, adjust=False).mean()
-  plus_di = 100 * pd.Series(plus_dm).ewm(alpha=1 / period, adjust=False).mean() / atr.replace(0, np.nan)
-  minus_di = 100 * pd.Series(minus_dm).ewm(alpha=1 / period, adjust=False).mean() / atr.replace(0, np.nan)
-  dx = (plus_di - minus_di).abs() / (plus_di + minus_di).replace(0, np.nan) * 100
-  adx = dx.ewm(alpha=1 / period, adjust=False).mean()
-  return adx, plus_di, minus_di
-
 def evaluate_oracle_score(symbol, display=None, macd_fast=12, macd_slow=26, macd_signal=9):
   try:
     df = fetch_live_ohlc(symbol, period="1y", interval="1d")
@@ -1013,6 +982,7 @@ us100_raw = [
     "CSGP", "CEG", "AMZN", "ISRG", "CCEP", "FANG",
 ]
 nifty200_yf = [f"{t}.NS" for t in nifty200_raw]
+
 def convert_us100_symbol(t):
   if t == "NAS100":
     return "^NDX"
@@ -1021,6 +991,7 @@ def convert_us100_symbol(t):
   if t == "US30":
     return "^DJI"
   return t
+
 us100_yf = [convert_us100_symbol(t) for t in us100_raw] + ["^IXIC"]
 COMMODITIES = [
     ("GC=F", "GOLD"),
@@ -1047,6 +1018,7 @@ DISPLAY_TO_SYMBOL = {}
 for _cat_symbols in WATCHLIST_CATEGORIES.values():
   for _sym, _disp in _cat_symbols:
     DISPLAY_TO_SYMBOL[_disp] = _sym
+
 VIEWS = ["📊 Charts", "🔎 Scanner"]
 TIMEFRAME_PERIODS = {
     "15m": "10d",
@@ -1136,7 +1108,7 @@ def create_chart_figure(
         tick_texts.append(str(dt))
   else:
     tick_vals, tick_texts = [], []
-
+  
   fig = make_subplots(
       rows=4,
       cols=1,
@@ -1146,7 +1118,7 @@ def create_chart_figure(
       subplot_titles=(
           f"{display} — Heikin Ashi (Blinking Buy/Sell Signals)",
           f"{display} — ATR Renko (Blinking Buy/Sell Signals)",
-          "TradingView MACD (Histogram in Thin Lines)",
+          "TradingView MACD (Vertical Green & Red Thin Histogram Boxes)",
           "RSI (Full RSI Line with Green 30 & Red 70 Levels)",
       ),
   )
@@ -1264,16 +1236,17 @@ def create_chart_figure(
           yshift=14 if s_type in ("BOS_DEMAND", "CHOCH_DEMAND") else -14,
       )
 
-  # Subplot 3: MACD with Histogram in Thin Lines
+  # Subplot 3: MACD with Histogram as Vertical Green and Red Thin Boxes
   hist_vals = renko_df["MACD_Hist"].values
+  hist_colors = [COLOR_GREEN if v >= 0 else COLOR_RED for v in hist_vals]
   fig.add_trace(
-      go.Scatter(
+      go.Bar(
           x=x_renko,
           y=hist_vals,
-          mode="lines",
-          line=dict(color=COLOR_TEXT_MUTED, width=1.0),
+          marker_color=hist_colors,
           name="MACD Histogram",
-          opacity=0.85,
+          width=0.38,
+          opacity=0.9,
           showlegend=False,
       ),
       row=3,
@@ -1580,13 +1553,11 @@ else:
 
 interval = st.sidebar.select_slider("Timeframe", options=list(TIMEFRAME_PERIODS.keys()), value="1d")
 period = TIMEFRAME_PERIODS[interval]
-
 st.sidebar.markdown("---")
 c1, c2, c2b = st.sidebar.columns(3)
 ema_fast = c1.number_input("EMA Fast", min_value=1, max_value=200, value=21)
 ema_mid = c2.number_input("EMA Mid", min_value=1, max_value=200, value=34)
 ema_slow = c2b.number_input("EMA Slow", min_value=1, max_value=200, value=50)
-
 c3, c4 = st.sidebar.columns(2)
 atr_period = c3.number_input("ATR Period", min_value=2, max_value=100, value=21)
 atr_multiplier = c4.number_input("ATR Mult.", min_value=0.1, max_value=10.0, value=3.0, step=0.1)
@@ -1598,7 +1569,6 @@ mc1, mc2, mc3 = st.sidebar.columns(3)
 macd_fast = mc1.number_input("Fast", min_value=1, max_value=100, value=12)
 macd_slow = mc2.number_input("Slow", min_value=1, max_value=200, value=26)
 macd_signal = mc3.number_input("Signal", min_value=1, max_value=100, value=9)
-
 st.sidebar.caption("EMA Mid powers the 3-EMA scanner boxes and the 2H/30m Telegram triggers.")
 st.sidebar.markdown("---")
 
@@ -1699,10 +1669,15 @@ chart_display = st.session_state.chart_display
 # =====================================================================
 _header_top_commodity = fetch_top_n_movers(tuple(COMMODITIES), n=1)
 _header_top_forex = fetch_top_n_movers(tuple(FOREX_PAIRS), n=1)
+
+current_price = get_latest_price(chart_symbol)
+price_str = f"${format_price(current_price)}" if current_price else ""
+
 title_col, top_commodity_col, top_forex_col = st.columns([0.5, 0.25, 0.25])
 with title_col:
+  price_display_html = f" <span style='color:{COLOR_BULL};font-size:14px;font-weight:700;'>{price_str}</span>" if current_price else ""
   st.markdown(
-      f"<h2 style='color:#FFFFFF;margin-bottom:0;'>{chart_display} "
+      f"<h2 style='color:#FFFFFF;margin-bottom:0;'>{chart_display}{price_display_html} "
       f"<span style='color:{COLOR_TEXT_MUTED};font-size:10px;'>({chart_symbol}) • {interval}</span></h2>",
       unsafe_allow_html=True,
   )
@@ -1785,9 +1760,12 @@ if active_view == "📊 Charts":
             macd_slow=macd_slow,
             macd_signal=macd_signal,
         )
+      
       fig = create_chart_figure(renko_df, ha_df, brick_size, chart_display, ema_fast, ema_slow, ema_mid)
       chart_col, right_panel_col = st.columns([0.74, 0.26])
       with chart_col:
+        # Move chart slightly down to ensure stock name header is clearly visible and uncluttered
+        st.markdown("<div style='margin-top: 14px;'></div>", unsafe_allow_html=True)
         search_col, search_btn_col = st.columns([0.85, 0.15])
         search_col.text_input(
             "Quick search",

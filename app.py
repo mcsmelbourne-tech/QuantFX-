@@ -672,9 +672,24 @@ def build_atr_renko_df(
   macd_sigs, macd_types = detect_macd_crossovers(renko_df)
   renko_df["Div_Signal"] = macd_sigs
   renko_df["Div_Type"] = macd_types
+  
+  # Combined Renko + MACD button signal data series
+  combined_renko_macd = []
+  for i in range(len(renko_df)):
+    r_sig = renko_df.loc[i, "Confirmed_Signal"]
+    m_sig = macd_sigs[i]
+    if r_sig == "BUY" or m_sig == "BUY":
+      combined_renko_macd.append("BUY")
+    elif r_sig == "SELL" or m_sig == "SELL":
+      combined_renko_macd.append("SELL")
+    else:
+      combined_renko_macd.append("HOLD")
+  renko_df["Combined_Renko_MACD_Signal"] = combined_renko_macd
+
   rsi_sigs, rsi_types = detect_rsi_signals(renko_df)
   renko_df["RSI_Signal"] = rsi_sigs
   renko_df["RSI_Type"] = rsi_types
+  
   struct_df = detect_market_structure(
       renko_df["High"],
       renko_df["Low"],
@@ -1153,8 +1168,8 @@ def create_chart_figure(
       subplot_titles=(
           f"{display} — Heikin Ashi (Blinking Buy/Sell Signals)",
           f"{display} — ATR Renko (Blinking Buy/Sell Signals)",
-          "TradingView MACD (Green/Red Histogram Boxes & Noise-Free Buy/Sell Buttons)",
-          "RSI (Noise-Free Buy/Sell Signals with Green 30 & Red 70 Levels)",
+          "TradingView MACD (Green/Red Histogram Boxes & Combined Renko + MACD Buy/Sell Buttons)",
+          "RSI (Standalone MACD Buy/Sell Signals & Green 30 / Red 70 Levels)",
       ),
   )
 
@@ -1271,7 +1286,7 @@ def create_chart_figure(
           yshift=14 if s_type in ("BOS_DEMAND", "CHOCH_DEMAND") else -14,
       )
 
-  # Subplot 3: MACD with Green/Red Histogram Tiny Boxes & Noise-Free Buy/Sell Buttons
+  # Subplot 3: MACD with Green/Red Histogram Tiny Boxes & Combined Renko + MACD Buy/Sell Buttons (First Button)
   hist_vals = renko_df["MACD_Hist"].values
   hist_colors = [COLOR_GREEN if v >= 0 else COLOR_RED for v in hist_vals]
   fig.add_trace(
@@ -1300,9 +1315,11 @@ def create_chart_figure(
   macd_vals = renko_df["MACD"].values
   macd_finite = macd_vals[np.isfinite(macd_vals)]
   macd_pad = ((macd_finite.max() - macd_finite.min()) * 0.06 or 0.001) if macd_finite.size else 0.001
-  add_buy_sell_markers(fig, x_renko, renko_df["Div_Signal"], renko_df["MACD"], renko_df["MACD"], row=3, col=1, absolute_offset=macd_pad)
+  
+  # Combined Renko + MACD signal on MACD chart row
+  add_buy_sell_markers(fig, x_renko, renko_df["Combined_Renko_MACD_Signal"], renko_df["MACD"], renko_df["MACD"], row=3, col=1, absolute_offset=macd_pad)
 
-  # Subplot 4: RSI with Noise-Free Buy/Sell Signals
+  # Subplot 4: RSI with Standalone MACD Buy/Sell Signals (Second Button under RSI chart area)
   rsi_vals = renko_df["RSI"].values
   fig.add_trace(
       go.Scatter(x=x_renko, y=rsi_vals, line=dict(color="#00D4FF", width=1.8), name="RSI", showlegend=False),
@@ -1312,7 +1329,9 @@ def create_chart_figure(
   fig.add_hline(y=70, line=dict(color=COLOR_RED, width=1, dash="dash"), row=4, col=1)
   fig.add_hline(y=30, line=dict(color=COLOR_GREEN, width=1, dash="dash"), row=4, col=1)
   fig.update_yaxes(range=[0, 100], row=4, col=1)
-  add_buy_sell_markers(fig, x_renko, renko_df["RSI_Signal"], renko_df["RSI"], renko_df["RSI"], row=4, col=1, absolute_offset=5.0)
+  
+  # Standalone MACD/Signal cross markers shown on RSI chart row (second button)
+  add_buy_sell_markers(fig, x_renko, renko_df["Div_Signal"], renko_df["RSI"], renko_df["RSI"], row=4, col=1, absolute_offset=12.0)
 
   fig.update_layout(
       height=850,
@@ -1585,24 +1604,30 @@ if symbol_mode == "Presets":
 else:
   current_symbol = st.sidebar.text_input("Yahoo Finance symbol", value="GC=F")
   current_display = st.sidebar.text_input("Display name", value=current_symbol)
+
 interval = st.sidebar.select_slider("Timeframe", options=list(TIMEFRAME_PERIODS.keys()), value="1d")
 period = TIMEFRAME_PERIODS[interval]
+
 st.sidebar.markdown("---")
 c1, c2, c2b = st.sidebar.columns(3)
 ema_fast = c1.number_input("EMA Fast", min_value=1, max_value=200, value=21)
 ema_mid = c2.number_input("EMA Mid", min_value=1, max_value=200, value=34)
 ema_slow = c2b.number_input("EMA Slow", min_value=1, max_value=200, value=50)
+
 c3, c4 = st.sidebar.columns(2)
 atr_period = c3.number_input("ATR Period", min_value=2, max_value=100, value=21)
 atr_multiplier = c4.number_input("ATR Mult.", min_value=0.1, max_value=10.0, value=3.0, step=0.1)
+
 st.sidebar.markdown("---")
 st.sidebar.markdown("**MACD Settings**")
 mc1, mc2, mc3 = st.sidebar.columns(3)
 macd_fast = mc1.number_input("Fast", min_value=1, max_value=100, value=12)
 macd_slow = mc2.number_input("Slow", min_value=1, max_value=200, value=26)
 macd_signal = mc3.number_input("Signal", min_value=1, max_value=100, value=9)
+
 st.sidebar.caption("EMA Mid powers the 3-EMA scanner boxes and the 2H/30m Telegram triggers.")
 st.sidebar.markdown("---")
+
 CHARTINK_EMA_SCREENER_URL = "https://chartink.com/screener/ema9-20-cross-5"
 with st.sidebar:
   st.markdown(f"<div style='font-size:11px;color:{COLOR_TEXT_MUTED};font-weight:600;margin-bottom:6px;'>📊 Chartink Screener</div>", unsafe_allow_html=True)
@@ -1619,11 +1644,13 @@ with st.sidebar:
       f"</div>",
       unsafe_allow_html=True,
   )
+
 st.sidebar.markdown("---")
 if "tg_token" not in st.session_state or "tg_chat" not in st.session_state:
   saved_token, saved_chat = load_telegram_config()
   st.session_state["tg_token"] = saved_token
   st.session_state["tg_chat"] = saved_chat
+
 with st.sidebar.expander("🔔 Telegram Alerts & Automated Triggers", expanded=False):
   tg_token = st.text_input("Bot Token", value=st.session_state.get("tg_token", ""), type="password")
   tg_chat = st.text_input("Chat ID", value=st.session_state.get("tg_chat", ""))
@@ -1676,6 +1703,7 @@ with st.sidebar.expander("🔔 Telegram Alerts & Automated Triggers", expanded=F
       st.success(f"Dispatched {len(triggered_messages)} alert(s)!") if ok else st.error(m)
     else:
       st.info("No new active triggers matching rules.")
+
 if st.sidebar.button("🔄 Refresh data", use_container_width=True):
   st.cache_data.clear()
   st.rerun()
@@ -1688,6 +1716,7 @@ elif current_symbol != st.session_state._prev_sidebar_symbol:
   st.session_state.chart_symbol = current_symbol
   st.session_state.chart_display = current_display
   st.session_state._prev_sidebar_symbol = current_symbol
+
 chart_symbol = st.session_state.chart_symbol
 chart_display = st.session_state.chart_display
 
@@ -1710,6 +1739,7 @@ with top_forex_col:
 
 if "active_view" not in st.session_state:
   st.session_state.active_view = VIEWS[0]
+
 active_view = st.radio("View", VIEWS, horizontal=True, label_visibility="collapsed", key="active_view")
 
 # ---- Charts view --------------------------------------------------------
@@ -1804,22 +1834,11 @@ if active_view == "📊 Charts":
             key=chart_symbol.replace("=", "_").replace("^", "idx"),
             height=850,
         )
-        last_signal = renko_df["Signal"].iloc[-1]
-        last_pullback = renko_df["Pullback_Signal"].iloc[-1]
-        last_confirmed = renko_df["Confirmed_Signal"].iloc[-1]
-        badge_color = (
-            COLOR_GREEN
-            if last_confirmed == "BUY"
-            else (COLOR_RED if last_confirmed == "SELL" else COLOR_TEXT_MUTED)
-        )
-        st.markdown(
-            "Confirmed signal: <span class='qfx-badge qfx-blinking-signal'"
-            f" style='background:{badge_color}22;color:{badge_color};'>{last_confirmed}</span>"
-            f"&nbsp;&nbsp;•&nbsp;&nbsp;EMA trend: <b>{last_signal}</b>"
-            f"&nbsp;&nbsp;•&nbsp;&nbsp;Raw pullback: <b>{last_pullback}</b>",
-            unsafe_allow_html=True,
-        )
+        
+        # Removed confirmation status badge row per screenshot 3 request.
         if st.button("📨 Send current signal to Telegram"):
+          last_confirmed = renko_df["Confirmed_Signal"].iloc[-1]
+          last_signal = renko_df["Signal"].iloc[-1]
           msg = (
               f"*{chart_display}* ({chart_symbol})\n"
               f"Price: ${format_price(float(raw_df['Close'].iloc[-1]))}\n"
@@ -1829,6 +1848,7 @@ if active_view == "📊 Charts":
           )
           ok, m = send_telegram_alert(msg, tg_token, tg_chat)
           st.success(m) if ok else st.error(m)
+
       with right_panel_col:
         def _triple_ema_scanner_value_html(m):
           color = COLOR_GREEN if m["direction"] == "BUY" else COLOR_RED
@@ -1837,7 +1857,7 @@ if active_view == "📊 Charts":
           return (
               f"<div style='text-align:right;font-size:11px;'>"
               f"<span style='color:{color};'>{arrow} {m['direction']}</span>"
-              f"<span style='color:{COLOR_TEXT_MUTED};'> • {recency}</span>"
+              f"<span style='color:{COLOR_TEXT_MUTED};'> · {recency}</span>"
               f"</div>"
           )
         if outlook:

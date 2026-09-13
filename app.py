@@ -2,7 +2,7 @@
 QuantFX Terminal — ATR Renko & Macro Smart Money Structure
 Streamlit rewrite with custom candle coloring, right-side axes,
 Heikin Ashi EMAs, single-fire pullback signals with blinking animation,
-blinking/ticking buy/sell markers on Heikin Ashi, Renko, MACD, RSI & Master Consensus,
+blinking/ticking buy/sell markers on Heikin Ashi, Renko, MACD, and RSI,
 expanded box heights, targeted multi-market Telegram alerts,
 full share price display, and right-side top mover cards.
 """
@@ -116,6 +116,7 @@ st.markdown(
 TG_CONFIG_PATH = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), ".qfx_telegram_config.json"
 )
+
 def load_telegram_config():
   try:
     if os.path.exists(TG_CONFIG_PATH):
@@ -1003,6 +1004,7 @@ us100_raw = [
     "CSGP", "CEG", "AMZN", "ISRG", "CCEP", "FANG",
 ]
 nifty200_yf = [f"{t}.NS" for t in nifty200_raw]
+
 def convert_us100_symbol(t):
   if t == "NAS100":
     return "^NDX"
@@ -1040,8 +1042,6 @@ for _cat_symbols in WATCHLIST_CATEGORIES.values():
     DISPLAY_TO_SYMBOL[_disp] = _sym
 
 VIEWS = ["📊 Charts", "🔎 Scanner"]
-
-# Added 5m timeframe along with 15m, 30m, 60m / 1h, 4h, 1d, 1wk
 TIMEFRAME_PERIODS = {
     "5m": "5d",
     "15m": "10d",
@@ -1133,33 +1133,21 @@ def create_chart_figure(
   else:
     tick_vals, tick_texts = [], []
 
-  # Compute MACD crossovers & Master consensus signals (when HA, Renko & MACD show buy/sell)
+  # Compute MACD crossovers
   macd_sigs, macd_types = detect_macd_crossovers(renko_df)
-  master_signals = []
-  for i in range(len(renko_df)):
-    h_s = ha_df["Signal"].iloc[i] if i < len(ha_df) else "HOLD"
-    r_s = renko_df["Confirmed_Signal"].iloc[i]
-    m_s = macd_sigs[i]
-    if h_s == "BUY" and r_s == "BUY" and m_s == "BUY":
-      master_signals.append("BUY")
-    elif h_s == "SELL" and r_s == "SELL" and m_s == "SELL":
-      master_signals.append("SELL")
-    else:
-      master_signals.append("HOLD")
 
-  # 5 Subplots: HA, Renko, MACD, RSI, and Master Consensus Box under RSI box
+  # 4 Subplots: HA, Renko, MACD, and RSI (Master Consensus Box removed)
   fig = make_subplots(
-      rows=5,
+      rows=4,
       cols=1,
       shared_xaxes=True,
-      row_heights=[0.24, 0.24, 0.18, 0.18, 0.16],
+      row_heights=[0.30, 0.30, 0.20, 0.20],
       vertical_spacing=0.03,
       subplot_titles=(
           f"{display} — Heikin Ashi (Buy/Sell Signals)",
           f"{display} — ATR Renko (Buy/Sell Signals)",
           "TradingView MACD (Green/Red Histogram Boxes & Combined Renko + MACD Buy/Sell Buttons)",
           "RSI (Buy/Sell Signals & Green 30 / Red 70 Levels)",
-          "Master Consensus Box (Buy/Sell when Heikin Ashi, Renko & MACD align)",
       ),
   )
 
@@ -1319,17 +1307,8 @@ def create_chart_figure(
   fig.update_yaxes(range=[0, 100], row=4, col=1)
   add_buy_sell_markers(fig, x_renko, renko_df["RSI_Signal"], renko_df["RSI"], renko_df["RSI"], row=4, col=1, absolute_offset=12.0)
 
-  # Subplot 5: Master Consensus Box under RSI box (HA + Renko + MACD Buy/Sell alignment)
-  fig.add_trace(
-      go.Scatter(x=x_renko, y=[0]*len(x_renko), mode="lines", line=dict(color=COLOR_ZERO_LINE, width=1), showlegend=False),
-      row=5,
-      col=1,
-  )
-  add_buy_sell_markers(fig, x_renko, master_signals, [0]*len(x_renko), [0]*len(x_renko), row=5, col=1, absolute_offset=0.2)
-  fig.update_yaxes(range=[-1, 1], showticklabels=False, row=5, col=1)
-
   fig.update_layout(
-      height=1000,
+      height=950,
       paper_bgcolor=COLOR_BG_DARK,
       plot_bgcolor=COLOR_BG_DARK,
       font=dict(color=COLOR_TEXT_MUTED, size=10),
@@ -1338,16 +1317,16 @@ def create_chart_figure(
       xaxis_rangeslider_visible=False,
       xaxis2_rangeslider_visible=False,
   )
-  for r in range(1, 6):
+  for r in range(1, 5):
     kwargs = {"showgrid": False, "row": r, "col": 1, "matches": "x", "tickfont": dict(size=10)}
-    if r == 5 and tick_vals:
+    if r == 4 and tick_vals:
       kwargs["tickvals"] = tick_vals
       kwargs["ticktext"] = tick_texts
       kwargs["showticklabels"] = True
     else:
-      kwargs["showticklabels"] = (r == 5)
+      kwargs["showticklabels"] = (r == 4)
     fig.update_xaxes(**kwargs)
-    if r < 5:
+    if r < 4:
       fig.update_yaxes(
           gridcolor="#2A2F3A",
           side="right",
@@ -1380,7 +1359,7 @@ def run_chart_search():
       return
   go_to_chart(query, query)
 
-def render_zoomable_chart(fig, key, height=1000):
+def render_zoomable_chart(fig, key, height=950):
   fig_json = fig.to_json()
   div_id = f"qfx_chart_{key}"
   html = f"""
@@ -1602,20 +1581,16 @@ if symbol_mode == "Presets":
 else:
   current_symbol = st.sidebar.text_input("Yahoo Finance symbol", value="GC=F")
   current_display = st.sidebar.text_input("Display name", value=current_symbol)
-
 interval = st.sidebar.select_slider("Timeframe", options=list(TIMEFRAME_PERIODS.keys()), value="1d")
 period = TIMEFRAME_PERIODS[interval]
-
 st.sidebar.markdown("---")
 c1, c2, c2b = st.sidebar.columns(3)
 ema_fast = c1.number_input("EMA Fast", min_value=1, max_value=200, value=21)
 ema_mid = c2.number_input("EMA Mid", min_value=1, max_value=200, value=34)
 ema_slow = c2b.number_input("EMA Slow", min_value=1, max_value=200, value=50)
-
 c3, c4 = st.sidebar.columns(2)
 atr_period = c3.number_input("ATR Period", min_value=2, max_value=100, value=21)
 atr_multiplier = c4.number_input("ATR Mult.", min_value=0.1, max_value=10.0, value=3.0, step=0.1)
-
 st.sidebar.markdown("---")
 st.sidebar.markdown("**MACD Settings**")
 mc1, mc2, mc3 = st.sidebar.columns(3)
@@ -1623,7 +1598,6 @@ macd_fast = mc1.number_input("Fast", min_value=1, max_value=100, value=12)
 macd_slow = mc2.number_input("Slow", min_value=1, max_value=200, value=26)
 macd_signal = mc3.number_input("Signal", min_value=1, max_value=100, value=9)
 st.sidebar.caption("EMA Mid powers the 3-EMA scanner boxes and the 2H/30m Telegram triggers.")
-
 st.sidebar.markdown("---")
 CHARTINK_EMA_SCREENER_URL = "https://chartink.com/screener/ema9-20-cross-5"
 with st.sidebar:
@@ -1641,13 +1615,11 @@ with st.sidebar:
       f"</div>",
       unsafe_allow_html=True,
   )
-
 st.sidebar.markdown("---")
 if "tg_token" not in st.session_state or "tg_chat" not in st.session_state:
   saved_token, saved_chat = load_telegram_config()
   st.session_state["tg_token"] = saved_token
   st.session_state["tg_chat"] = saved_chat
-
 with st.sidebar.expander("🔔 Telegram Alerts & Automated Triggers", expanded=False):
   tg_token = st.text_input("Bot Token", value=st.session_state.get("tg_token", ""), type="password")
   tg_chat = st.text_input("Chat ID", value=st.session_state.get("tg_chat", ""))
@@ -1700,11 +1672,9 @@ with st.sidebar.expander("🔔 Telegram Alerts & Automated Triggers", expanded=F
       st.success(f"Dispatched {len(triggered_messages)} alert(s)!") if ok else st.error(m)
     else:
       st.info("No new active triggers matching rules.")
-
 if st.sidebar.button("🔄 Refresh data", use_container_width=True):
   st.cache_data.clear()
   st.rerun()
-
 if "chart_symbol" not in st.session_state:
   st.session_state.chart_symbol = current_symbol
   st.session_state.chart_display = current_display
@@ -1713,7 +1683,6 @@ elif current_symbol != st.session_state._prev_sidebar_symbol:
   st.session_state.chart_symbol = current_symbol
   st.session_state.chart_display = current_display
   st.session_state._prev_sidebar_symbol = current_symbol
-
 chart_symbol = st.session_state.chart_symbol
 chart_display = st.session_state.chart_display
 
@@ -1828,7 +1797,7 @@ if active_view == "📊 Charts":
         render_zoomable_chart(
             fig,
             key=chart_symbol.replace("=", "_").replace("^", "idx"),
-            height=1000,
+            height=950,
         )
         
         if st.button("📨 Send current signal to Telegram"):

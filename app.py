@@ -2,8 +2,8 @@
 QuantFX Terminal — ATR Renko & Macro Smart Money Structure
 Streamlit rewrite with custom candle coloring, right-side axes,
 Heikin Ashi EMAs, single-fire pullback signals with blinking animation,
-blinking/ticking buy/sell markers on Heikin Ashi, Renko, MACD & RSI,
-expanded MACD/RSI box heights, targeted multi-market Telegram alerts,
+blinking/ticking buy/sell markers on Heikin Ashi, Renko, MACD, RSI & Master Consensus,
+expanded box heights, targeted multi-market Telegram alerts,
 full share price display, and right-side top mover cards.
 """
 import json
@@ -116,7 +116,6 @@ st.markdown(
 TG_CONFIG_PATH = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), ".qfx_telegram_config.json"
 )
-
 def load_telegram_config():
   try:
     if os.path.exists(TG_CONFIG_PATH):
@@ -152,7 +151,7 @@ def send_telegram_alert(message, token, chat_id):
     return False, str(e)
 
 # =====================================================================
-# INDICATORS & SIGNAL GENERATORS (NOISE FILTERED)
+# INDICATORS & SIGNAL GENERATORS
 # =====================================================================
 def compute_heikin_ashi(df, ema_fast=21, ema_slow=50, ema_mid=None):
   ha = pd.DataFrame(index=df.index)
@@ -291,32 +290,6 @@ def format_price(value):
   if "." in s:
     s = s.rstrip("0").rstrip(".")
   return s
-
-def detect_ema_cross_signal(close_series, fast=21, slow=50, lookback=1):
-  if close_series is None or len(close_series) < slow + 2:
-    return None
-  ema_fast_s = close_series.ewm(span=fast, adjust=False).mean()
-  ema_slow_s = close_series.ewm(span=slow, adjust=False).mean()
-  n = len(close_series)
-  earliest = max(n - 1 - lookback, 1)
-  for i in range(n - 1, earliest - 1, -1):
-    f_now, s_now = ema_fast_s.iloc[i], ema_slow_s.iloc[i]
-    f_prev, s_prev = ema_fast_s.iloc[i - 1], ema_slow_s.iloc[i - 1]
-    if f_now > s_now and f_prev <= s_prev:
-      return {
-          "direction": "BUY",
-          "bars_ago": n - 1 - i,
-          "fast": float(f_now),
-          "slow": float(s_now),
-      }
-    if f_now < s_now and f_prev >= s_prev:
-      return {
-          "direction": "SELL",
-          "bars_ago": n - 1 - i,
-          "fast": float(f_now),
-          "slow": float(s_now),
-      }
-  return None
 
 def detect_triple_ema_cross_signal(close_series, fast=9, mid=21, slow=50, lookback=1):
   if close_series is None or len(close_series) < slow + 2:
@@ -673,7 +646,6 @@ def build_atr_renko_df(
   renko_df["Div_Signal"] = macd_sigs
   renko_df["Div_Type"] = macd_types
   
-  # Combined Renko + MACD button signal data series
   combined_renko_macd = []
   for i in range(len(renko_df)):
     r_sig = renko_df.loc[i, "Confirmed_Signal"]
@@ -685,7 +657,7 @@ def build_atr_renko_df(
     else:
       combined_renko_macd.append("HOLD")
   renko_df["Combined_Renko_MACD_Signal"] = combined_renko_macd
-
+  
   rsi_sigs, rsi_types = detect_rsi_signals(renko_df)
   renko_df["RSI_Signal"] = rsi_sigs
   renko_df["RSI_Type"] = rsi_types
@@ -1031,7 +1003,6 @@ us100_raw = [
     "CSGP", "CEG", "AMZN", "ISRG", "CCEP", "FANG",
 ]
 nifty200_yf = [f"{t}.NS" for t in nifty200_raw]
-
 def convert_us100_symbol(t):
   if t == "NAS100":
     return "^NDX"
@@ -1069,10 +1040,14 @@ for _cat_symbols in WATCHLIST_CATEGORIES.values():
     DISPLAY_TO_SYMBOL[_disp] = _sym
 
 VIEWS = ["📊 Charts", "🔎 Scanner"]
+
+# Added 5m timeframe along with 15m, 30m, 60m / 1h, 4h, 1d, 1wk
 TIMEFRAME_PERIODS = {
+    "5m": "5d",
     "15m": "10d",
     "30m": "20d",
     "60m": "60d",
+    "1h": "60d",
     "4h": "180d",
     "1d": "1y",
     "1wk": "5y",
@@ -1158,18 +1133,33 @@ def create_chart_figure(
   else:
     tick_vals, tick_texts = [], []
 
-  # Expanded MACD and RSI Box Heights (Row Heights: [HA, Renko, MACD, RSI])
+  # Compute MACD crossovers & Master consensus signals (when HA, Renko & MACD show buy/sell)
+  macd_sigs, macd_types = detect_macd_crossovers(renko_df)
+  master_signals = []
+  for i in range(len(renko_df)):
+    h_s = ha_df["Signal"].iloc[i] if i < len(ha_df) else "HOLD"
+    r_s = renko_df["Confirmed_Signal"].iloc[i]
+    m_s = macd_sigs[i]
+    if h_s == "BUY" and r_s == "BUY" and m_s == "BUY":
+      master_signals.append("BUY")
+    elif h_s == "SELL" and r_s == "SELL" and m_s == "SELL":
+      master_signals.append("SELL")
+    else:
+      master_signals.append("HOLD")
+
+  # 5 Subplots: HA, Renko, MACD, RSI, and Master Consensus Box under RSI box
   fig = make_subplots(
-      rows=4,
+      rows=5,
       cols=1,
       shared_xaxes=True,
-      row_heights=[0.28, 0.28, 0.22, 0.22],
+      row_heights=[0.24, 0.24, 0.18, 0.18, 0.16],
       vertical_spacing=0.03,
       subplot_titles=(
-          f"{display} — Heikin Ashi (Blinking Buy/Sell Signals)",
-          f"{display} — ATR Renko (Blinking Buy/Sell Signals)",
+          f"{display} — Heikin Ashi (Buy/Sell Signals)",
+          f"{display} — ATR Renko (Buy/Sell Signals)",
           "TradingView MACD (Green/Red Histogram Boxes & Combined Renko + MACD Buy/Sell Buttons)",
-          "RSI (Standalone MACD Buy/Sell Signals & Green 30 / Red 70 Levels)",
+          "RSI (Buy/Sell Signals & Green 30 / Red 70 Levels)",
+          "Master Consensus Box (Buy/Sell when Heikin Ashi, Renko & MACD align)",
       ),
   )
 
@@ -1286,7 +1276,7 @@ def create_chart_figure(
           yshift=14 if s_type in ("BOS_DEMAND", "CHOCH_DEMAND") else -14,
       )
 
-  # Subplot 3: MACD with Green/Red Histogram Tiny Boxes & Combined Renko + MACD Buy/Sell Buttons (First Button)
+  # Subplot 3: MACD with Histogram & Combined Renko + MACD Buy/Sell Buttons
   hist_vals = renko_df["MACD_Hist"].values
   hist_colors = [COLOR_GREEN if v >= 0 else COLOR_RED for v in hist_vals]
   fig.add_trace(
@@ -1315,11 +1305,9 @@ def create_chart_figure(
   macd_vals = renko_df["MACD"].values
   macd_finite = macd_vals[np.isfinite(macd_vals)]
   macd_pad = ((macd_finite.max() - macd_finite.min()) * 0.06 or 0.001) if macd_finite.size else 0.001
-  
-  # Combined Renko + MACD signal on MACD chart row
   add_buy_sell_markers(fig, x_renko, renko_df["Combined_Renko_MACD_Signal"], renko_df["MACD"], renko_df["MACD"], row=3, col=1, absolute_offset=macd_pad)
 
-  # Subplot 4: RSI with Standalone MACD Buy/Sell Signals (Second Button under RSI chart area)
+  # Subplot 4: RSI with RSI Buy/Sell Signals & 70/30 Levels
   rsi_vals = renko_df["RSI"].values
   fig.add_trace(
       go.Scatter(x=x_renko, y=rsi_vals, line=dict(color="#00D4FF", width=1.8), name="RSI", showlegend=False),
@@ -1329,12 +1317,19 @@ def create_chart_figure(
   fig.add_hline(y=70, line=dict(color=COLOR_RED, width=1, dash="dash"), row=4, col=1)
   fig.add_hline(y=30, line=dict(color=COLOR_GREEN, width=1, dash="dash"), row=4, col=1)
   fig.update_yaxes(range=[0, 100], row=4, col=1)
-  
-  # Standalone MACD/Signal cross markers shown on RSI chart row (second button)
-  add_buy_sell_markers(fig, x_renko, renko_df["Div_Signal"], renko_df["RSI"], renko_df["RSI"], row=4, col=1, absolute_offset=12.0)
+  add_buy_sell_markers(fig, x_renko, renko_df["RSI_Signal"], renko_df["RSI"], renko_df["RSI"], row=4, col=1, absolute_offset=12.0)
+
+  # Subplot 5: Master Consensus Box under RSI box (HA + Renko + MACD Buy/Sell alignment)
+  fig.add_trace(
+      go.Scatter(x=x_renko, y=[0]*len(x_renko), mode="lines", line=dict(color=COLOR_ZERO_LINE, width=1), showlegend=False),
+      row=5,
+      col=1,
+  )
+  add_buy_sell_markers(fig, x_renko, master_signals, [0]*len(x_renko), [0]*len(x_renko), row=5, col=1, absolute_offset=0.2)
+  fig.update_yaxes(range=[-1, 1], showticklabels=False, row=5, col=1)
 
   fig.update_layout(
-      height=850,
+      height=1000,
       paper_bgcolor=COLOR_BG_DARK,
       plot_bgcolor=COLOR_BG_DARK,
       font=dict(color=COLOR_TEXT_MUTED, size=10),
@@ -1343,24 +1338,27 @@ def create_chart_figure(
       xaxis_rangeslider_visible=False,
       xaxis2_rangeslider_visible=False,
   )
-  for r in range(1, 5):
+  for r in range(1, 6):
     kwargs = {"showgrid": False, "row": r, "col": 1, "matches": "x", "tickfont": dict(size=10)}
-    if r == 4 and tick_vals:
+    if r == 5 and tick_vals:
       kwargs["tickvals"] = tick_vals
       kwargs["ticktext"] = tick_texts
       kwargs["showticklabels"] = True
+    else:
+      kwargs["showticklabels"] = (r == 5)
     fig.update_xaxes(**kwargs)
-    fig.update_yaxes(
-        gridcolor="#2A2F3A",
-        side="right",
-        row=r,
-        col=1,
-        tickformat="f",
-        hoverformat="f",
-        tickfont=dict(size=10),
-        automargin=True,
-        ticklabelposition="outside right",
-    )
+    if r < 5:
+      fig.update_yaxes(
+          gridcolor="#2A2F3A",
+          side="right",
+          row=r,
+          col=1,
+          tickformat="f",
+          hoverformat="f",
+          tickfont=dict(size=10),
+          automargin=True,
+          ticklabelposition="outside right",
+      )
   return fig
 
 def go_to_chart(symbol, display):
@@ -1382,7 +1380,7 @@ def run_chart_search():
       return
   go_to_chart(query, query)
 
-def render_zoomable_chart(fig, key, height=850):
+def render_zoomable_chart(fig, key, height=1000):
   fig_json = fig.to_json()
   div_id = f"qfx_chart_{key}"
   html = f"""
@@ -1624,10 +1622,9 @@ mc1, mc2, mc3 = st.sidebar.columns(3)
 macd_fast = mc1.number_input("Fast", min_value=1, max_value=100, value=12)
 macd_slow = mc2.number_input("Slow", min_value=1, max_value=200, value=26)
 macd_signal = mc3.number_input("Signal", min_value=1, max_value=100, value=9)
-
 st.sidebar.caption("EMA Mid powers the 3-EMA scanner boxes and the 2H/30m Telegram triggers.")
-st.sidebar.markdown("---")
 
+st.sidebar.markdown("---")
 CHARTINK_EMA_SCREENER_URL = "https://chartink.com/screener/ema9-20-cross-5"
 with st.sidebar:
   st.markdown(f"<div style='font-size:11px;color:{COLOR_TEXT_MUTED};font-weight:600;margin-bottom:6px;'>📊 Chartink Screener</div>", unsafe_allow_html=True)
@@ -1739,7 +1736,6 @@ with top_forex_col:
 
 if "active_view" not in st.session_state:
   st.session_state.active_view = VIEWS[0]
-
 active_view = st.radio("View", VIEWS, horizontal=True, label_visibility="collapsed", key="active_view")
 
 # ---- Charts view --------------------------------------------------------
@@ -1832,10 +1828,9 @@ if active_view == "📊 Charts":
         render_zoomable_chart(
             fig,
             key=chart_symbol.replace("=", "_").replace("^", "idx"),
-            height=850,
+            height=1000,
         )
         
-        # Removed confirmation status badge row per screenshot 3 request.
         if st.button("📨 Send current signal to Telegram"):
           last_confirmed = renko_df["Confirmed_Signal"].iloc[-1]
           last_signal = renko_df["Signal"].iloc[-1]
@@ -1848,7 +1843,6 @@ if active_view == "📊 Charts":
           )
           ok, m = send_telegram_alert(msg, tg_token, tg_chat)
           st.success(m) if ok else st.error(m)
-
       with right_panel_col:
         def _triple_ema_scanner_value_html(m):
           color = COLOR_GREEN if m["direction"] == "BUY" else COLOR_RED

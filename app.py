@@ -90,7 +90,7 @@ st.markdown(
     }}
     /* Trim header whitespace without hiding content */
     .block-container, section.main > div.block-container {{
-        padding-top: 2.2rem !important;
+        padding-top: 1.5rem !important;
         padding-bottom: 0.8rem !important;
     }}
     div[data-testid="stVerticalBlock"] {{
@@ -683,6 +683,24 @@ def fetch_live_ohlc(symbol="GC=F", period="6mo", interval="1d"):
     df.columns = df.columns.get_level_values(0)
   return df
 
+@st.cache_data(ttl=60, show_spinner=False)
+def get_live_price_and_chg(symbol):
+  try:
+    df = yf.download(symbol, period="5d", interval="1d", progress=False)
+    if isinstance(df.columns, pd.MultiIndex):
+      df.columns = df.columns.get_level_values(0)
+    if df.empty or "Close" not in df.columns:
+      return 0.0, 0.0
+    closes = df["Close"].dropna()
+    if len(closes) < 1:
+      return 0.0, 0.0
+    last = float(closes.iloc[-1])
+    prev = float(closes.iloc[-2]) if len(closes) > 1 else last
+    chg = ((last - prev) / prev) * 100 if prev else 0.0
+    return last, chg
+  except Exception:
+    return 0.0, 0.0
+
 @st.cache_data(ttl=300, show_spinner=False)
 def fetch_top_n_movers(symbols_tuple, n=1):
   symbols = list(symbols_tuple)
@@ -991,6 +1009,7 @@ nifty200_raw = [
     "TRENT", "TVSMOTOR", "UBL", "ULTRACEMCO", "UNITDSPR", "VBL", "VEDL",
     "VOLTAS", "HINDCOPPER", "NDIA",
 ]
+
 us100_raw = [
     "PLTR", "ARM", "INTC", "AMD", "MU", "QCOM", "LRCX", "MCHP", "AVGO", "AMAT",
     "GFS", "TXN", "IDXX", "DDOG", "ZS", "TRI", "CSCO", "ADI", "PANW", "ORCL",
@@ -1003,6 +1022,7 @@ us100_raw = [
     "PEP", "ADP", "NFLX", "ABNB", "COST", "CTSH", "MELI", "TTWO", "META",
     "CSGP", "CEG", "AMZN", "ISRG", "CCEP", "FANG",
 ]
+
 nifty200_yf = [f"{t}.NS" for t in nifty200_raw]
 
 def convert_us100_symbol(t):
@@ -1015,6 +1035,7 @@ def convert_us100_symbol(t):
   return t
 
 us100_yf = [convert_us100_symbol(t) for t in us100_raw] + ["^IXIC"]
+
 COMMODITIES = [
     ("GC=F", "GOLD"),
     ("SI=F", "SILVER"),
@@ -1023,6 +1044,7 @@ COMMODITIES = [
     ("NG=F", "GAS"),
     ("^VIX", "VIX"),
 ]
+
 FOREX_PAIRS = [
     ("EURUSD=X", "EUR/USD"),
     ("GBPUSD=X", "GBP/USD"),
@@ -1030,18 +1052,21 @@ FOREX_PAIRS = [
     ("AUDUSD=X", "AUD/USD"),
     ("USDCAD=X", "USD/CAD"),
 ]
+
 WATCHLIST_CATEGORIES = {
     "Commodities": COMMODITIES,
     "Forex": FOREX_PAIRS,
     "Nifty200": list(zip(nifty200_yf, nifty200_raw)),
     "US100": list(zip(us100_yf, us100_raw + ["IXIC"])),
 }
+
 DISPLAY_TO_SYMBOL = {}
 for _cat_symbols in WATCHLIST_CATEGORIES.values():
   for _sym, _disp in _cat_symbols:
     DISPLAY_TO_SYMBOL[_disp] = _sym
 
 VIEWS = ["📊 Charts", "🔎 Scanner"]
+
 TIMEFRAME_PERIODS = {
     "5m": "5d",
     "15m": "10d",
@@ -1132,11 +1157,9 @@ def create_chart_figure(
         tick_texts.append(str(dt))
   else:
     tick_vals, tick_texts = [], []
-
-  # Compute MACD crossovers
+  
   macd_sigs, macd_types = detect_macd_crossovers(renko_df)
-
-  # 4 Subplots: HA, Renko, MACD, and RSI (Master Consensus Box removed)
+  
   fig = make_subplots(
       rows=4,
       cols=1,
@@ -1150,8 +1173,7 @@ def create_chart_figure(
           "RSI (Buy/Sell Signals & Green 30 / Red 70 Levels)",
       ),
   )
-
-  # Subplot 1: Heikin Ashi
+  
   fig.add_trace(
       go.Candlestick(
           x=x_ha,
@@ -1186,8 +1208,7 @@ def create_chart_figure(
         col=1,
     )
   add_buy_sell_markers(fig, x_ha, ha_df["Signal"], ha_df["Low"], ha_df["High"], row=1, col=1)
-
-  # Subplot 2: ATR Renko
+  
   fig.add_trace(
       go.Candlestick(
           x=x_renko,
@@ -1222,8 +1243,7 @@ def create_chart_figure(
         col=1,
     )
   add_buy_sell_markers(fig, x_renko, renko_df["Confirmed_Signal"], renko_df["Low"], renko_df["High"], row=2, col=1)
-
-  # Structure lines
+  
   struct_style = {
       "BOS_DEMAND": (COLOR_BOS_DEMAND, "B-S"),
       "BOS_SUPPLY": (COLOR_BOS_SUPPLY, "B-D"),
@@ -1263,8 +1283,7 @@ def create_chart_figure(
           col=1,
           yshift=14 if s_type in ("BOS_DEMAND", "CHOCH_DEMAND") else -14,
       )
-
-  # Subplot 3: MACD with Histogram & Combined Renko + MACD Buy/Sell Buttons
+  
   hist_vals = renko_df["MACD_Hist"].values
   hist_colors = [COLOR_GREEN if v >= 0 else COLOR_RED for v in hist_vals]
   fig.add_trace(
@@ -1294,8 +1313,7 @@ def create_chart_figure(
   macd_finite = macd_vals[np.isfinite(macd_vals)]
   macd_pad = ((macd_finite.max() - macd_finite.min()) * 0.06 or 0.001) if macd_finite.size else 0.001
   add_buy_sell_markers(fig, x_renko, renko_df["Combined_Renko_MACD_Signal"], renko_df["MACD"], renko_df["MACD"], row=3, col=1, absolute_offset=macd_pad)
-
-  # Subplot 4: RSI with RSI Buy/Sell Signals & 70/30 Levels
+  
   rsi_vals = renko_df["RSI"].values
   fig.add_trace(
       go.Scatter(x=x_renko, y=rsi_vals, line=dict(color="#00D4FF", width=1.8), name="RSI", showlegend=False),
@@ -1306,7 +1324,7 @@ def create_chart_figure(
   fig.add_hline(y=30, line=dict(color=COLOR_GREEN, width=1, dash="dash"), row=4, col=1)
   fig.update_yaxes(range=[0, 100], row=4, col=1)
   add_buy_sell_markers(fig, x_renko, renko_df["RSI_Signal"], renko_df["RSI"], renko_df["RSI"], row=4, col=1, absolute_offset=12.0)
-
+  
   fig.update_layout(
       height=950,
       paper_bgcolor=COLOR_BG_DARK,
@@ -1675,6 +1693,7 @@ with st.sidebar.expander("🔔 Telegram Alerts & Automated Triggers", expanded=F
 if st.sidebar.button("🔄 Refresh data", use_container_width=True):
   st.cache_data.clear()
   st.rerun()
+
 if "chart_symbol" not in st.session_state:
   st.session_state.chart_symbol = current_symbol
   st.session_state.chart_display = current_display
@@ -1683,6 +1702,7 @@ elif current_symbol != st.session_state._prev_sidebar_symbol:
   st.session_state.chart_symbol = current_symbol
   st.session_state.chart_display = current_display
   st.session_state._prev_sidebar_symbol = current_symbol
+
 chart_symbol = st.session_state.chart_symbol
 chart_display = st.session_state.chart_display
 
@@ -1691,21 +1711,36 @@ chart_display = st.session_state.chart_display
 # =====================================================================
 _header_top_commodity = fetch_top_n_movers(tuple(COMMODITIES), n=1)
 _header_top_forex = fetch_top_n_movers(tuple(FOREX_PAIRS), n=1)
-title_col, top_commodity_col, top_forex_col = st.columns([0.5, 0.25, 0.25])
-with title_col:
-  st.markdown(
-      f"<h2 style='color:#FFFFFF;margin-bottom:0;'>{chart_display} "
-      f"<span style='color:{COLOR_TEXT_MUTED};font-size:10px;'>({chart_symbol}) • {interval}</span></h2>",
-      unsafe_allow_html=True,
-  )
-with top_commodity_col:
-  render_clickable_single_box("Top Commodity", _header_top_commodity, key_prefix="header_top_commodity", on_click=go_to_chart, compact=True)
-with top_forex_col:
-  render_clickable_single_box("Top Forex", _header_top_forex, key_prefix="header_top_forex", on_click=go_to_chart, compact=True)
 
 if "active_view" not in st.session_state:
   st.session_state.active_view = VIEWS[0]
-active_view = st.radio("View", VIEWS, horizontal=True, label_visibility="collapsed", key="active_view")
+
+live_price, live_chg = get_live_price_and_chg(chart_symbol)
+price_str = f"${format_price(live_price)}"
+chg_color = COLOR_GREEN if live_chg >= 0 else COLOR_RED
+chg_arrow = "▲" if live_chg >= 0 else "▼"
+live_str = f"<span style='color:{chg_color};font-weight:700;'>{price_str} {chg_arrow} {live_chg:+.2f}%</span>" if live_price else ""
+
+header_col1, header_col2, top_commodity_col, top_forex_col = st.columns([0.42, 0.28, 0.15, 0.15])
+
+with header_col1:
+  st.markdown(
+      f"<div style='padding-top:4px;'>"
+      f"<span style='color:#FFFFFF;font-size:1.2rem;font-weight:700;'>{chart_display}</span> "
+      f"<span style='color:{COLOR_TEXT_MUTED};font-size:10px;'>({chart_symbol}) • {interval}</span> "
+      f"<span style='margin-left:8px;font-size:11px;'>{live_str}</span>"
+      f"</div>",
+      unsafe_allow_html=True,
+  )
+
+with header_col2:
+  active_view = st.radio("View", VIEWS, horizontal=True, label_visibility="collapsed", key="active_view")
+
+with top_commodity_col:
+  render_clickable_single_box("Top Commodity", _header_top_commodity, key_prefix="header_top_commodity", on_click=go_to_chart, compact=True)
+
+with top_forex_col:
+  render_clickable_single_box("Top Forex", _header_top_forex, key_prefix="header_top_forex", on_click=go_to_chart, compact=True)
 
 # ---- Charts view --------------------------------------------------------
 if active_view == "📊 Charts":
@@ -1820,7 +1855,7 @@ if active_view == "📊 Charts":
           return (
               f"<div style='text-align:right;font-size:11px;'>"
               f"<span style='color:{color};'>{arrow} {m['direction']}</span>"
-              f"<span style='color:{COLOR_TEXT_MUTED};'> • {recency}</span>"
+              f"<span style='color:{COLOR_TEXT_MUTED};'> · {recency}</span>"
               f"</div>"
           )
         if outlook:

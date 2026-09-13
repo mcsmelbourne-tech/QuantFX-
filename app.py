@@ -5,6 +5,14 @@ Heikin Ashi EMAs, single-fire pullback signals with blinking animation,
 blinking/ticking buy/sell markers on Heikin Ashi, Renko, MACD, and RSI,
 expanded box heights, targeted multi-market Telegram alerts,
 full share price display, and right-side top mover cards.
+
+v2 additions:
+- Smoothed MACD line/signal/histogram (adjustable "MACD Smoothing" slider).
+- Larger button-style BUY/SELL badges on the MACD panel.
+- RSI buy/sell markers now reuse the exact same combined signal as the
+  MACD panel, so the two rows always fire on the same bricks.
+- Vertical stock name + live price watermark running up the left edge
+  of the chart.
 """
 import json
 import os
@@ -511,6 +519,7 @@ def build_atr_renko_df(
     macd_fast=12,
     macd_slow=26,
     macd_signal=9,
+    macd_smooth=3,
     rsi_period=14,
 ):
   if df.empty or len(df) < atr_period + 5:
@@ -559,7 +568,14 @@ def build_atr_renko_df(
     renko_df["EMA_MID"] = r_close.ewm(span=ema_mid, adjust=False).mean()
   real_exp1 = closes.ewm(span=macd_fast, adjust=False).mean()
   real_exp2 = closes.ewm(span=macd_slow, adjust=False).mean()
-  real_macd = real_exp1 - real_exp2
+  real_macd_raw = real_exp1 - real_exp2
+  # Smoothed MACD: run an extra short EMA over the raw MACD line so both the
+  # line and the histogram derived from it are less jagged. macd_smooth<=1
+  # disables smoothing and falls back to the classic raw MACD line.
+  if macd_smooth and macd_smooth > 1:
+    real_macd = real_macd_raw.ewm(span=macd_smooth, adjust=False).mean()
+  else:
+    real_macd = real_macd_raw
   real_macd_signal = real_macd.ewm(span=macd_signal, adjust=False).mean()
   macd_lookup = pd.DataFrame({
       "Date": dates,
@@ -1093,6 +1109,7 @@ def add_buy_sell_markers(
     sell_offset=1.005,
     size=9,
     absolute_offset=None,
+    button_style=False,
 ):
   signal_arr = np.asarray(signal_series)
   x_arr = np.asarray(x_vals)
@@ -1104,6 +1121,12 @@ def add_buy_sell_markers(
   else:
     buy_y_arr = low_arr * buy_offset
     sell_y_arr = high_arr * sell_offset
+  # "button_style" renders larger, bolder, rounded-feel badges (like the
+  # red/green SELL/BUY pills used on the MACD panel) instead of the thin
+  # inline tags used elsewhere.
+  btn_pad = 6 if button_style else 2
+  btn_border = 2 if button_style else 1
+  btn_font_size = size + 2 if button_style else size
   for i in range(len(signal_arr)):
     sig = signal_arr[i]
     if sig == "BUY":
@@ -1112,11 +1135,11 @@ def add_buy_sell_markers(
           y=buy_y_arr[i],
           text="<b>BUY</b>",
           showarrow=False,
-          font=dict(color="#0B0E11", size=9),
+          font=dict(color="#0B0E11", size=btn_font_size),
           bgcolor=COLOR_GREEN,
           bordercolor=COLOR_GREEN,
-          borderwidth=1,
-          borderpad=2,
+          borderwidth=btn_border,
+          borderpad=btn_pad,
           opacity=0.95,
           yanchor="top",
           row=row,
@@ -1128,11 +1151,11 @@ def add_buy_sell_markers(
           y=sell_y_arr[i],
           text="<b>SELL</b>",
           showarrow=False,
-          font=dict(color="#FFFFFF", size=9),
+          font=dict(color="#FFFFFF", size=btn_font_size),
           bgcolor=COLOR_RED,
           bordercolor=COLOR_RED,
-          borderwidth=1,
-          borderpad=2,
+          borderwidth=btn_border,
+          borderpad=btn_pad,
           opacity=0.95,
           yanchor="bottom",
           row=row,
@@ -1140,7 +1163,8 @@ def add_buy_sell_markers(
       )
 
 def create_chart_figure(
-    renko_df, ha_df, brick_size, display, ema_fast, ema_slow, ema_mid=None
+    renko_df, ha_df, brick_size, display, ema_fast, ema_slow, ema_mid=None,
+    live_price=None, live_chg=None, symbol_label=None,
 ):
   x_renko = list(range(len(renko_df)))
   x_ha = x_renko
@@ -1169,8 +1193,8 @@ def create_chart_figure(
       subplot_titles=(
           f"{display} — Heikin Ashi (Buy/Sell Signals)",
           f"{display} — ATR Renko (Buy/Sell Signals)",
-          "TradingView MACD (Green/Red Histogram Boxes & Combined Renko + MACD Buy/Sell Buttons)",
-          "RSI (Buy/Sell Signals & Green 30 / Red 70 Levels)",
+          "Smoothed MACD (Histogram Boxes & Buy/Sell Buttons)",
+          "RSI (Buy/Sell aligned to MACD & Green 30 / Red 70 Levels)",
       ),
   )
   
@@ -1312,7 +1336,15 @@ def create_chart_figure(
   macd_vals = renko_df["MACD"].values
   macd_finite = macd_vals[np.isfinite(macd_vals)]
   macd_pad = ((macd_finite.max() - macd_finite.min()) * 0.06 or 0.001) if macd_finite.size else 0.001
-  add_buy_sell_markers(fig, x_renko, renko_df["Combined_Renko_MACD_Signal"], renko_df["MACD"], renko_df["MACD"], row=3, col=1, absolute_offset=macd_pad)
+  # This is the single source of truth for BUY/SELL timing: the MACD panel
+  # gets big "button" style badges, and the RSI panel below re-uses the
+  # exact same signal series (just re-positioned against the RSI value) so
+  # the two panels always light up on the same bricks.
+  aligned_signal = renko_df["Combined_Renko_MACD_Signal"]
+  add_buy_sell_markers(
+      fig, x_renko, aligned_signal, renko_df["MACD"], renko_df["MACD"],
+      row=3, col=1, absolute_offset=macd_pad, size=10, button_style=True,
+  )
   
   rsi_vals = renko_df["RSI"].values
   fig.add_trace(
@@ -1323,15 +1355,43 @@ def create_chart_figure(
   fig.add_hline(y=70, line=dict(color=COLOR_RED, width=1, dash="dash"), row=4, col=1)
   fig.add_hline(y=30, line=dict(color=COLOR_GREEN, width=1, dash="dash"), row=4, col=1)
   fig.update_yaxes(range=[0, 100], row=4, col=1)
-  add_buy_sell_markers(fig, x_renko, renko_df["RSI_Signal"], renko_df["RSI"], renko_df["RSI"], row=4, col=1, absolute_offset=12.0)
+  add_buy_sell_markers(
+      fig, x_renko, aligned_signal, renko_df["RSI"], renko_df["RSI"],
+      row=4, col=1, absolute_offset=12.0,
+  )
   
+  # Vertical stock name + live price watermark running up the left edge of
+  # the whole figure (paper coordinates so it spans all four panels).
+  ticker_label = (symbol_label or display or "").strip()
+  if live_price is not None:
+    price_txt = f"${format_price(live_price)}"
+    if live_chg is not None:
+      arrow = "▲" if live_chg >= 0 else "▼"
+      price_txt += f"  {arrow} {live_chg:+.2f}%"
+    price_color = COLOR_GREEN if (live_chg or 0) >= 0 else COLOR_RED
+  else:
+    price_txt = ""
+    price_color = COLOR_TEXT_MAIN
+  vertical_text = f"{ticker_label}   {price_txt}".strip()
+  fig.add_annotation(
+      xref="paper",
+      yref="paper",
+      x=-0.045,
+      y=0.5,
+      text=f"<b>{ticker_label}</b>  <span style='color:{price_color}'>{price_txt}</span>" if vertical_text else "",
+      showarrow=False,
+      textangle=-90,
+      font=dict(color=COLOR_TEXT_MAIN, size=13),
+      xanchor="center",
+      yanchor="middle",
+  )
   fig.update_layout(
       height=950,
       paper_bgcolor=COLOR_BG_DARK,
       plot_bgcolor=COLOR_BG_DARK,
       font=dict(color=COLOR_TEXT_MUTED, size=10),
       showlegend=False,
-      margin=dict(l=10, r=70, t=40, b=10),
+      margin=dict(l=48, r=70, t=40, b=10),
       xaxis_rangeslider_visible=False,
       xaxis2_rangeslider_visible=False,
   )
@@ -1615,6 +1675,10 @@ mc1, mc2, mc3 = st.sidebar.columns(3)
 macd_fast = mc1.number_input("Fast", min_value=1, max_value=100, value=12)
 macd_slow = mc2.number_input("Slow", min_value=1, max_value=200, value=26)
 macd_signal = mc3.number_input("Signal", min_value=1, max_value=100, value=9)
+macd_smooth = st.sidebar.slider(
+    "MACD Smoothing", min_value=1, max_value=15, value=3,
+    help="Extra EMA applied to the MACD line so it (and the histogram) reads less jagged. 1 = classic raw MACD.",
+)
 st.sidebar.caption("EMA Mid powers the 3-EMA scanner boxes and the 2H/30m Telegram triggers.")
 st.sidebar.markdown("---")
 CHARTINK_EMA_SCREENER_URL = "https://chartink.com/screener/ema9-20-cross-5"
@@ -1759,6 +1823,7 @@ if active_view == "📊 Charts":
         macd_fast=macd_fast,
         macd_slow=macd_slow,
         macd_signal=macd_signal,
+        macd_smooth=macd_smooth,
     )
     if renko_df.empty:
       st.warning("Not enough data to build ATR Renko bricks for this timeframe.")
@@ -1812,7 +1877,10 @@ if active_view == "📊 Charts":
             macd_slow=macd_slow,
             macd_signal=macd_signal,
         )
-      fig = create_chart_figure(renko_df, ha_df, brick_size, chart_display, ema_fast, ema_slow, ema_mid)
+      fig = create_chart_figure(
+          renko_df, ha_df, brick_size, chart_display, ema_fast, ema_slow, ema_mid,
+          live_price=live_price, live_chg=live_chg, symbol_label=chart_display,
+      )
       chart_col, right_panel_col = st.columns([0.74, 0.26])
       with chart_col:
         search_col, search_btn_col = st.columns([0.85, 0.15])

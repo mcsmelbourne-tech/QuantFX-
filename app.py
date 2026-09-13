@@ -672,11 +672,9 @@ def build_atr_renko_df(
   macd_sigs, macd_types = detect_macd_crossovers(renko_df)
   renko_df["Div_Signal"] = macd_sigs
   renko_df["Div_Type"] = macd_types
-
   rsi_sigs, rsi_types = detect_rsi_signals(renko_df)
   renko_df["RSI_Signal"] = rsi_sigs
   renko_df["RSI_Type"] = rsi_types
-
   struct_df = detect_market_structure(
       renko_df["High"],
       renko_df["Low"],
@@ -1054,6 +1052,7 @@ DISPLAY_TO_SYMBOL = {}
 for _cat_symbols in WATCHLIST_CATEGORIES.values():
   for _sym, _disp in _cat_symbols:
     DISPLAY_TO_SYMBOL[_disp] = _sym
+
 VIEWS = ["📊 Charts", "🔎 Scanner"]
 TIMEFRAME_PERIODS = {
     "15m": "10d",
@@ -1154,7 +1153,7 @@ def create_chart_figure(
       subplot_titles=(
           f"{display} — Heikin Ashi (Blinking Buy/Sell Signals)",
           f"{display} — ATR Renko (Blinking Buy/Sell Signals)",
-          "TradingView MACD (Noise-Free Buy/Sell Signals)",
+          "TradingView MACD (Green/Red Histogram Boxes & Noise-Free Buy/Sell Buttons)",
           "RSI (Noise-Free Buy/Sell Signals with Green 30 & Red 70 Levels)",
       ),
   )
@@ -1272,15 +1271,15 @@ def create_chart_figure(
           yshift=14 if s_type in ("BOS_DEMAND", "CHOCH_DEMAND") else -14,
       )
 
-  # Subplot 3: MACD with Histogram and Noise-Free Buy/Sell Signals
+  # Subplot 3: MACD with Green/Red Histogram Tiny Boxes & Noise-Free Buy/Sell Buttons
   hist_vals = renko_df["MACD_Hist"].values
+  hist_colors = [COLOR_GREEN if v >= 0 else COLOR_RED for v in hist_vals]
   fig.add_trace(
-      go.Scatter(
+      go.Bar(
           x=x_renko,
           y=hist_vals,
-          mode="lines",
-          line=dict(color=COLOR_TEXT_MUTED, width=1.0),
-          name="MACD Histogram",
+          marker_color=hist_colors,
+          name="MACD Histogram Boxes",
           opacity=0.85,
           showlegend=False,
       ),
@@ -1596,7 +1595,6 @@ ema_slow = c2b.number_input("EMA Slow", min_value=1, max_value=200, value=50)
 c3, c4 = st.sidebar.columns(2)
 atr_period = c3.number_input("ATR Period", min_value=2, max_value=100, value=21)
 atr_multiplier = c4.number_input("ATR Mult.", min_value=0.1, max_value=10.0, value=3.0, step=0.1)
-
 st.sidebar.markdown("---")
 st.sidebar.markdown("**MACD Settings**")
 mc1, mc2, mc3 = st.sidebar.columns(3)
@@ -1605,7 +1603,6 @@ macd_slow = mc2.number_input("Slow", min_value=1, max_value=200, value=26)
 macd_signal = mc3.number_input("Signal", min_value=1, max_value=100, value=9)
 st.sidebar.caption("EMA Mid powers the 3-EMA scanner boxes and the 2H/30m Telegram triggers.")
 st.sidebar.markdown("---")
-
 CHARTINK_EMA_SCREENER_URL = "https://chartink.com/screener/ema9-20-cross-5"
 with st.sidebar:
   st.markdown(f"<div style='font-size:11px;color:{COLOR_TEXT_MUTED};font-weight:600;margin-bottom:6px;'>📊 Chartink Screener</div>", unsafe_allow_html=True)
@@ -1622,13 +1619,11 @@ with st.sidebar:
       f"</div>",
       unsafe_allow_html=True,
   )
-
 st.sidebar.markdown("---")
 if "tg_token" not in st.session_state or "tg_chat" not in st.session_state:
   saved_token, saved_chat = load_telegram_config()
   st.session_state["tg_token"] = saved_token
   st.session_state["tg_chat"] = saved_chat
-
 with st.sidebar.expander("🔔 Telegram Alerts & Automated Triggers", expanded=False):
   tg_token = st.text_input("Bot Token", value=st.session_state.get("tg_token", ""), type="password")
   tg_chat = st.text_input("Chat ID", value=st.session_state.get("tg_chat", ""))
@@ -1681,7 +1676,6 @@ with st.sidebar.expander("🔔 Telegram Alerts & Automated Triggers", expanded=F
       st.success(f"Dispatched {len(triggered_messages)} alert(s)!") if ok else st.error(m)
     else:
       st.info("No new active triggers matching rules.")
-
 if st.sidebar.button("🔄 Refresh data", use_container_width=True):
   st.cache_data.clear()
   st.rerun()
@@ -1694,7 +1688,6 @@ elif current_symbol != st.session_state._prev_sidebar_symbol:
   st.session_state.chart_symbol = current_symbol
   st.session_state.chart_display = current_display
   st.session_state._prev_sidebar_symbol = current_symbol
-
 chart_symbol = st.session_state.chart_symbol
 chart_display = st.session_state.chart_display
 

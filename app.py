@@ -13,6 +13,14 @@ v2 additions:
   MACD panel, so the two rows always fire on the same bricks.
 - Vertical stock name + live price watermark running up the left edge
   of the chart.
+
+v3 additions:
+- Unified Master_Signal: EMA9/21/50 alignment + MACD agreement + RSI
+  exhaustion filter + cooldown, shared by every chart panel.
+- Dedicated MACD-line-crosses-signal-line scanners: 2H for US100/Nifty200,
+  30M for Commodities/Forex, shown as scanner boxes and wired into the
+  Telegram auto-scan button (BUY-only for US100/Nifty200, BUY+SELL for
+  Commodities/Forex).
 """
 import json
 import os
@@ -395,6 +403,97 @@ def scan_triple_ema_cross_30m(
       continue
   return results
 
+def detect_macd_cross_signal(close_series, fast=12, slow=26, signal=9, smooth=3, lookback=1):
+  """
+  Pure MACD-line-crosses-signal-line detector (no EMA/RSI confirmation) —
+  used for the dedicated MACD-cross watchlist scanners below.
+  """
+  if close_series is None or len(close_series) < slow + signal + 5:
+    return None
+  exp1 = close_series.ewm(span=fast, adjust=False).mean()
+  exp2 = close_series.ewm(span=slow, adjust=False).mean()
+  macd_raw = exp1 - exp2
+  macd_line = macd_raw.ewm(span=smooth, adjust=False).mean() if smooth and smooth > 1 else macd_raw
+  signal_line = macd_line.ewm(span=signal, adjust=False).mean()
+  n = len(close_series)
+  earliest = max(n - 1 - lookback, 1)
+  for i in range(n - 1, earliest - 1, -1):
+    m_now, s_now = macd_line.iloc[i], signal_line.iloc[i]
+    m_prev, s_prev = macd_line.iloc[i - 1], signal_line.iloc[i - 1]
+    if pd.isna(m_now) or pd.isna(s_now) or pd.isna(m_prev) or pd.isna(s_prev):
+      continue
+    if m_now > s_now and m_prev <= s_prev:
+      return {"direction": "BUY", "bars_ago": n - 1 - i, "macd": float(m_now), "signal": float(s_now)}
+    if m_now < s_now and m_prev >= s_prev:
+      return {"direction": "SELL", "bars_ago": n - 1 - i, "macd": float(m_now), "signal": float(s_now)}
+  return None
+@st.cache_data(ttl=300, show_spinner=False)
+def scan_macd_cross_2h(
+    symbols_tuple, macd_fast=12, macd_slow=26, macd_signal=9, macd_smooth=3,
+    lookback=1, max_results=6,
+):
+  """2H MACD-line-crosses-signal-line scanner — used for US100 / Nifty200."""
+  results = []
+  for sym, disp in symbols_tuple:
+    try:
+      df = fetch_2h_ohlc(sym, period="60d")
+      if df.empty or len(df) < macd_slow + macd_signal + 5:
+        continue
+      cross = detect_macd_cross_signal(
+          df["Close"], fast=macd_fast, slow=macd_slow, signal=macd_signal,
+          smooth=macd_smooth, lookback=lookback,
+      )
+      if not cross:
+        continue
+      last_price = float(df["Close"].iloc[-1])
+      prev_price = float(df["Close"].iloc[-2]) if len(df) > 1 else last_price
+      chg = ((last_price - prev_price) / prev_price) * 100 if prev_price else 0.0
+      results.append({
+          "symbol": sym,
+          "display": disp,
+          "price": last_price,
+          "chg": chg,
+          "direction": cross["direction"],
+          "bars_ago": cross["bars_ago"],
+      })
+    except Exception:
+      continue
+  results.sort(key=lambda r: r["bars_ago"])
+  return results[:max_results]
+@st.cache_data(ttl=300, show_spinner=False)
+def scan_macd_cross_30m(
+    symbols_tuple, macd_fast=12, macd_slow=26, macd_signal=9, macd_smooth=3,
+    lookback=1, max_results=50,
+):
+  """30-minute MACD-line-crosses-signal-line scanner — used for Commodities / Forex."""
+  results = []
+  for sym, disp in symbols_tuple:
+    try:
+      df = fetch_live_ohlc(sym, period="10d", interval="30m")
+      if df.empty or len(df) < macd_slow + macd_signal + 5:
+        continue
+      cross = detect_macd_cross_signal(
+          df["Close"], fast=macd_fast, slow=macd_slow, signal=macd_signal,
+          smooth=macd_smooth, lookback=lookback,
+      )
+      if not cross:
+        continue
+      last_price = float(df["Close"].iloc[-1])
+      prev_price = float(df["Close"].iloc[-2]) if len(df) > 1 else last_price
+      chg = ((last_price - prev_price) / prev_price) * 100 if prev_price else 0.0
+      results.append({
+          "symbol": sym,
+          "display": disp,
+          "price": last_price,
+          "chg": chg,
+          "direction": cross["direction"],
+          "bars_ago": cross["bars_ago"],
+      })
+    except Exception:
+      continue
+  results.sort(key=lambda r: r["bars_ago"])
+  return results[:max_results]
+
 def detect_market_structure(high, low, close, swing_lookback=5, brick_type=None):
   high = pd.Series(high).reset_index(drop=True)
   low = pd.Series(low).reset_index(drop=True)
@@ -509,6 +608,51 @@ def latest_structure_event(struct_df, lookback=15):
       "bars_ago": int((len(struct_df) - 1) - last_idx),
   }
 
+def compute_master_signal(renko_df, cooldown=5, rsi_overbought=70.0, rsi_oversold=30.0):
+  """
+  Single source of truth for BUY/SELL used across the Heikin Ashi, Renko,
+  MACD, and RSI panels alike. A signal only fires when THREE things line
+  up on the same bar:
+    1) Trend: EMA9/EMA21/EMA50 flip into full bullish (9>21>50) or full
+       bearish (9<21<50) alignment (fires once, on the transition bar).
+    2) Momentum: MACD line agrees with the direction (above/below signal).
+    3) Exhaustion filter: RSI isn't already overbought (for BUY) or
+       oversold (for SELL).
+  A cooldown between fires stops the flip-flopping you get from any single
+  noisy crossover generator.
+  """
+  n = len(renko_df)
+  master = ["HOLD"] * n
+  required_cols = ("EMA_FAST", "EMA_MID", "EMA_SLOW", "MACD", "MACD_Signal")
+  if n < 2 or any(c not in renko_df.columns for c in required_cols):
+    return master
+  fast = renko_df["EMA_FAST"].values
+  mid = renko_df["EMA_MID"].values
+  slow = renko_df["EMA_SLOW"].values
+  macd = renko_df["MACD"].values
+  macd_sig = renko_df["MACD_Signal"].values
+  rsi = renko_df["RSI"].values if "RSI" in renko_df.columns else np.full(n, np.nan)
+  last_fired = -cooldown - 1
+  for i in range(1, n):
+    if not (np.isfinite(fast[i]) and np.isfinite(mid[i]) and np.isfinite(slow[i])
+            and np.isfinite(fast[i - 1]) and np.isfinite(mid[i - 1]) and np.isfinite(slow[i - 1])):
+      continue
+    bullish_now = fast[i] > mid[i] > slow[i]
+    bearish_now = fast[i] < mid[i] < slow[i]
+    bullish_prev = fast[i - 1] > mid[i - 1] > slow[i - 1]
+    bearish_prev = fast[i - 1] < mid[i - 1] < slow[i - 1]
+    macd_bull = np.isfinite(macd[i]) and np.isfinite(macd_sig[i]) and macd[i] > macd_sig[i]
+    macd_bear = np.isfinite(macd[i]) and np.isfinite(macd_sig[i]) and macd[i] < macd_sig[i]
+    rsi_v = rsi[i]
+    rsi_ok_buy = np.isnan(rsi_v) or rsi_v < rsi_overbought
+    rsi_ok_sell = np.isnan(rsi_v) or rsi_v > rsi_oversold
+    if bullish_now and not bullish_prev and macd_bull and rsi_ok_buy and (i - last_fired) >= cooldown:
+      master[i] = "BUY"
+      last_fired = i
+    elif bearish_now and not bearish_prev and macd_bear and rsi_ok_sell and (i - last_fired) >= cooldown:
+      master[i] = "SELL"
+      last_fired = i
+  return master
 def build_atr_renko_df(
     df,
     atr_period=21,
@@ -521,6 +665,7 @@ def build_atr_renko_df(
     macd_signal=9,
     macd_smooth=3,
     rsi_period=14,
+    signal_cooldown=5,
 ):
   if df.empty or len(df) < atr_period + 5:
     return pd.DataFrame(), 1.0
@@ -678,6 +823,11 @@ def build_atr_renko_df(
   rsi_sigs, rsi_types = detect_rsi_signals(renko_df)
   renko_df["RSI_Signal"] = rsi_sigs
   renko_df["RSI_Type"] = rsi_types
+  
+  # Unified, noise-filtered signal (EMA9/21/50 alignment + MACD agreement +
+  # RSI exhaustion filter + cooldown) — this is what actually gets drawn on
+  # every panel so Heikin Ashi, Renko, MACD, and RSI always agree.
+  renko_df["Master_Signal"] = compute_master_signal(renko_df, cooldown=signal_cooldown)
   
   struct_df = detect_market_structure(
       renko_df["High"],
@@ -1182,6 +1332,13 @@ def create_chart_figure(
   else:
     tick_vals, tick_texts = [], []
   
+  # Single unified signal, computed once in build_atr_renko_df, reused by
+  # every panel below so Heikin Ashi / Renko / MACD / RSI never disagree.
+  if "Master_Signal" in renko_df.columns:
+    master_signal = renko_df["Master_Signal"]
+  else:
+    master_signal = pd.Series(["HOLD"] * len(renko_df))
+  
   macd_sigs, macd_types = detect_macd_crossovers(renko_df)
   
   fig = make_subplots(
@@ -1191,10 +1348,10 @@ def create_chart_figure(
       row_heights=[0.30, 0.30, 0.20, 0.20],
       vertical_spacing=0.03,
       subplot_titles=(
-          f"{display} — Heikin Ashi (Buy/Sell Signals)",
-          f"{display} — ATR Renko (Buy/Sell Signals)",
+          f"{display} — Heikin Ashi (EMA 9/21/50 + MACD + RSI confirmed)",
+          f"{display} — ATR Renko (EMA 9/21/50 + MACD + RSI confirmed)",
           "Smoothed MACD (Histogram Boxes & Buy/Sell Buttons)",
-          "RSI (Buy/Sell aligned to MACD & Green 30 / Red 70 Levels)",
+          "RSI (Buy/Sell aligned to Master Signal & Green 30 / Red 70 Levels)",
       ),
   )
   
@@ -1231,7 +1388,7 @@ def create_chart_figure(
         row=1,
         col=1,
     )
-  add_buy_sell_markers(fig, x_ha, ha_df["Signal"], ha_df["Low"], ha_df["High"], row=1, col=1)
+  add_buy_sell_markers(fig, x_ha, master_signal, ha_df["Low"], ha_df["High"], row=1, col=1)
   
   fig.add_trace(
       go.Candlestick(
@@ -1266,7 +1423,7 @@ def create_chart_figure(
         row=2,
         col=1,
     )
-  add_buy_sell_markers(fig, x_renko, renko_df["Confirmed_Signal"], renko_df["Low"], renko_df["High"], row=2, col=1)
+  add_buy_sell_markers(fig, x_renko, master_signal, renko_df["Low"], renko_df["High"], row=2, col=1)
   
   struct_style = {
       "BOS_DEMAND": (COLOR_BOS_DEMAND, "B-S"),
@@ -1336,13 +1493,12 @@ def create_chart_figure(
   macd_vals = renko_df["MACD"].values
   macd_finite = macd_vals[np.isfinite(macd_vals)]
   macd_pad = ((macd_finite.max() - macd_finite.min()) * 0.06 or 0.001) if macd_finite.size else 0.001
-  # This is the single source of truth for BUY/SELL timing: the MACD panel
-  # gets big "button" style badges, and the RSI panel below re-uses the
-  # exact same signal series (just re-positioned against the RSI value) so
-  # the two panels always light up on the same bricks.
-  aligned_signal = renko_df["Combined_Renko_MACD_Signal"]
+  # This is the single source of truth for BUY/SELL timing across every
+  # panel — the MACD panel gets big "button" style badges, and the RSI
+  # panel below re-uses the exact same master_signal series (just
+  # re-positioned against the RSI value) so all four panels agree.
   add_buy_sell_markers(
-      fig, x_renko, aligned_signal, renko_df["MACD"], renko_df["MACD"],
+      fig, x_renko, master_signal, renko_df["MACD"], renko_df["MACD"],
       row=3, col=1, absolute_offset=macd_pad, size=10, button_style=True,
   )
   
@@ -1356,7 +1512,7 @@ def create_chart_figure(
   fig.add_hline(y=30, line=dict(color=COLOR_GREEN, width=1, dash="dash"), row=4, col=1)
   fig.update_yaxes(range=[0, 100], row=4, col=1)
   add_buy_sell_markers(
-      fig, x_renko, aligned_signal, renko_df["RSI"], renko_df["RSI"],
+      fig, x_renko, master_signal, renko_df["RSI"], renko_df["RSI"],
       row=4, col=1, absolute_offset=12.0,
   )
   
@@ -1663,8 +1819,8 @@ interval = st.sidebar.select_slider("Timeframe", options=list(TIMEFRAME_PERIODS.
 period = TIMEFRAME_PERIODS[interval]
 st.sidebar.markdown("---")
 c1, c2, c2b = st.sidebar.columns(3)
-ema_fast = c1.number_input("EMA Fast", min_value=1, max_value=200, value=21)
-ema_mid = c2.number_input("EMA Mid", min_value=1, max_value=200, value=34)
+ema_fast = c1.number_input("EMA Fast", min_value=1, max_value=200, value=9)
+ema_mid = c2.number_input("EMA Mid", min_value=1, max_value=200, value=21)
 ema_slow = c2b.number_input("EMA Slow", min_value=1, max_value=200, value=50)
 c3, c4 = st.sidebar.columns(2)
 atr_period = c3.number_input("ATR Period", min_value=2, max_value=100, value=21)
@@ -1678,6 +1834,10 @@ macd_signal = mc3.number_input("Signal", min_value=1, max_value=100, value=9)
 macd_smooth = st.sidebar.slider(
     "MACD Smoothing", min_value=1, max_value=15, value=3,
     help="Extra EMA applied to the MACD line so it (and the histogram) reads less jagged. 1 = classic raw MACD.",
+)
+signal_cooldown = st.sidebar.slider(
+    "Signal Cooldown (bricks)", min_value=1, max_value=20, value=5,
+    help="Minimum bricks between BUY/SELL signals. Higher = fewer, more confident signals.",
 )
 st.sidebar.caption("EMA Mid powers the 3-EMA scanner boxes and the 2H/30m Telegram triggers.")
 st.sidebar.markdown("---")
@@ -1714,6 +1874,11 @@ with st.sidebar.expander("🔔 Telegram Alerts & Automated Triggers", expanded=F
   if bcol2.button("Test Connection", use_container_width=True):
     ok, msg = send_telegram_alert("🟢 *QuantFX Terminal Test Alert*", tg_token, tg_chat)
     st.success(msg) if ok else st.error(msg)
+  st.caption(
+      "Auto scan sends: 30m/2H 3-EMA cross alerts, plus MACD-crosses-signal "
+      "alerts — BUY-only (2H) for US100/Nifty200, BUY+SELL (30m) for "
+      "Commodities/Forex."
+  )
   if st.button("🚀 Run Auto Scan & Send", use_container_width=True):
     triggered_messages = []
     fx_comm_watchlist = [("Commodities", COMMODITIES), ("Forex", FOREX_PAIRS)]
@@ -1747,6 +1912,46 @@ with st.sidebar.expander("🔔 Telegram Alerts & Automated Triggers", expanded=F
         if h["bars_ago"] <= 1:
           triggered_messages.append(
               f"🚨 *[2H 3-EMA Cross]* *{h['display']}* → *{h['direction']}* (EMA {int(ema_fast)}/{int(ema_mid)}/{int(ema_slow)})"
+          )
+    # --- MACD-line-crosses-signal-line triggers ---------------------------
+    # US100 / Nifty200 on the 2H chart: alert only when a BUY button
+    # appears on the MACD panel.
+    idx_macd_watchlist = [
+        ("US100", list(zip(us100_yf, us100_raw + ["IXIC"]))),
+        ("Nifty200", list(zip(nifty200_yf, nifty200_raw))),
+    ]
+    for cat_name, symbols in idx_macd_watchlist:
+      hits = scan_macd_cross_2h(
+          tuple(symbols),
+          macd_fast=int(macd_fast),
+          macd_slow=int(macd_slow),
+          macd_signal=int(macd_signal),
+          macd_smooth=int(macd_smooth),
+          lookback=1,
+          max_results=len(symbols),
+      )
+      for h in hits:
+        if h["direction"] == "BUY" and h["bars_ago"] <= 1:
+          triggered_messages.append(
+              f"🟢 *[2H MACD Cross]* *{h['display']}* → *BUY* (MACD crossed above Signal, {cat_name})"
+          )
+    # Commodities / Forex on the 30m chart: alert on both BUY and SELL.
+    fx_comm_macd_watchlist = [("Commodities", COMMODITIES), ("Forex", FOREX_PAIRS)]
+    for cat_name, symbols in fx_comm_macd_watchlist:
+      hits = scan_macd_cross_30m(
+          tuple(symbols),
+          macd_fast=int(macd_fast),
+          macd_slow=int(macd_slow),
+          macd_signal=int(macd_signal),
+          macd_smooth=int(macd_smooth),
+          lookback=1,
+      )
+      for h in hits:
+        if h["bars_ago"] <= 1:
+          emoji = "🟢" if h["direction"] == "BUY" else "🔴"
+          crossed = "above" if h["direction"] == "BUY" else "below"
+          triggered_messages.append(
+              f"{emoji} *[30m MACD Cross]* *{h['display']}* → *{h['direction']}* (MACD crossed {crossed} Signal, {cat_name})"
           )
     if triggered_messages:
       combined_msg = "📢 *QuantFX Automated Triggers*\n\n" + "\n".join(triggered_messages)
@@ -1824,6 +2029,7 @@ if active_view == "📊 Charts":
         macd_slow=macd_slow,
         macd_signal=macd_signal,
         macd_smooth=macd_smooth,
+        signal_cooldown=signal_cooldown,
     )
     if renko_df.empty:
       st.warning("Not enough data to build ATR Renko bricks for this timeframe.")
@@ -1868,6 +2074,42 @@ if active_view == "📊 Charts":
             max_results=len(ema_scanner_nifty_watchlist),
         )
         ema_scanner_nifty_hits = [h for h in ema_scanner_nifty_hits_all if h["direction"] == "BUY"][:6]
+        macd_scanner_us100_hits = scan_macd_cross_2h(
+            ema_scanner_us100_watchlist,
+            macd_fast=macd_fast,
+            macd_slow=macd_slow,
+            macd_signal=macd_signal,
+            macd_smooth=macd_smooth,
+            lookback=1,
+            max_results=6,
+        )
+        macd_scanner_nifty_hits = scan_macd_cross_2h(
+            ema_scanner_nifty_watchlist,
+            macd_fast=macd_fast,
+            macd_slow=macd_slow,
+            macd_signal=macd_signal,
+            macd_smooth=macd_smooth,
+            lookback=1,
+            max_results=6,
+        )
+        macd_scanner_commodities_hits = scan_macd_cross_30m(
+            tuple(COMMODITIES),
+            macd_fast=macd_fast,
+            macd_slow=macd_slow,
+            macd_signal=macd_signal,
+            macd_smooth=macd_smooth,
+            lookback=1,
+            max_results=6,
+        )
+        macd_scanner_forex_hits = scan_macd_cross_30m(
+            tuple(FOREX_PAIRS),
+            macd_fast=macd_fast,
+            macd_slow=macd_slow,
+            macd_signal=macd_signal,
+            macd_smooth=macd_smooth,
+            lookback=1,
+            max_results=6,
+        )
         outlook = compute_7day_outlook(
             chart_symbol,
             chart_display,
@@ -1904,13 +2146,19 @@ if active_view == "📊 Charts":
         )
         
         if st.button("📨 Send current signal to Telegram"):
-          last_confirmed = renko_df["Confirmed_Signal"].iloc[-1]
-          last_signal = renko_df["Signal"].iloc[-1]
+          master_col = renko_df["Master_Signal"]
+          nonhold = master_col[master_col != "HOLD"]
+          if not nonhold.empty:
+            last_idx = nonhold.index[-1]
+            last_master = nonhold.iloc[-1]
+            bricks_ago = (len(renko_df) - 1) - last_idx
+            signal_line = f"{last_master} ({'latest brick' if bricks_ago == 0 else f'{bricks_ago} bricks ago'})"
+          else:
+            signal_line = "No confirmed signal yet"
           msg = (
               f"*{chart_display}* ({chart_symbol})\n"
               f"Price: ${format_price(float(raw_df['Close'].iloc[-1]))}\n"
-              f"Confirmed Signal: {last_confirmed}\n"
-              f"EMA Signal: {last_signal}\n"
+              f"Signal (EMA9/21/50 + MACD + RSI): {signal_line}\n"
               f"Structure: {struct_event['label'] if struct_event else '—'}"
           )
           ok, m = send_telegram_alert(msg, tg_token, tg_chat)
@@ -1960,6 +2208,34 @@ if active_view == "📊 Charts":
             "⚡ 3-EMA Cross Scanner (2H) — Nifty200 (BUY only)",
             ema_scanner_nifty_hits,
             key_prefix="ema3scan_nifty",
+            on_click=go_to_chart,
+            value_fmt=_triple_ema_scanner_value_html,
+        )
+        render_clickable_list_box(
+            "🚦 MACD Cross Scanner (2H) — US100",
+            macd_scanner_us100_hits,
+            key_prefix="macdscan_us100",
+            on_click=go_to_chart,
+            value_fmt=_triple_ema_scanner_value_html,
+        )
+        render_clickable_list_box(
+            "🚦 MACD Cross Scanner (2H) — Nifty200",
+            macd_scanner_nifty_hits,
+            key_prefix="macdscan_nifty",
+            on_click=go_to_chart,
+            value_fmt=_triple_ema_scanner_value_html,
+        )
+        render_clickable_list_box(
+            "🚦 MACD Cross Scanner (30M) — Commodities",
+            macd_scanner_commodities_hits,
+            key_prefix="macdscan_commodities",
+            on_click=go_to_chart,
+            value_fmt=_triple_ema_scanner_value_html,
+        )
+        render_clickable_list_box(
+            "🚦 MACD Cross Scanner (30M) — Forex",
+            macd_scanner_forex_hits,
+            key_prefix="macdscan_forex",
             on_click=go_to_chart,
             value_fmt=_triple_ema_scanner_value_html,
         )

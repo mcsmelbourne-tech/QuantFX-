@@ -2,8 +2,9 @@
 QuantFX Terminal — ATR Renko & Macro Smart Money Structure
 Streamlit rewrite with custom candle coloring, right-side axes,
 Heikin Ashi EMAs, single-fire pullback signals with blinking animation,
-blinking/ticking buy/sell markers on Heikin Ashi, Renko & MACD, targeted multi-market Telegram alerts,
-full share price display, 85% reduced chart box scaling, font size 10, and right-side top mover cards (font size 11).
+blinking/ticking buy/sell markers on Heikin Ashi, Renko, MACD & RSI,
+expanded MACD/RSI box heights, targeted multi-market Telegram alerts,
+full share price display, and right-side top mover cards.
 """
 import json
 import os
@@ -87,19 +88,21 @@ st.markdown(
     .js-plotly-plot .plotly .annotation text {{
         font-size: 10px !important;
     }}
-    /* Trim header whitespace with comfortable padding to keep stock name visible */
+    /* Trim header whitespace without hiding content */
     .block-container, section.main > div.block-container {{
-        padding-top: 3.5rem !important;
+        padding-top: 2.2rem !important;
         padding-bottom: 0.8rem !important;
     }}
     div[data-testid="stVerticalBlock"] {{
         gap: 0.35rem !important;
     }}
-    h2, h3 {{
+    h2 {{
         margin-top: 0 !important;
         margin-bottom: 0.2rem !important;
         padding-bottom: 0 !important;
         padding-top: 4px !important;
+        font-size: 1.35rem !important;
+        line-height: 1.5 !important;
         overflow: visible !important;
     }}
     </style>
@@ -108,7 +111,7 @@ st.markdown(
 )
 
 # =====================================================================
-# TELEGRAM
+# TELEGRAM CONFIGURATION
 # =====================================================================
 TG_CONFIG_PATH = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), ".qfx_telegram_config.json"
@@ -149,7 +152,7 @@ def send_telegram_alert(message, token, chat_id):
     return False, str(e)
 
 # =====================================================================
-# INDICATORS & HEIKIN ASHI / MACD
+# INDICATORS & SIGNAL GENERATORS (NOISE FILTERED)
 # =====================================================================
 def compute_heikin_ashi(df, ema_fast=21, ema_slow=50, ema_mid=None):
   ha = pd.DataFrame(index=df.index)
@@ -229,6 +232,42 @@ def detect_macd_crossovers(
       macd_types[i] = "MACD Cross Down"
       last_fired = i
   return macd_signals, macd_types
+
+def detect_rsi_signals(renko_df, min_gap=1.5, cooldown=3):
+  if "RSI" not in renko_df.columns:
+    return ["HOLD"] * len(renko_df), [None] * len(renko_df)
+  rsi = renko_df["RSI"].values
+  n = len(renko_df)
+  rsi_signals = ["HOLD"] * n
+  rsi_types = [None] * n
+  if n < 2:
+    return rsi_signals, rsi_types
+  
+  rsi_series = pd.Series(rsi)
+  rsi_signal_line = rsi_series.ewm(span=9, adjust=False).mean().values
+  
+  last_fired = -cooldown - 1
+  for i in range(1, n):
+    if not (np.isfinite(rsi[i]) and np.isfinite(rsi_signal_line[i]) and np.isfinite(rsi[i-1]) and np.isfinite(rsi_signal_line[i-1])):
+      continue
+    crossed_up = rsi[i] > rsi_signal_line[i] and rsi[i-1] <= rsi_signal_line[i-1] and rsi[i] < 75
+    crossed_down = rsi[i] < rsi_signal_line[i] and rsi[i-1] >= rsi_signal_line[i-1] and rsi[i] > 25
+    
+    if not (crossed_up or crossed_down):
+      continue
+    if abs(rsi[i] - rsi_signal_line[i]) < min_gap:
+      continue
+    if i - last_fired < cooldown:
+      continue
+    if crossed_up:
+      rsi_signals[i] = "BUY"
+      rsi_types[i] = "RSI Cross Up"
+      last_fired = i
+    elif crossed_down:
+      rsi_signals[i] = "SELL"
+      rsi_types[i] = "RSI Cross Down"
+      last_fired = i
+  return rsi_signals, rsi_types
 
 def format_price(value):
   try:
@@ -565,6 +604,7 @@ def build_atr_renko_df(
   loss = (-delta.where(delta < 0, 0.0)).rolling(rsi_period, min_periods=1).mean()
   rs = gain / loss.replace(0, np.nan)
   renko_df["RSI"] = 100 - (100 / (1 + rs))
+  
   signals = []
   pullback_signals = []
   pullback_fired = False
@@ -628,9 +668,15 @@ def build_atr_renko_df(
       c = "SELL"
     confirmed_signals.append(c)
   renko_df["Confirmed_Signal"] = confirmed_signals
+  
   macd_sigs, macd_types = detect_macd_crossovers(renko_df)
   renko_df["Div_Signal"] = macd_sigs
   renko_df["Div_Type"] = macd_types
+
+  rsi_sigs, rsi_types = detect_rsi_signals(renko_df)
+  renko_df["RSI_Signal"] = rsi_sigs
+  renko_df["RSI_Type"] = rsi_types
+
   struct_df = detect_market_structure(
       renko_df["High"],
       renko_df["Low"],
@@ -718,7 +764,6 @@ def fetch_chartink_screener(url):
   except Exception:
     return []
 
-@st.cache_data(ttl=300, show_spinner=False)
 def evaluate_oracle_score(symbol, display=None, macd_fast=12, macd_slow=26, macd_signal=9):
   try:
     df = fetch_live_ohlc(symbol, period="1y", interval="1d")
@@ -973,6 +1018,7 @@ us100_raw = [
     "CSGP", "CEG", "AMZN", "ISRG", "CCEP", "FANG",
 ]
 nifty200_yf = [f"{t}.NS" for t in nifty200_raw]
+
 def convert_us100_symbol(t):
   if t == "NAS100":
     return "^NDX"
@@ -981,6 +1027,7 @@ def convert_us100_symbol(t):
   if t == "US30":
     return "^DJI"
   return t
+
 us100_yf = [convert_us100_symbol(t) for t in us100_raw] + ["^IXIC"]
 COMMODITIES = [
     ("GC=F", "GOLD"),
@@ -1096,19 +1143,22 @@ def create_chart_figure(
         tick_texts.append(str(dt))
   else:
     tick_vals, tick_texts = [], []
+
+  # Expanded MACD and RSI Box Heights (Row Heights: [HA, Renko, MACD, RSI])
   fig = make_subplots(
       rows=4,
       cols=1,
       shared_xaxes=True,
-      row_heights=[0.37, 0.37, 0.13, 0.13],
+      row_heights=[0.28, 0.28, 0.22, 0.22],
       vertical_spacing=0.03,
       subplot_titles=(
           f"{display} — Heikin Ashi (Blinking Buy/Sell Signals)",
           f"{display} — ATR Renko (Blinking Buy/Sell Signals)",
-          "TradingView MACD (Histogram in Thin Green/Red Boxes)",
-          "RSI (Full RSI Line with Green 30 & Red 70 Levels)",
+          "TradingView MACD (Noise-Free Buy/Sell Signals)",
+          "RSI (Noise-Free Buy/Sell Signals with Green 30 & Red 70 Levels)",
       ),
   )
+
   # Subplot 1: Heikin Ashi
   fig.add_trace(
       go.Candlestick(
@@ -1222,17 +1272,16 @@ def create_chart_figure(
           yshift=14 if s_type in ("BOS_DEMAND", "CHOCH_DEMAND") else -14,
       )
 
-  # Subplot 3: MACD with Histogram in Thin Vertical Green/Red Boxes (Bars)
+  # Subplot 3: MACD with Histogram and Noise-Free Buy/Sell Signals
   hist_vals = renko_df["MACD_Hist"].values
-  bar_colors = [COLOR_GREEN if v >= 0 else COLOR_RED for v in hist_vals]
   fig.add_trace(
-      go.Bar(
+      go.Scatter(
           x=x_renko,
           y=hist_vals,
-          marker_color=bar_colors,
+          mode="lines",
+          line=dict(color=COLOR_TEXT_MUTED, width=1.0),
           name="MACD Histogram",
-          width=0.4,
-          opacity=0.9,
+          opacity=0.85,
           showlegend=False,
       ),
       row=3,
@@ -1254,7 +1303,7 @@ def create_chart_figure(
   macd_pad = ((macd_finite.max() - macd_finite.min()) * 0.06 or 0.001) if macd_finite.size else 0.001
   add_buy_sell_markers(fig, x_renko, renko_df["Div_Signal"], renko_df["MACD"], renko_df["MACD"], row=3, col=1, absolute_offset=macd_pad)
 
-  # Subplot 4: RSI
+  # Subplot 4: RSI with Noise-Free Buy/Sell Signals
   rsi_vals = renko_df["RSI"].values
   fig.add_trace(
       go.Scatter(x=x_renko, y=rsi_vals, line=dict(color="#00D4FF", width=1.8), name="RSI", showlegend=False),
@@ -1264,8 +1313,10 @@ def create_chart_figure(
   fig.add_hline(y=70, line=dict(color=COLOR_RED, width=1, dash="dash"), row=4, col=1)
   fig.add_hline(y=30, line=dict(color=COLOR_GREEN, width=1, dash="dash"), row=4, col=1)
   fig.update_yaxes(range=[0, 100], row=4, col=1)
+  add_buy_sell_markers(fig, x_renko, renko_df["RSI_Signal"], renko_df["RSI"], renko_df["RSI"], row=4, col=1, absolute_offset=5.0)
+
   fig.update_layout(
-      height=700,
+      height=850,
       paper_bgcolor=COLOR_BG_DARK,
       plot_bgcolor=COLOR_BG_DARK,
       font=dict(color=COLOR_TEXT_MUTED, size=10),
@@ -1313,7 +1364,7 @@ def run_chart_search():
       return
   go_to_chart(query, query)
 
-def render_zoomable_chart(fig, key, height=700):
+def render_zoomable_chart(fig, key, height=850):
   fig_json = fig.to_json()
   div_id = f"qfx_chart_{key}"
   html = f"""
@@ -1546,7 +1597,6 @@ c3, c4 = st.sidebar.columns(2)
 atr_period = c3.number_input("ATR Period", min_value=2, max_value=100, value=21)
 atr_multiplier = c4.number_input("ATR Mult.", min_value=0.1, max_value=10.0, value=3.0, step=0.1)
 
-# MACD Customizer Settings
 st.sidebar.markdown("---")
 st.sidebar.markdown("**MACD Settings**")
 mc1, mc2, mc3 = st.sidebar.columns(3)
@@ -1555,6 +1605,7 @@ macd_slow = mc2.number_input("Slow", min_value=1, max_value=200, value=26)
 macd_signal = mc3.number_input("Signal", min_value=1, max_value=100, value=9)
 st.sidebar.caption("EMA Mid powers the 3-EMA scanner boxes and the 2H/30m Telegram triggers.")
 st.sidebar.markdown("---")
+
 CHARTINK_EMA_SCREENER_URL = "https://chartink.com/screener/ema9-20-cross-5"
 with st.sidebar:
   st.markdown(f"<div style='font-size:11px;color:{COLOR_TEXT_MUTED};font-weight:600;margin-bottom:6px;'>📊 Chartink Screener</div>", unsafe_allow_html=True)
@@ -1571,11 +1622,13 @@ with st.sidebar:
       f"</div>",
       unsafe_allow_html=True,
   )
+
 st.sidebar.markdown("---")
 if "tg_token" not in st.session_state or "tg_chat" not in st.session_state:
   saved_token, saved_chat = load_telegram_config()
   st.session_state["tg_token"] = saved_token
   st.session_state["tg_chat"] = saved_chat
+
 with st.sidebar.expander("🔔 Telegram Alerts & Automated Triggers", expanded=False):
   tg_token = st.text_input("Bot Token", value=st.session_state.get("tg_token", ""), type="password")
   tg_chat = st.text_input("Chat ID", value=st.session_state.get("tg_chat", ""))
@@ -1628,6 +1681,7 @@ with st.sidebar.expander("🔔 Telegram Alerts & Automated Triggers", expanded=F
       st.success(f"Dispatched {len(triggered_messages)} alert(s)!") if ok else st.error(m)
     else:
       st.info("No new active triggers matching rules.")
+
 if st.sidebar.button("🔄 Refresh data", use_container_width=True):
   st.cache_data.clear()
   st.rerun()
@@ -1649,17 +1703,11 @@ chart_display = st.session_state.chart_display
 # =====================================================================
 _header_top_commodity = fetch_top_n_movers(tuple(COMMODITIES), n=1)
 _header_top_forex = fetch_top_n_movers(tuple(FOREX_PAIRS), n=1)
-
-# Fetch quick price for header display
-raw_df_preview = fetch_live_ohlc(chart_symbol, period="5d", interval="1d")
-current_price_str = format_price(float(raw_df_preview["Close"].iloc[-1])) if not raw_df_preview.empty else "—"
-
 title_col, top_commodity_col, top_forex_col = st.columns([0.5, 0.25, 0.25])
 with title_col:
   st.markdown(
-      f"<h3 style='color:#FFFFFF;margin-top:4px;margin-bottom:0;font-size:1.15rem;'>"
-      f"{chart_display} <span style='color:{COLOR_BULL};font-size:1.05rem;margin-left:8px;'>${current_price_str}</span> "
-      f"<span style='color:{COLOR_TEXT_MUTED};font-size:9px;'>({chart_symbol}) • {interval}</span></h3>",
+      f"<h2 style='color:#FFFFFF;margin-bottom:0;'>{chart_display} "
+      f"<span style='color:{COLOR_TEXT_MUTED};font-size:10px;'>({chart_symbol}) • {interval}</span></h2>",
       unsafe_allow_html=True,
   )
 with top_commodity_col:
@@ -1761,7 +1809,7 @@ if active_view == "📊 Charts":
         render_zoomable_chart(
             fig,
             key=chart_symbol.replace("=", "_").replace("^", "idx"),
-            height=700,
+            height=850,
         )
         last_signal = renko_df["Signal"].iloc[-1]
         last_pullback = renko_df["Pullback_Signal"].iloc[-1]

@@ -17,10 +17,15 @@ v2 additions:
 v3 additions:
 - Unified Master_Signal: EMA9/21/50 alignment + MACD agreement + RSI
   exhaustion filter + cooldown, shared by every chart panel.
-- Dedicated MACD-line-crosses-signal-line scanners: 2H for US100/Nifty200,
+- Dedicated MACD-line-crosses-signal-line scanners: 2H for US100/Nifty500,
   30M for Commodities/Forex, shown as scanner boxes and wired into the
-  Telegram auto-scan button (BUY-only for US100/Nifty200, BUY+SELL for
+  Telegram auto-scan button (BUY-only for US100/Nifty500, BUY+SELL for
   Commodities/Forex).
+
+v4 additions:
+- Nifty200 watchlist retired; all India-side scanning, charting, and
+  alerts now run across the full Nifty500 list (sourced from
+  ind_nifty500list.csv).
 """
 import json
 import os
@@ -432,7 +437,7 @@ def scan_macd_cross_2h(
     symbols_tuple, macd_fast=12, macd_slow=26, macd_signal=9, macd_smooth=3,
     lookback=1, max_results=6,
 ):
-  """2H MACD-line-crosses-signal-line scanner — used for US100 / Nifty200."""
+  """2H MACD-line-crosses-signal-line scanner — used for US100 / Nifty500."""
   results = []
   for sym, disp in symbols_tuple:
     try:
@@ -1173,6 +1178,11 @@ def compute_7day_outlook(symbol, display, period="1y", interval="1d", macd_fast=
 # =====================================================================
 # WATCHLISTS
 # =====================================================================
+
+# Nifty 500 constituents, sourced from ind_nifty500list.csv.
+# Deduplicated below (dict.fromkeys preserves first-seen order) so the
+# same ticker never appears twice even if the source CSV is refreshed
+# with overlapping/duplicate rows.
 _nifty500_csv_raw = [
     "360ONE", "3MINDIA", "ABB", "ACC", "ACMESOLAR", "AIAENG",
     "APLAPOLLO", "AUBANK", "AWL", "AADHARHFC", "AARTIIND", "AAVAS",
@@ -1308,7 +1318,6 @@ FOREX_PAIRS = [
 WATCHLIST_CATEGORIES = {
     "Commodities": COMMODITIES,
     "Forex": FOREX_PAIRS,
-    "Nifty200": list(zip(nifty200_yf, nifty200_raw)),
     "Nifty500": list(zip(nifty500_yf, nifty500_raw)),
     "US100": list(zip(us100_yf, us100_raw + ["IXIC"])),
 }
@@ -1867,7 +1876,7 @@ def render_high_conviction_combined_box(us100_results, nifty_results, key_prefix
           args=(m["RawSymbol"], m["Ticker"]),
       )
   st.markdown(f"<div style='margin:10px 0;border-top:1px solid {COLOR_BORDER};'></div>", unsafe_allow_html=True)
-  st.markdown(f"<div style='font-size:11px;color:{COLOR_TEXT_MAIN};font-weight:600;margin-bottom:6px;'>Nifty200</div>", unsafe_allow_html=True)
+  st.markdown(f"<div style='font-size:11px;color:{COLOR_TEXT_MAIN};font-weight:600;margin-bottom:6px;'>Nifty500</div>", unsafe_allow_html=True)
   if not nifty_results:
     st.markdown(f"<div style='font-size:11px;color:{COLOR_TEXT_MUTED};margin-bottom:6px;'>No matches</div>", unsafe_allow_html=True)
   else:
@@ -1965,7 +1974,7 @@ with st.sidebar.expander("🔔 Telegram Alerts & Automated Triggers", expanded=F
     st.success(msg) if ok else st.error(msg)
   st.caption(
       "Auto scan sends: 30m/2H 3-EMA cross alerts, MACD-crosses-signal "
-      "alerts — BUY-only (2H) for US100/Nifty200, BUY+SELL (30m) for "
+      "alerts — BUY-only (2H) for US100/Nifty500, BUY+SELL (30m) for "
       "Commodities/Forex — plus High-Conviction BUY alerts (US100/Nifty500) "
       "and the top Forex & Commodity movers."
   )
@@ -1987,7 +1996,7 @@ with st.sidebar.expander("🔔 Telegram Alerts & Automated Triggers", expanded=F
           )
     idx_watchlist = [
         ("US100", list(zip(us100_yf, us100_raw + ["IXIC"]))),
-        ("Nifty200", list(zip(nifty200_yf, nifty200_raw))),
+        ("Nifty500", list(zip(nifty500_yf, nifty500_raw))),
     ]
     for cat_name, symbols in idx_watchlist:
       hits = scan_triple_ema_cross_2h(
@@ -2004,11 +2013,11 @@ with st.sidebar.expander("🔔 Telegram Alerts & Automated Triggers", expanded=F
               f"🚨 *[2H 3-EMA Cross]* *{h['display']}* → *{h['direction']}* (EMA {int(ema_fast)}/{int(ema_mid)}/{int(ema_slow)})"
           )
     # --- MACD-line-crosses-signal-line triggers ---------------------------
-    # US100 / Nifty200 on the 2H chart: alert only when a BUY button
+    # US100 / Nifty500 on the 2H chart: alert only when a BUY button
     # appears on the MACD panel.
     idx_macd_watchlist = [
         ("US100", list(zip(us100_yf, us100_raw + ["IXIC"]))),
-        ("Nifty200", list(zip(nifty200_yf, nifty200_raw))),
+        ("Nifty500", list(zip(nifty500_yf, nifty500_raw))),
     ]
     for cat_name, symbols in idx_macd_watchlist:
       hits = scan_macd_cross_2h(
@@ -2182,7 +2191,7 @@ if active_view == "📊 Charts":
             macd_signal=macd_signal,
         )
         hc_nifty = fetch_high_conviction_results(
-            tuple(zip(nifty200_yf, nifty200_raw)),
+            tuple(zip(nifty500_yf, nifty500_raw)),
             min_score=50.0,
             min_tp1=5.0,
             max_results=4,
@@ -2191,7 +2200,7 @@ if active_view == "📊 Charts":
             macd_signal=macd_signal,
         )
         ema_scanner_us100_watchlist = tuple(zip(us100_yf, us100_raw + ["IXIC"]))
-        ema_scanner_nifty_watchlist = tuple(zip(nifty200_yf, nifty200_raw))
+        ema_scanner_nifty_watchlist = tuple(zip(nifty500_yf, nifty500_raw))
         ema_scanner_us100_hits = scan_triple_ema_cross_2h(
             ema_scanner_us100_watchlist,
             ema_fast=ema_fast,
@@ -2340,7 +2349,7 @@ if active_view == "📊 Charts":
             value_fmt=_triple_ema_scanner_value_html,
         )
         render_clickable_list_box(
-            "⚡ 3-EMA Cross Scanner (2H) — Nifty200 (BUY only)",
+            "⚡ 3-EMA Cross Scanner (2H) — Nifty500 (BUY only)",
             ema_scanner_nifty_hits,
             key_prefix="ema3scan_nifty",
             on_click=go_to_chart,
@@ -2354,7 +2363,7 @@ if active_view == "📊 Charts":
             value_fmt=_triple_ema_scanner_value_html,
         )
         render_clickable_list_box(
-            "🚦 MACD Cross Scanner (2H) — Nifty200",
+            "🚦 MACD Cross Scanner (2H) — Nifty500",
             macd_scanner_nifty_hits,
             key_prefix="macdscan_nifty",
             on_click=go_to_chart,

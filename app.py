@@ -26,6 +26,15 @@ v4 additions:
 - Nifty200 watchlist retired; all India-side scanning, charting, and
   alerts now run across the full Nifty500 list (sourced from
   ind_nifty500list.csv).
+
+v5 additions:
+- Telegram auto-scan trimmed to exactly two alert types: High-Conviction
+  BUY (US100/Nifty500) and 30m 3-EMA cross, either side (Commodities/Forex).
+- Long Telegram messages are now split into multiple sends to avoid the
+  "message is too long" Bad Request error.
+- Scheduled auto-scan: pick 1h/2h/4h and the app will re-scan and push
+  Telegram alerts automatically on that cadence (needs the
+  `streamlit-autorefresh` package — pip install streamlit-autorefresh).
 """
 import json
 import os
@@ -38,6 +47,12 @@ import requests
 import streamlit as st
 import streamlit.components.v1 as components
 import yfinance as yf
+
+try:
+  from streamlit_autorefresh import st_autorefresh
+  AUTOREFRESH_AVAILABLE = True
+except ImportError:
+  AUTOREFRESH_AVAILABLE = False
 
 # =====================================================================
 # PAGE CONFIG
@@ -171,6 +186,47 @@ def send_telegram_alert(message, token, chat_id):
     return False, data.get("description", "Unknown Telegram API error")
   except Exception as e:
     return False, str(e)
+
+def _split_message_into_chunks(message, max_len=3800):
+  """Split a long message into Telegram-safe chunks (<=4096 chars, we use
+  a smaller cap for headroom). Splits on line boundaries so a single alert
+  line is never cut in half; falls back to a hard split only if one line
+  alone exceeds max_len."""
+  lines = message.split("\n")
+  chunks = []
+  current = ""
+  for line in lines:
+    candidate = f"{current}\n{line}" if current else line
+    if len(candidate) <= max_len:
+      current = candidate
+    else:
+      if current:
+        chunks.append(current)
+      if len(line) <= max_len:
+        current = line
+      else:
+        for i in range(0, len(line), max_len):
+          chunks.append(line[i:i + max_len])
+        current = ""
+  if current:
+    chunks.append(current)
+  return chunks or [message]
+
+def send_telegram_alert_chunked(message, token, chat_id, max_len=3800):
+  """Send a (possibly long) message as multiple Telegram messages so a
+  large scan result never triggers Telegram's 'message is too long' error.
+  Returns (all_ok, status_text)."""
+  chunks = _split_message_into_chunks(message, max_len=max_len)
+  total = len(chunks)
+  all_ok = True
+  last_err = ""
+  for i, chunk in enumerate(chunks, start=1):
+    part_label = f" (part {i}/{total})" if total > 1 else ""
+    ok, msg = send_telegram_alert(chunk + part_label if total > 1 else chunk, token, chat_id)
+    if not ok:
+      all_ok = False
+      last_err = msg
+  return all_ok, ("Success" if all_ok else last_err)
 
 # =====================================================================
 # INDICATORS & SIGNAL GENERATORS
@@ -1960,6 +2016,66 @@ if "tg_token" not in st.session_state or "tg_chat" not in st.session_state:
   saved_token, saved_chat = load_telegram_config()
   st.session_state["tg_token"] = saved_token
   st.session_state["tg_chat"] = saved_chat
+
+def run_scan_and_send(tg_token, tg_chat, ema_fast, ema_mid, ema_slow, macd_fast, macd_slow, macd_signal):
+  """Scan Commodities/Forex for a 30m 3-EMA cross (either side) and scan
+  US100/Nifty500 for High-Conviction BUY setups, then push one Telegram
+  message (auto-split into multiple sends if it's too long). Returns
+  (ok, total_alerts, status_text). Shared by the manual button and the
+  scheduled auto-scan timer."""
+  triggered_messages = []
+  # --- 30m 3-EMA cross triggers — Commodities / Forex, either side -------
+  fx_comm_watchlist = [("Commodities", COMMODITIES), ("Forex", FOREX_PAIRS)]
+  for cat_name, symbols in fx_comm_watchlist:
+    hits = scan_triple_ema_cross_30m(
+        tuple(symbols),
+        ema_fast=int(ema_fast),
+        ema_mid=int(ema_mid),
+        ema_slow=int(ema_slow),
+        lookback=1,
+    )
+    for h in hits:
+      if h["bars_ago"] <= 1:
+        emoji = "🟢" if h["direction"] == "BUY" else "🔴"
+        triggered_messages.append(
+            f"{emoji} *[30m 3-EMA Cross]* *{h['display']}* → *{h['direction']}* "
+            f"(EMA {int(ema_fast)}/{int(ema_mid)}/{int(ema_slow)}, {cat_name})"
+        )
+  # --- High-Conviction BUY alerts (US100 + Nifty500) ---------------------
+  hc_messages = []
+  hc_watchlist = [
+      ("US100", list(zip(us100_yf, us100_raw + ["IXIC"]))),
+      ("Nifty500", list(zip(nifty500_yf, nifty500_raw))),
+  ]
+  for cat_name, symbols in hc_watchlist:
+    hc_hits = fetch_high_conviction_results(
+        tuple(symbols),
+        min_score=50.0,
+        min_tp1=5.0,
+        max_results=10,
+        macd_fast=int(macd_fast),
+        macd_slow=int(macd_slow),
+        macd_signal=int(macd_signal),
+    )
+    for r in hc_hits:
+      hc_messages.append(
+          f"🔥 *{r['Ticker']}* ({cat_name}) → *BUY* | Score {r['Score']} | "
+          f"Price {r['Price']} ({r['ChangePct']}) | TP1 {r['TP1']} ({r['TP1_PCT']}) | SL {r['SL']}"
+      )
+
+  message_sections = []
+  if hc_messages:
+    message_sections.append("*🚨 High-Conviction BUY Alerts*\n" + "\n".join(hc_messages))
+  if triggered_messages:
+    message_sections.append("*⚡ 30m 3-EMA Cross — Commodities & Forex*\n" + "\n".join(triggered_messages))
+
+  total_alerts = len(triggered_messages) + len(hc_messages)
+  if not message_sections:
+    return True, 0, "No new active triggers matching rules."
+  combined_msg = "📢 *QuantFX Automated Triggers*\n\n" + "\n\n".join(message_sections)
+  ok, m = send_telegram_alert_chunked(combined_msg, tg_token, tg_chat)
+  return ok, total_alerts, m
+
 with st.sidebar.expander("🔔 Telegram Alerts & Automated Triggers", expanded=False):
   tg_token = st.text_input("Bot Token", value=st.session_state.get("tg_token", ""), type="password")
   tg_chat = st.text_input("Chat ID", value=st.session_state.get("tg_chat", ""))
@@ -1973,133 +2089,59 @@ with st.sidebar.expander("🔔 Telegram Alerts & Automated Triggers", expanded=F
     ok, msg = send_telegram_alert("🟢 *QuantFX Terminal Test Alert*", tg_token, tg_chat)
     st.success(msg) if ok else st.error(msg)
   st.caption(
-      "Auto scan sends: 30m/2H 3-EMA cross alerts, MACD-crosses-signal "
-      "alerts — BUY-only (2H) for US100/Nifty500, BUY+SELL (30m) for "
-      "Commodities/Forex — plus High-Conviction BUY alerts (US100/Nifty500) "
-      "and the top Forex & Commodity movers."
+      "Auto scan sends: High-Conviction BUY alerts (US100/Nifty500) "
+      "and 30m 3-EMA cross alerts — either side (BUY or SELL) — for "
+      "Commodities/Forex."
   )
   if st.button("🚀 Run Auto Scan & Send", use_container_width=True):
-    triggered_messages = []
-    fx_comm_watchlist = [("Commodities", COMMODITIES), ("Forex", FOREX_PAIRS)]
-    for cat_name, symbols in fx_comm_watchlist:
-      hits = scan_triple_ema_cross_30m(
-          tuple(symbols),
-          ema_fast=int(ema_fast),
-          ema_mid=int(ema_mid),
-          ema_slow=int(ema_slow),
-          lookback=1,
-      )
-      for h in hits:
-        if h["bars_ago"] <= 1:
-          triggered_messages.append(
-              f"🚨 *[30m 3-EMA Cross]* *{h['display']}* → *{h['direction']}* (EMA {int(ema_fast)}/{int(ema_mid)}/{int(ema_slow)})"
-          )
-    idx_watchlist = [
-        ("US100", list(zip(us100_yf, us100_raw + ["IXIC"]))),
-        ("Nifty500", list(zip(nifty500_yf, nifty500_raw))),
-    ]
-    for cat_name, symbols in idx_watchlist:
-      hits = scan_triple_ema_cross_2h(
-          tuple(symbols),
-          ema_fast=int(ema_fast),
-          ema_mid=int(ema_mid),
-          ema_slow=int(ema_slow),
-          lookback=1,
-          max_results=len(symbols),
-      )
-      for h in hits:
-        if h["bars_ago"] <= 1:
-          triggered_messages.append(
-              f"🚨 *[2H 3-EMA Cross]* *{h['display']}* → *{h['direction']}* (EMA {int(ema_fast)}/{int(ema_mid)}/{int(ema_slow)})"
-          )
-    # --- MACD-line-crosses-signal-line triggers ---------------------------
-    # US100 / Nifty500 on the 2H chart: alert only when a BUY button
-    # appears on the MACD panel.
-    idx_macd_watchlist = [
-        ("US100", list(zip(us100_yf, us100_raw + ["IXIC"]))),
-        ("Nifty500", list(zip(nifty500_yf, nifty500_raw))),
-    ]
-    for cat_name, symbols in idx_macd_watchlist:
-      hits = scan_macd_cross_2h(
-          tuple(symbols),
-          macd_fast=int(macd_fast),
-          macd_slow=int(macd_slow),
-          macd_signal=int(macd_signal),
-          macd_smooth=int(macd_smooth),
-          lookback=1,
-          max_results=len(symbols),
-      )
-      for h in hits:
-        if h["direction"] == "BUY" and h["bars_ago"] <= 1:
-          triggered_messages.append(
-              f"🟢 *[2H MACD Cross]* *{h['display']}* → *BUY* (MACD crossed above Signal, {cat_name})"
-          )
-    # Commodities / Forex on the 30m chart: alert on both BUY and SELL.
-    fx_comm_macd_watchlist = [("Commodities", COMMODITIES), ("Forex", FOREX_PAIRS)]
-    for cat_name, symbols in fx_comm_macd_watchlist:
-      hits = scan_macd_cross_30m(
-          tuple(symbols),
-          macd_fast=int(macd_fast),
-          macd_slow=int(macd_slow),
-          macd_signal=int(macd_signal),
-          macd_smooth=int(macd_smooth),
-          lookback=1,
-      )
-      for h in hits:
-        if h["bars_ago"] <= 1:
-          emoji = "🟢" if h["direction"] == "BUY" else "🔴"
-          crossed = "above" if h["direction"] == "BUY" else "below"
-          triggered_messages.append(
-              f"{emoji} *[30m MACD Cross]* *{h['display']}* → *{h['direction']}* (MACD crossed {crossed} Signal, {cat_name})"
-          )
-    # --- High-Conviction BUY alerts (US100 + Nifty500) ---------------------
-    hc_messages = []
-    hc_watchlist = [
-        ("US100", list(zip(us100_yf, us100_raw + ["IXIC"]))),
-        ("Nifty500", list(zip(nifty500_yf, nifty500_raw))),
-    ]
-    for cat_name, symbols in hc_watchlist:
-      hc_hits = fetch_high_conviction_results(
-          tuple(symbols),
-          min_score=50.0,
-          min_tp1=5.0,
-          max_results=10,
-          macd_fast=int(macd_fast),
-          macd_slow=int(macd_slow),
-          macd_signal=int(macd_signal),
-      )
-      for r in hc_hits:
-        hc_messages.append(
-            f"🔥 *{r['Ticker']}* ({cat_name}) → *BUY* | Score {r['Score']} | "
-            f"Price {r['Price']} ({r['ChangePct']}) | TP1 {r['TP1']} ({r['TP1_PCT']}) | SL {r['SL']}"
-        )
-
-    # --- Top Forex / Commodity movers ---------------------------------------
-    top_movers_messages = []
-    top_commodity = fetch_top_n_movers(tuple(COMMODITIES), n=1)
-    top_forex = fetch_top_n_movers(tuple(FOREX_PAIRS), n=1)
-    for label, movers in [("Commodity", top_commodity), ("Forex", top_forex)]:
-      for m in movers:
-        arrow = "🟢" if m["chg"] >= 0 else "🔴"
-        top_movers_messages.append(
-            f"{arrow} Top {label}: *{m['display']}* ${format_price(m['price'])} ({m['chg']:+.2f}%)"
-        )
-
-    message_sections = []
-    if triggered_messages:
-      message_sections.append("*⚡ Cross Triggers*\n" + "\n".join(triggered_messages))
-    if hc_messages:
-      message_sections.append("*🚨 High-Conviction BUY Alerts*\n" + "\n".join(hc_messages))
-    if top_movers_messages:
-      message_sections.append("*📊 Top Movers — Forex & Commodities*\n" + "\n".join(top_movers_messages))
-
-    if message_sections:
-      combined_msg = "📢 *QuantFX Automated Triggers*\n\n" + "\n\n".join(message_sections)
-      ok, m = send_telegram_alert(combined_msg, tg_token, tg_chat)
-      total_alerts = len(triggered_messages) + len(hc_messages) + len(top_movers_messages)
-      st.success(f"Dispatched {total_alerts} alert(s)!") if ok else st.error(m)
+    ok, total_alerts, status = run_scan_and_send(
+        tg_token, tg_chat, ema_fast, ema_mid, ema_slow, macd_fast, macd_slow, macd_signal
+    )
+    if total_alerts == 0:
+      st.info(status)
+    elif ok:
+      st.success(f"Dispatched {total_alerts} alert(s)!")
     else:
-      st.info("No new active triggers matching rules.")
+      st.error(status)
+
+  st.markdown("---")
+  st.markdown("**⏱️ Scheduled Auto-Scan**")
+  auto_send_enabled = st.checkbox(
+      "Enable automatic scanning", value=st.session_state.get("auto_send_enabled", False)
+  )
+  st.session_state["auto_send_enabled"] = auto_send_enabled
+  auto_interval_hours = st.radio(
+      "Scan & send every",
+      [1, 2, 4],
+      format_func=lambda h: f"{h} hr",
+      horizontal=True,
+      key="auto_interval_hours",
+  )
+  if auto_send_enabled:
+    if not AUTOREFRESH_AVAILABLE:
+      st.warning(
+          "Scheduled auto-scan needs the `streamlit-autorefresh` package. "
+          "Install it with `pip install streamlit-autorefresh` and restart the app."
+      )
+    elif not (tg_token and tg_chat):
+      st.warning("Add and save your Bot Token / Chat ID above first.")
+    else:
+      interval_ms = int(auto_interval_hours) * 60 * 60 * 1000
+      refresh_count = st_autorefresh(interval=interval_ms, key="qfx_auto_refresh_timer")
+      last_count = st.session_state.get("_qfx_last_autorefresh_count", 0)
+      last_run_str = st.session_state.get("_qfx_last_autorun_at", "—")
+      st.caption(f"🟢 Active — next auto-scan in up to {auto_interval_hours}h. Last run: {last_run_str}")
+      if refresh_count != last_count:
+        st.session_state["_qfx_last_autorefresh_count"] = refresh_count
+        if refresh_count > 0:
+          ok, total_alerts, status = run_scan_and_send(
+              tg_token, tg_chat, ema_fast, ema_mid, ema_slow, macd_fast, macd_slow, macd_signal
+          )
+          st.session_state["_qfx_last_autorun_at"] = pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S")
+          if not ok:
+            st.error(f"Scheduled send failed: {status}")
+  else:
+    st.caption("Auto-scan is off — use the button above to send on demand.")
 if st.sidebar.button("🔄 Refresh data", use_container_width=True):
   st.cache_data.clear()
   st.rerun()

@@ -1275,7 +1275,6 @@ us100_raw = [
     "CSGP", "CEG", "AMZN", "ISRG", "CCEP", "FANG",
 ]
 
-nifty200_yf = [f"{t}.NS" for t in nifty200_raw]
 nifty500_yf = [f"{t}.NS" for t in nifty500_raw]
 
 def convert_us100_symbol(t):

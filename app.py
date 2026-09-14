@@ -1208,6 +1208,99 @@ nifty200_raw = [
     "VOLTAS", "HINDCOPPER", "NDIA",
 ]
 
+# Nifty 500 constituents, sourced from ind_nifty500list.csv.
+# Deduplicated below (dict.fromkeys preserves first-seen order) so the
+# same ticker never appears twice even if the source CSV is refreshed
+# with overlapping/duplicate rows.
+_nifty500_csv_raw = [
+    "360ONE", "3MINDIA", "ABB", "ACC", "ACMESOLAR", "AIAENG",
+    "APLAPOLLO", "AUBANK", "AWL", "AADHARHFC", "AARTIIND", "AAVAS",
+    "ABBOTINDIA", "ACE", "ACUTAAS", "ADANIENSOL", "ADANIENT", "ADANIGREEN",
+    "ADANIPORTS", "ADANIPOWER", "ATGL", "ABCAPITAL", "ABFRL", "ABLBL",
+    "ABREL", "ABSLAMC", "CPPLUS", "AEGISLOG", "AEGISVOPAK", "AFCONS",
+    "AFFLE", "AJANTPHARM", "ALKEM", "ABDL", "ARE&M", "AMBER",
+    "AMBUJACEM", "ANANDRATHI", "ANANTRAJ", "ANGELONE", "ANTHEM", "ANURAS",
+    "APARINDS", "APOLLOHOSP", "APOLLOTYRE", "APTUS", "ASAHIINDIA", "ASHOKLEY",
+    "ASIANPAINT", "ASTERDM", "ASTRAL", "ATHERENERG", "ATUL", "AUROPHARMA",
+    "AIIL", "DMART", "AXISBANK", "BEML", "BLS", "BSE",
+    "BAJAJ-AUTO", "BAJFINANCE", "BAJAJFINSV", "BAJAJHLDNG", "BAJAJHFL", "BALKRISIND",
+    "BALRAMCHIN", "BANDHANBNK", "BANKBARODA", "BANKINDIA", "MAHABANK", "BATAINDIA",
+    "BAYERCROP", "BELRISE", "BERGEPAINT", "BDL", "BEL", "BHARATFORG",
+    "BHEL", "BPCL", "BHARTIARTL", "BHARTIHEXA", "BIKAJI", "GROWW",
+    "BIOCON", "BSOFT", "BLUEDART", "BLUEJET", "BLUESTARCO", "BBTC",
+    "BOSCHLTD", "FIRSTCRY", "BRIGADE", "BRITANNIA", "MAPMYINDIA", "CCL",
+    "CESC", "CGPOWER", "CIEINDIA", "CRISIL", "CANFINHOME", "CANBK",
+    "CANHLIFE", "CAPLIPOINT", "CGCL", "CARBORUNIV", "CARTRADE", "CASTROLIND",
+    "CEATLTD", "CEMPRO", "CENTRALBK", "CDSL", "CHALET", "CHAMBLFERT",
+    "CHENNPETRO", "CHOICEIN", "CHOLAHLDNG", "CHOLAFIN", "CIPLA", "CUB",
+    "CLEAN", "COALINDIA", "COCHINSHIP", "COFORGE", "COHANCE", "COLPAL",
+    "CAMS", "CONCORDBIO", "CONCOR", "COROMANDEL", "CRAFTSMAN", "CREDITACC",
+    "CROMPTON", "CUMMINSIND", "CYIENT", "DCMSHRIRAM", "DLF", "DOMS",
+    "DABUR", "DALBHARAT", "DATAPATTNS", "DEEPAKFERT", "DEEPAKNTR", "DELHIVERY",
+    "DEVYANI", "DIVISLAB", "DIXON", "LALPATHLAB", "DRREDDY", "DUMMYHEG",
+    "EIDPARRY", "EIHOTEL", "EICHERMOT", "ELECON", "ELGIEQUIP", "EMAMILTD",
+    "EMCURE", "EMMVEE", "ENDURANCE", "ENGINERSIN", "ERIS", "ESCORTS",
+    "ETERNAL", "EXIDEIND", "NYKAA", "FEDERALBNK", "FACT", "FINCABLES",
+    "FSL", "FIVESTAR", "FORCEMOT", "FORTIS", "GAIL", "GVT&D",
+    "GMRAIRPORT", "GABRIEL", "GALLANTT", "GRSE", "GICRE", "GILLETTE",
+    "GLAND", "GLAXO", "GLENMARK", "MEDANTA", "GODIGIT", "GPIL",
+    "GODFRYPHLP", "GODREJCP", "GODREJIND", "GODREJPROP", "GRANULES", "GRAPHITE",
+    "GRASIM", "GRAVITA", "GESHIP", "FLUOROCHEM", "GMDCLTD", "HEG",
+    "HBLENGINE", "HCLTECH", "HDBFS", "HDFCAMC", "HDFCBANK", "HDFCLIFE",
+    "HFCL", "HAVELLS", "HEROMOTOCO", "HEXT", "HSCL", "HINDALCO",
+    "HAL", "HINDCOPPER", "HINDPETRO", "HINDUNILVR", "HINDZINC", "POWERINDIA",
+    "HOMEFIRST", "HONASA", "HONAUT", "HUDCO", "HYUNDAI", "ICICIBANK",
+    "ICICIGI", "ICICIAMC", "ICICIPRULI", "IDBI", "IDFCFIRSTB", "IFCI",
+    "IIFL", "IRB", "IRCON", "ITCHOTELS", "ITC", "ITI",
+    "INDGN", "INDIACEM", "INDIAMART", "INDIANB", "IEX", "INDHOTEL",
+    "IOC", "IOB", "IRCTC", "IRFC", "IREDA", "IGL",
+    "INDUSTOWER", "INDUSINDBK", "NAUKRI", "INFY", "INOXWIND", "INTELLECT",
+    "INDIGO", "IGIL", "IKS", "IPCALAB", "JKCEMENT", "JBMA",
+    "JKTYRE", "JMFINANCIL", "JSWCEMENT", "JSWDULUX", "JSWENERGY", "JSWINFRA",
+    "JSWSTEEL", "JAINREC", "JPPOWER", "J&KBANK", "JINDALSAW", "JSL",
+    "JINDALSTEL", "JIOFIN", "JUBLFOOD", "JUBLINGREA", "JUBLPHARMA", "JWL",
+    "JYOTICNC", "KPRMILL", "KEI", "KPITTECH", "KAJARIACER", "KPIL",
+    "KALYANKJIL", "KARURVYSYA", "KAYNES", "KEC", "KFINTECH", "KIRLOSENG",
+    "KOTAKBANK", "KIMS", "LTF", "LTTS", "LGEINDIA", "LICHSGFIN",
+    "LTFOODS", "LTM", "LT", "LATENTVIEW", "LAURUSLABS", "THELEELA",
+    "LEMONTREE", "LENSKART", "LICI", "LINDEINDIA", "LLOYDSME", "LODHA",
+    "LUPIN", "MMTC", "MRF", "MGL", "M&MFIN", "M&M",
+    "MANAPPURAM", "MRPL", "MANKIND", "MARICO", "MARUTI", "MFSL",
+    "MAXHEALTH", "MAZDOCK", "MEESHO", "MINDACORP", "MSUMI", "MOTILALOFS",
+    "MPHASIS", "MCX", "MUTHOOTFIN", "NATCOPHARM", "NBCC", "NCC",
+    "NHPC", "NLCINDIA", "NMDC", "NSLNISP", "NTPCGREEN", "NTPC",
+    "NH", "NATIONALUM", "NAVA", "NAVINFLUOR", "NESTLEIND", "NETWEB",
+    "NEULANDLAB", "NEWGEN", "NAM-INDIA", "NIVABUPA", "NUVAMA", "NUVOCO",
+    "OBEROIRLTY", "ONGC", "OIL", "OLAELEC", "OLECTRA", "PAYTM",
+    "ONESOURCE", "OFSS", "POLICYBZR", "PCBL", "PGEL", "PIIND",
+    "PNBHOUSING", "PTCIL", "PVRINOX", "PAGEIND", "PARADEEP", "PATANJALI",
+    "PERSISTENT", "PETRONET", "PFIZER", "PHOENIXLTD", "PWL", "PIDILITIND",
+    "PINELABS", "PIRAMALFIN", "PPLPHARMA", "POLYMED", "POLYCAB", "POONAWALLA",
+    "PFC", "POWERGRID", "PREMIERENE", "PRESTIGE", "PFOCUS", "PNB",
+    "RRKABEL", "RBLBANK", "RECLTD", "RHIM", "RITES", "RADICO",
+    "RVNL", "RAILTEL", "RAINBOW", "RKFORGE", "REDINGTON", "RELIANCE",
+    "RPOWER", "SBFC", "SBICARD", "SBILIFE", "SJVN", "SRF",
+    "SAGILITY", "SAILIFE", "SAMMAANCAP", "MOTHERSON", "SAPPHIRE", "SARDAEN",
+    "SAREGAMA", "SCHAEFFLER", "SCHNEIDER", "SCI", "SHREECEM", "SHRIRAMFIN",
+    "SHYAMMETL", "ENRIN", "SIEMENS", "SIGNATURE", "SOBHA", "SOLARINDS",
+    "SONACOMS", "SONATSOFTW", "STARHEALTH", "SBIN", "SAIL", "SUMICHEM",
+    "SUNPHARMA", "SUNTV", "SUNDARMFIN", "SUPREMEIND", "SPLPETRO", "SUZLON",
+    "SWANCORP", "SWIGGY", "SYNGENE", "SYRMA", "TBOTEK", "TVSMOTOR",
+    "TATACAP", "TATACHEM", "TATACOMM", "TCS", "TATACONSUM", "TATAELXSI",
+    "TATAINVEST", "TMCV", "TMPV", "TATAPOWER", "TATASTEEL", "TATATECH",
+    "TTML", "TECHM", "TECHNOE", "TEGA", "TEJASNET", "TENNIND",
+    "NIACL", "RAMCOCEM", "THERMAX", "TIMKEN", "TITAGARH", "TITAN",
+    "TORNTPHARM", "TORNTPOWER", "TARIL", "TRAVELFOOD", "TRENT", "TRIDENT",
+    "TRITURBINE", "TIINDIA", "UCOBANK", "UNOMINDA", "UPL", "UTIAMC",
+    "ULTRACEMCO", "UNIONBANK", "UBL", "UNITDSPR", "URBANCO", "USHAMART",
+    "VTL", "VBL", "VEDL", "VIJAYA", "VMM", "IDEA",
+    "VOLTAS", "WAAREEENER", "WELCORP", "WELSPUNLIV", "WHIRLPOOL", "WIPRO",
+    "WOCKPHARMA", "YESBANK", "ZFCVINDIA", "ZEEL", "ZENTEC", "ZENSARTECH",
+    "ZYDUSLIFE", "ZYDUSWELL", "ECLERX",
+]
+
+nifty500_raw = list(dict.fromkeys(_nifty500_csv_raw))
+
 us100_raw = [
     "PLTR", "ARM", "INTC", "AMD", "MU", "QCOM", "LRCX", "MCHP", "AVGO", "AMAT",
     "GFS", "TXN", "IDXX", "DDOG", "ZS", "TRI", "CSCO", "ADI", "PANW", "ORCL",
@@ -1222,6 +1315,7 @@ us100_raw = [
 ]
 
 nifty200_yf = [f"{t}.NS" for t in nifty200_raw]
+nifty500_yf = [f"{t}.NS" for t in nifty500_raw]
 
 def convert_us100_symbol(t):
   if t == "NAS100":
@@ -1255,6 +1349,7 @@ WATCHLIST_CATEGORIES = {
     "Commodities": COMMODITIES,
     "Forex": FOREX_PAIRS,
     "Nifty200": list(zip(nifty200_yf, nifty200_raw)),
+    "Nifty500": list(zip(nifty500_yf, nifty500_raw)),
     "US100": list(zip(us100_yf, us100_raw + ["IXIC"])),
 }
 
@@ -1909,9 +2004,10 @@ with st.sidebar.expander("🔔 Telegram Alerts & Automated Triggers", expanded=F
     ok, msg = send_telegram_alert("🟢 *QuantFX Terminal Test Alert*", tg_token, tg_chat)
     st.success(msg) if ok else st.error(msg)
   st.caption(
-      "Auto scan sends: 30m/2H 3-EMA cross alerts, plus MACD-crosses-signal "
+      "Auto scan sends: 30m/2H 3-EMA cross alerts, MACD-crosses-signal "
       "alerts — BUY-only (2H) for US100/Nifty200, BUY+SELL (30m) for "
-      "Commodities/Forex."
+      "Commodities/Forex — plus High-Conviction BUY alerts (US100/Nifty500) "
+      "and the top Forex & Commodity movers."
   )
   if st.button("🚀 Run Auto Scan & Send", use_container_width=True):
     triggered_messages = []
@@ -1987,10 +2083,52 @@ with st.sidebar.expander("🔔 Telegram Alerts & Automated Triggers", expanded=F
           triggered_messages.append(
               f"{emoji} *[30m MACD Cross]* *{h['display']}* → *{h['direction']}* (MACD crossed {crossed} Signal, {cat_name})"
           )
+    # --- High-Conviction BUY alerts (US100 + Nifty500) ---------------------
+    hc_messages = []
+    hc_watchlist = [
+        ("US100", list(zip(us100_yf, us100_raw + ["IXIC"]))),
+        ("Nifty500", list(zip(nifty500_yf, nifty500_raw))),
+    ]
+    for cat_name, symbols in hc_watchlist:
+      hc_hits = fetch_high_conviction_results(
+          tuple(symbols),
+          min_score=50.0,
+          min_tp1=5.0,
+          max_results=10,
+          macd_fast=int(macd_fast),
+          macd_slow=int(macd_slow),
+          macd_signal=int(macd_signal),
+      )
+      for r in hc_hits:
+        hc_messages.append(
+            f"🔥 *{r['Ticker']}* ({cat_name}) → *BUY* | Score {r['Score']} | "
+            f"Price {r['Price']} ({r['ChangePct']}) | TP1 {r['TP1']} ({r['TP1_PCT']}) | SL {r['SL']}"
+        )
+
+    # --- Top Forex / Commodity movers ---------------------------------------
+    top_movers_messages = []
+    top_commodity = fetch_top_n_movers(tuple(COMMODITIES), n=1)
+    top_forex = fetch_top_n_movers(tuple(FOREX_PAIRS), n=1)
+    for label, movers in [("Commodity", top_commodity), ("Forex", top_forex)]:
+      for m in movers:
+        arrow = "🟢" if m["chg"] >= 0 else "🔴"
+        top_movers_messages.append(
+            f"{arrow} Top {label}: *{m['display']}* ${format_price(m['price'])} ({m['chg']:+.2f}%)"
+        )
+
+    message_sections = []
     if triggered_messages:
-      combined_msg = "📢 *QuantFX Automated Triggers*\n\n" + "\n".join(triggered_messages)
+      message_sections.append("*⚡ Cross Triggers*\n" + "\n".join(triggered_messages))
+    if hc_messages:
+      message_sections.append("*🚨 High-Conviction BUY Alerts*\n" + "\n".join(hc_messages))
+    if top_movers_messages:
+      message_sections.append("*📊 Top Movers — Forex & Commodities*\n" + "\n".join(top_movers_messages))
+
+    if message_sections:
+      combined_msg = "📢 *QuantFX Automated Triggers*\n\n" + "\n\n".join(message_sections)
       ok, m = send_telegram_alert(combined_msg, tg_token, tg_chat)
-      st.success(f"Dispatched {len(triggered_messages)} alert(s)!") if ok else st.error(m)
+      total_alerts = len(triggered_messages) + len(hc_messages) + len(top_movers_messages)
+      st.success(f"Dispatched {total_alerts} alert(s)!") if ok else st.error(m)
     else:
       st.info("No new active triggers matching rules.")
 if st.sidebar.button("🔄 Refresh data", use_container_width=True):
@@ -2208,7 +2346,7 @@ if active_view == "📊 Charts":
           return (
               f"<div style='text-align:right;font-size:11px;'>"
               f"<span style='color:{color};'>{arrow} {m['direction']}</span>"
-              f"<span style='color:{COLOR_TEXT_MUTED};'> · {recency}</span>"
+              f"<span style='color:{COLOR_TEXT_MUTED};'> • {recency}</span>"
               f"</div>"
           )
         if outlook:
@@ -2316,3 +2454,4 @@ elif active_view == "🔎 Scanner":
     )
   elif df_res is not None:
     st.info("No results — data source may be rate-limiting.")
+

@@ -2357,7 +2357,7 @@ if active_view == "📊 Charts":
           return (
               f"<div style='text-align:right;font-size:11px;'>"
               f"<span style='color:{color};'>{arrow} {m['direction']}</span>"
-              f"<span style='color:{COLOR_TEXT_MUTED};'> • {recency}</span>"
+              f"<span style='color:{COLOR_TEXT_MUTED};'> · {recency}</span>"
               f"</div>"
           )
         if outlook:
@@ -2465,4 +2465,3 @@ elif active_view == "🔎 Scanner":
     )
   elif df_res is not None:
     st.info("No results — data source may be rate-limiting.")
-

@@ -5,7 +5,6 @@ Heikin Ashi EMAs, single-fire pullback signals with blinking animation,
 blinking/ticking buy/sell markers on Heikin Ashi, Renko, MACD, and RSI,
 expanded box heights, targeted multi-market Telegram alerts,
 full share price display, and right-side top mover cards.
-
 v2 additions:
 - Smoothed MACD line/signal/histogram (adjustable "MACD Smoothing" slider).
 - Larger button-style BUY/SELL badges on the MACD panel.
@@ -13,7 +12,6 @@ v2 additions:
   MACD panel, so the two rows always fire on the same bricks.
 - Vertical stock name + live price watermark running up the left edge
   of the chart.
-
 v3 additions:
 - Unified Master_Signal: EMA9/21/50 alignment + MACD agreement + RSI
   exhaustion filter + cooldown, shared by every chart panel.
@@ -21,12 +19,10 @@ v3 additions:
   30M for Commodities/Forex, shown as scanner boxes and wired into the
   Telegram auto-scan button (BUY-only for US100/Nifty500, BUY+SELL for
   Commodities/Forex).
-
 v4 additions:
 - Nifty200 watchlist retired; all India-side scanning, charting, and
   alerts now run across the full Nifty500 list (sourced from
   ind_nifty500list.csv).
-
 v5 additions:
 - Telegram auto-scan trimmed to exactly two alert types: High-Conviction
   BUY (US100/Nifty500) and 30m 3-EMA cross, either side (Commodities/Forex).
@@ -35,6 +31,15 @@ v5 additions:
 - Scheduled auto-scan: pick 1h/2h/4h and the app will re-scan and push
   Telegram alerts automatically on that cadence (needs the
   `streamlit-autorefresh` package — pip install streamlit-autorefresh).
+v6 additions:
+- "High-Conviction Shares" box now runs the daily EMA-9 pullback clause
+  (close > EMA200, EMA9 > EMA200, EMA9 > EMA20, RSI14 > 50, close above the
+  5- and 10-day-ago highs, low <= EMA9 < close, volume > 20d avg volume) and
+  is split into Nifty 500 / US 100 / Commodities / Forex.
+- Telegram: first scan sends the full list; every later scan sends only the
+  stocks that were NOT in the previous scan's list (state is kept in
+  .qfx_conviction_state.json next to this file).
+- All MACD scanner boxes removed from the right-hand panel.
 """
 import json
 import os
@@ -47,13 +52,11 @@ import requests
 import streamlit as st
 import streamlit.components.v1 as components
 import yfinance as yf
-
 try:
   from streamlit_autorefresh import st_autorefresh
   AUTOREFRESH_AVAILABLE = True
 except ImportError:
   AUTOREFRESH_AVAILABLE = False
-
 # =====================================================================
 # PAGE CONFIG
 # =====================================================================
@@ -63,7 +66,6 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
 )
-
 # =====================================================================
 # COLORS – TradingView-style dark + neon
 # =====================================================================
@@ -85,7 +87,6 @@ COLOR_BOS_DEMAND = "#26FF9A"
 COLOR_BOS_SUPPLY = "#FF4F7B"
 COLOR_CHOCH_DEMAND = "#00D4FF"
 COLOR_CHOCH_SUPPLY = "#FF9900"
-
 # =====================================================================
 # GLOBAL DARK THEME CSS & BLINKING / TICKING ANIMATION
 # =====================================================================
@@ -145,14 +146,12 @@ st.markdown(
     """,
     unsafe_allow_html=True,
 )
-
 # =====================================================================
 # TELEGRAM CONFIGURATION
 # =====================================================================
 TG_CONFIG_PATH = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), ".qfx_telegram_config.json"
 )
-
 def load_telegram_config():
   try:
     if os.path.exists(TG_CONFIG_PATH):
@@ -162,7 +161,6 @@ def load_telegram_config():
   except Exception:
     pass
   return "", ""
-
 def save_telegram_config(token, chat_id):
   try:
     with open(TG_CONFIG_PATH, "w") as f:
@@ -170,7 +168,6 @@ def save_telegram_config(token, chat_id):
     return True, "Saved."
   except Exception as e:
     return False, str(e)
-
 def send_telegram_alert(message, token, chat_id):
   token = (token or "").strip()
   chat_id = (chat_id or "").strip()
@@ -186,7 +183,6 @@ def send_telegram_alert(message, token, chat_id):
     return False, data.get("description", "Unknown Telegram API error")
   except Exception as e:
     return False, str(e)
-
 def _split_message_into_chunks(message, max_len=3800):
   """Split a long message into Telegram-safe chunks (<=4096 chars, we use
   a smaller cap for headroom). Splits on line boundaries so a single alert
@@ -211,7 +207,6 @@ def _split_message_into_chunks(message, max_len=3800):
   if current:
     chunks.append(current)
   return chunks or [message]
-
 def send_telegram_alert_chunked(message, token, chat_id, max_len=3800):
   """Send a (possibly long) message as multiple Telegram messages so a
   large scan result never triggers Telegram's 'message is too long' error.
@@ -227,7 +222,6 @@ def send_telegram_alert_chunked(message, token, chat_id, max_len=3800):
       all_ok = False
       last_err = msg
   return all_ok, ("Success" if all_ok else last_err)
-
 # =====================================================================
 # INDICATORS & SIGNAL GENERATORS
 # =====================================================================
@@ -258,7 +252,6 @@ def compute_heikin_ashi(df, ema_fast=21, ema_slow=50, ema_mid=None):
       ha_signals[i] = "SELL"
   ha["Signal"] = ha_signals
   return ha
-
 def detect_macd_crossovers(
     renko_df,
     ema_fast_col="EMA_FAST",
@@ -309,7 +302,6 @@ def detect_macd_crossovers(
       macd_types[i] = "MACD Cross Down"
       last_fired = i
   return macd_signals, macd_types
-
 def detect_rsi_signals(renko_df, min_gap=1.5, cooldown=3):
   if "RSI" not in renko_df.columns:
     return ["HOLD"] * len(renko_df), [None] * len(renko_df)
@@ -345,7 +337,6 @@ def detect_rsi_signals(renko_df, min_gap=1.5, cooldown=3):
       rsi_types[i] = "RSI Cross Down"
       last_fired = i
   return rsi_signals, rsi_types
-
 def format_price(value):
   try:
     value = float(value)
@@ -368,7 +359,6 @@ def format_price(value):
   if "." in s:
     s = s.rstrip("0").rstrip(".")
   return s
-
 def detect_triple_ema_cross_signal(close_series, fast=9, mid=21, slow=50, lookback=1):
   if close_series is None or len(close_series) < slow + 2:
     return None
@@ -401,7 +391,6 @@ def detect_triple_ema_cross_signal(close_series, fast=9, mid=21, slow=50, lookba
           "slow": float(s_now),
       }
   return None
-
 @st.cache_data(ttl=300, show_spinner=False)
 def fetch_2h_ohlc(symbol, period="60d"):
   df = fetch_live_ohlc(symbol, period=period, interval="60m")
@@ -412,7 +401,6 @@ def fetch_2h_ohlc(symbol, period="60d"):
     agg["Volume"] = "sum"
   df_2h = df.resample("2h").agg(agg).dropna(subset=["Close"])
   return df_2h
-
 @st.cache_data(ttl=300, show_spinner=False)
 def scan_triple_ema_cross_2h(
     symbols_tuple, ema_fast=9, ema_mid=21, ema_slow=50, lookback=1, max_results=6
@@ -444,7 +432,6 @@ def scan_triple_ema_cross_2h(
       continue
   results.sort(key=lambda r: r["bars_ago"])
   return results[:max_results]
-
 @st.cache_data(ttl=300, show_spinner=False)
 def scan_triple_ema_cross_30m(
     symbols_tuple, ema_fast=9, ema_mid=21, ema_slow=50, lookback=1
@@ -463,98 +450,6 @@ def scan_triple_ema_cross_30m(
     except Exception:
       continue
   return results
-
-def detect_macd_cross_signal(close_series, fast=12, slow=26, signal=9, smooth=3, lookback=1):
-  """
-  Pure MACD-line-crosses-signal-line detector (no EMA/RSI confirmation) —
-  used for the dedicated MACD-cross watchlist scanners below.
-  """
-  if close_series is None or len(close_series) < slow + signal + 5:
-    return None
-  exp1 = close_series.ewm(span=fast, adjust=False).mean()
-  exp2 = close_series.ewm(span=slow, adjust=False).mean()
-  macd_raw = exp1 - exp2
-  macd_line = macd_raw.ewm(span=smooth, adjust=False).mean() if smooth and smooth > 1 else macd_raw
-  signal_line = macd_line.ewm(span=signal, adjust=False).mean()
-  n = len(close_series)
-  earliest = max(n - 1 - lookback, 1)
-  for i in range(n - 1, earliest - 1, -1):
-    m_now, s_now = macd_line.iloc[i], signal_line.iloc[i]
-    m_prev, s_prev = macd_line.iloc[i - 1], signal_line.iloc[i - 1]
-    if pd.isna(m_now) or pd.isna(s_now) or pd.isna(m_prev) or pd.isna(s_prev):
-      continue
-    if m_now > s_now and m_prev <= s_prev:
-      return {"direction": "BUY", "bars_ago": n - 1 - i, "macd": float(m_now), "signal": float(s_now)}
-    if m_now < s_now and m_prev >= s_prev:
-      return {"direction": "SELL", "bars_ago": n - 1 - i, "macd": float(m_now), "signal": float(s_now)}
-  return None
-@st.cache_data(ttl=300, show_spinner=False)
-def scan_macd_cross_2h(
-    symbols_tuple, macd_fast=12, macd_slow=26, macd_signal=9, macd_smooth=3,
-    lookback=1, max_results=6,
-):
-  """2H MACD-line-crosses-signal-line scanner — used for US100 / Nifty500."""
-  results = []
-  for sym, disp in symbols_tuple:
-    try:
-      df = fetch_2h_ohlc(sym, period="60d")
-      if df.empty or len(df) < macd_slow + macd_signal + 5:
-        continue
-      cross = detect_macd_cross_signal(
-          df["Close"], fast=macd_fast, slow=macd_slow, signal=macd_signal,
-          smooth=macd_smooth, lookback=lookback,
-      )
-      if not cross:
-        continue
-      last_price = float(df["Close"].iloc[-1])
-      prev_price = float(df["Close"].iloc[-2]) if len(df) > 1 else last_price
-      chg = ((last_price - prev_price) / prev_price) * 100 if prev_price else 0.0
-      results.append({
-          "symbol": sym,
-          "display": disp,
-          "price": last_price,
-          "chg": chg,
-          "direction": cross["direction"],
-          "bars_ago": cross["bars_ago"],
-      })
-    except Exception:
-      continue
-  results.sort(key=lambda r: r["bars_ago"])
-  return results[:max_results]
-@st.cache_data(ttl=300, show_spinner=False)
-def scan_macd_cross_30m(
-    symbols_tuple, macd_fast=12, macd_slow=26, macd_signal=9, macd_smooth=3,
-    lookback=1, max_results=50,
-):
-  """30-minute MACD-line-crosses-signal-line scanner — used for Commodities / Forex."""
-  results = []
-  for sym, disp in symbols_tuple:
-    try:
-      df = fetch_live_ohlc(sym, period="10d", interval="30m")
-      if df.empty or len(df) < macd_slow + macd_signal + 5:
-        continue
-      cross = detect_macd_cross_signal(
-          df["Close"], fast=macd_fast, slow=macd_slow, signal=macd_signal,
-          smooth=macd_smooth, lookback=lookback,
-      )
-      if not cross:
-        continue
-      last_price = float(df["Close"].iloc[-1])
-      prev_price = float(df["Close"].iloc[-2]) if len(df) > 1 else last_price
-      chg = ((last_price - prev_price) / prev_price) * 100 if prev_price else 0.0
-      results.append({
-          "symbol": sym,
-          "display": disp,
-          "price": last_price,
-          "chg": chg,
-          "direction": cross["direction"],
-          "bars_ago": cross["bars_ago"],
-      })
-    except Exception:
-      continue
-  results.sort(key=lambda r: r["bars_ago"])
-  return results[:max_results]
-
 def detect_market_structure(high, low, close, swing_lookback=5, brick_type=None):
   high = pd.Series(high).reset_index(drop=True)
   low = pd.Series(low).reset_index(drop=True)
@@ -644,14 +539,12 @@ def detect_market_structure(high, low, close, swing_lookback=5, brick_type=None)
       "StructureSeq": seq_arr,
       "Trend": trend_arr,
   })
-
 STRUCTURE_LABELS = {
     "BOS_DEMAND": "B-S",
     "BOS_SUPPLY": "B-D",
     "CHOCH_DEMAND": "CH-S",
     "CHOCH_SUPPLY": "CH-D",
 }
-
 def latest_structure_event(struct_df, lookback=15):
   if struct_df is None or struct_df.empty or "Structure" not in struct_df.columns:
     return None
@@ -668,7 +561,6 @@ def latest_structure_event(struct_df, lookback=15):
       "level": float(hits["StructureLevel"].iloc[-1]),
       "bars_ago": int((len(struct_df) - 1) - last_idx),
   }
-
 def compute_macd_line_cross_signal(renko_df, cooldown=1):
   """
   The literal "blue line crosses orange line" signal: fires BUY the bar the
@@ -931,7 +823,6 @@ def build_atr_renko_df(
   )
   renko_df = pd.concat([renko_df.reset_index(drop=True), struct_df.reset_index(drop=True)], axis=1)
   return renko_df, brick_size
-
 # =====================================================================
 # DATA SOURCE & OUTLOOK
 # =====================================================================
@@ -941,7 +832,6 @@ def fetch_live_ohlc(symbol="GC=F", period="6mo", interval="1d"):
   if isinstance(df.columns, pd.MultiIndex):
     df.columns = df.columns.get_level_values(0)
   return df
-
 @st.cache_data(ttl=60, show_spinner=False)
 def get_live_price_and_chg(symbol):
   try:
@@ -959,7 +849,6 @@ def get_live_price_and_chg(symbol):
     return last, chg
   except Exception:
     return 0.0, 0.0
-
 @st.cache_data(ttl=300, show_spinner=False)
 def fetch_top_n_movers(symbols_tuple, n=1):
   symbols = list(symbols_tuple)
@@ -987,7 +876,6 @@ def fetch_top_n_movers(symbols_tuple, n=1):
       continue
   results.sort(key=lambda r: r["chg"], reverse=True)
   return results[:n]
-
 @st.cache_data(ttl=300, show_spinner=False)
 def fetch_chartink_screener(url):
   try:
@@ -1026,7 +914,6 @@ def fetch_chartink_screener(url):
     return results
   except Exception:
     return []
-
 def evaluate_oracle_score(symbol, display=None, macd_fast=12, macd_slow=26, macd_signal=9):
   try:
     df = fetch_live_ohlc(symbol, period="1y", interval="1d")
@@ -1100,25 +987,6 @@ def evaluate_oracle_score(symbol, display=None, macd_fast=12, macd_slow=26, macd
     }
   except Exception:
     return None
-
-@st.cache_data(ttl=300, show_spinner=False)
-def fetch_high_conviction_results(
-    symbols_tuple, min_score=50.0, min_tp1=5.0, max_results=4, macd_fast=12, macd_slow=26, macd_signal=9
-):
-  results = []
-  for sym, disp in symbols_tuple:
-    res = evaluate_oracle_score(sym, disp, macd_fast=macd_fast, macd_slow=macd_slow, macd_signal=macd_signal)
-    if res:
-      try:
-        score_val = float(res["Score"].rstrip("%"))
-        tp1_pct_val = float(res["TP1_PCT"].rstrip("%"))
-        if score_val >= min_score and tp1_pct_val >= min_tp1 and res["Signal"] == "BUY":
-          results.append(res)
-      except Exception:
-        continue
-  results.sort(key=lambda r: float(r["Score"].rstrip("%")), reverse=True)
-  return results[:max_results]
-
 def compute_7day_outlook(symbol, display, period="1y", interval="1d", macd_fast=12, macd_slow=26, macd_signal=9):
   try:
     data = fetch_live_ohlc(symbol, period=period, interval=interval)
@@ -1230,11 +1098,9 @@ def compute_7day_outlook(symbol, display, period="1y", interval="1d", macd_fast=
     }
   except Exception:
     return None
-
 # =====================================================================
 # WATCHLISTS
 # =====================================================================
-
 # Nifty 500 constituents, sourced from ind_nifty500list.csv.
 # Deduplicated below (dict.fromkeys preserves first-seen order) so the
 # same ticker never appears twice even if the source CSV is refreshed
@@ -1325,9 +1191,7 @@ _nifty500_csv_raw = [
     "WOCKPHARMA", "YESBANK", "ZFCVINDIA", "ZEEL", "ZENTEC", "ZENSARTECH",
     "ZYDUSLIFE", "ZYDUSWELL", "ECLERX",
 ]
-
 nifty500_raw = list(dict.fromkeys(_nifty500_csv_raw))
-
 us100_raw = [
     "PLTR", "ARM", "INTC", "AMD", "MU", "QCOM", "LRCX", "MCHP", "AVGO", "AMAT",
     "GFS", "TXN", "IDXX", "DDOG", "ZS", "TRI", "CSCO", "ADI", "PANW", "ORCL",
@@ -1340,9 +1204,7 @@ us100_raw = [
     "PEP", "ADP", "NFLX", "ABNB", "COST", "CTSH", "MELI", "TTWO", "META",
     "CSGP", "CEG", "AMZN", "ISRG", "CCEP", "FANG",
 ]
-
 nifty500_yf = [f"{t}.NS" for t in nifty500_raw]
-
 def convert_us100_symbol(t):
   if t == "NAS100":
     return "^NDX"
@@ -1351,9 +1213,7 @@ def convert_us100_symbol(t):
   if t == "US30":
     return "^DJI"
   return t
-
 us100_yf = [convert_us100_symbol(t) for t in us100_raw] + ["^IXIC"]
-
 COMMODITIES = [
     ("GC=F", "GOLD"),
     ("SI=F", "SILVER"),
@@ -1362,7 +1222,6 @@ COMMODITIES = [
     ("NG=F", "GAS"),
     ("^VIX", "VIX"),
 ]
-
 FOREX_PAIRS = [
     ("EURUSD=X", "EUR/USD"),
     ("GBPUSD=X", "GBP/USD"),
@@ -1370,21 +1229,17 @@ FOREX_PAIRS = [
     ("AUDUSD=X", "AUD/USD"),
     ("USDCAD=X", "USD/CAD"),
 ]
-
 WATCHLIST_CATEGORIES = {
     "Commodities": COMMODITIES,
     "Forex": FOREX_PAIRS,
     "Nifty500": list(zip(nifty500_yf, nifty500_raw)),
     "US100": list(zip(us100_yf, us100_raw + ["IXIC"])),
 }
-
 DISPLAY_TO_SYMBOL = {}
 for _cat_symbols in WATCHLIST_CATEGORIES.values():
   for _sym, _disp in _cat_symbols:
     DISPLAY_TO_SYMBOL[_disp] = _sym
-
 VIEWS = ["📊 Charts", "🔎 Scanner"]
-
 TIMEFRAME_PERIODS = {
     "5m": "5d",
     "15m": "10d",
@@ -1396,7 +1251,148 @@ TIMEFRAME_PERIODS = {
     "1d": "1y",
     "1wk": "5y",
 }
-
+# =====================================================================
+# HIGH-CONVICTION DAILY PULLBACK SCAN
+# =====================================================================
+# Chartink clause replicated here (daily timeframe, cash):
+#   close > ema(close,200) and ema(close,9) > ema(close,200)
+#   and close > 5 days ago high and close > 10 days ago high
+#   and ema(close,9) > ema(close,20) and rsi(14) > 50
+#   and low <= ema(close,9) and close > ema(close,9)
+#   and volume > sma(volume,20)
+# Chartink only covers NSE stocks, so the same clause is evaluated locally on
+# Yahoo Finance daily bars — that lets it run on US100, Commodities and Forex too.
+CONVICTION_UNIVERSE = {
+    "Nifty 500": list(zip(nifty500_yf, nifty500_raw)),
+    "US 100": list(zip(us100_yf, us100_raw + ["IXIC"])),
+    "Commodities": list(COMMODITIES),
+    "Forex": list(FOREX_PAIRS),
+}
+CONVICTION_CURRENCY = {"Nifty 500": "₹", "US 100": "$", "Commodities": "$", "Forex": ""}
+CONVICTION_MAX_DISPLAY = 30
+CONVICTION_STATE_PATH = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), ".qfx_conviction_state.json"
+)
+def conviction_price_str(cat_name, price):
+  cur = CONVICTION_CURRENCY.get(cat_name, "")
+  return f"{cur}{format_price(price)}" if cat_name == "Forex" else f"{cur}{price:,.2f}"
+def load_conviction_state():
+  try:
+    if os.path.exists(CONVICTION_STATE_PATH):
+      with open(CONVICTION_STATE_PATH, "r") as f:
+        data = json.load(f)
+      if isinstance(data, dict) and isinstance(data.get("last"), dict):
+        return data
+  except Exception:
+    pass
+  return {"last": {}}
+def save_conviction_state(state):
+  try:
+    with open(CONVICTION_STATE_PATH, "w") as f:
+      json.dump(state, f)
+    return True
+  except Exception:
+    return False
+def _wilder_rsi(close, period=14):
+  delta = close.diff()
+  gain = delta.clip(lower=0)
+  loss = -delta.clip(upper=0)
+  avg_gain = gain.ewm(alpha=1 / period, adjust=False, min_periods=period).mean()
+  avg_loss = loss.ewm(alpha=1 / period, adjust=False, min_periods=period).mean()
+  rs = avg_gain / avg_loss.replace(0, np.nan)
+  rsi = 100 - (100 / (1 + rs))
+  return rsi.where(avg_loss != 0, 100.0)
+def evaluate_conviction_clause(df):
+  """Returns None if there isn't enough history, otherwise a dict with
+  'passed' (bool) plus the latest price / % change."""
+  if df is None or df.empty or not {"Close", "High", "Low"}.issubset(df.columns):
+    return None
+  df = df.dropna(subset=["Close", "High", "Low"])
+  if len(df) < 210:  # EMA200 + the 10-days-ago high need real history
+    return None
+  close = df["Close"].astype(float)
+  high = df["High"].astype(float)
+  low = df["Low"].astype(float)
+  ema9 = close.ewm(span=9, adjust=False).mean()
+  ema20 = close.ewm(span=20, adjust=False).mean()
+  ema200 = close.ewm(span=200, adjust=False).mean()
+  rsi14 = _wilder_rsi(close, 14)
+  c, lo = float(close.iloc[-1]), float(low.iloc[-1])
+  e9, e20, e200 = float(ema9.iloc[-1]), float(ema20.iloc[-1]), float(ema200.iloc[-1])
+  rsi_now = float(rsi14.iloc[-1]) if pd.notna(rsi14.iloc[-1]) else float("nan")
+  # Volume filter — forex pairs (and some indices) report no volume on Yahoo,
+  # so the filter is skipped for them instead of rejecting everything.
+  vol_ok = True
+  if "Volume" in df.columns:
+    vol = df["Volume"].astype(float)
+    vol_avg = vol.rolling(20).mean().iloc[-1]
+    if vol.tail(20).sum() > 0 and pd.notna(vol_avg) and vol_avg > 0:
+      vol_ok = float(vol.iloc[-1]) > float(vol_avg)
+  passed = bool(
+      c > e200
+      and e9 > e200
+      and c > float(high.iloc[-6])    # "5 days ago high"
+      and c > float(high.iloc[-11])   # "10 days ago high"
+      and e9 > e20
+      and rsi_now > 50
+      and lo <= e9
+      and c > e9
+      and vol_ok
+  )
+  prev = float(close.iloc[-2])
+  chg = ((c - prev) / prev) * 100 if prev else 0.0
+  return {"passed": passed, "price": c, "chg": chg, "rsi": rsi_now}
+def _frame_for_symbol(data, sym):
+  try:
+    if isinstance(data.columns, pd.MultiIndex):
+      if sym not in data.columns.get_level_values(0):
+        return None
+      return data[sym]
+    return data
+  except Exception:
+    return None
+@st.cache_data(ttl=900, show_spinner=False)
+def scan_conviction_category(symbols_tuple):
+  """Runs the clause over one watchlist. Returns (hits, n_evaluated).
+  n_evaluated == 0 means the data feed failed, so callers must not treat
+  an empty hit list as 'nothing matched'."""
+  symbols = list(symbols_tuple)
+  hits = []
+  n_evaluated = 0
+  for start in range(0, len(symbols), 100):
+    chunk = symbols[start:start + 100]
+    tickers = [s for s, _ in chunk]
+    try:
+      data = yf.download(
+          tickers, period="2y", interval="1d", group_by="ticker",
+          progress=False, threads=True,
+      )
+    except Exception:
+      continue
+    if data is None or data.empty:
+      continue
+    for sym, disp in chunk:
+      try:
+        sub = _frame_for_symbol(data, sym)
+        res = evaluate_conviction_clause(sub)
+        if res is None:
+          continue
+        n_evaluated += 1
+        if res["passed"]:
+          hits.append({
+              "symbol": sym, "display": disp, "price": res["price"],
+              "chg": res["chg"], "rsi": res["rsi"],
+          })
+      except Exception:
+        continue
+  hits.sort(key=lambda r: r["chg"], reverse=True)
+  return hits, n_evaluated
+def get_conviction_results():
+  """{category: [hits]} for every watchlist — feeds the right-hand box."""
+  return {
+      cat: scan_conviction_category(tuple(symbols))[0]
+      for cat, symbols in CONVICTION_UNIVERSE.items()
+  }
 # =====================================================================
 # CHARTING
 # =====================================================================
@@ -1464,7 +1460,6 @@ def add_buy_sell_markers(
           row=row,
           col=col,
       )
-
 def create_chart_figure(
     renko_df, ha_df, brick_size, display, ema_fast, ema_slow, ema_mid=None,
     live_price=None, live_chg=None, symbol_label=None,
@@ -1727,12 +1722,10 @@ def create_chart_figure(
           ticklabelposition="outside right",
       )
   return fig
-
 def go_to_chart(symbol, display):
   st.session_state.chart_symbol = symbol
   st.session_state.chart_display = display
   st.session_state.active_view = VIEWS[0]
-
 def run_chart_search():
   query = (st.session_state.get("chart_search_box") or "").strip()
   if not query:
@@ -1746,7 +1739,6 @@ def run_chart_search():
       go_to_chart(sym, disp)
       return
   go_to_chart(query, query)
-
 def render_zoomable_chart(fig, key, height=950):
   fig_json = fig.to_json()
   div_id = f"qfx_chart_{key}"
@@ -1787,7 +1779,6 @@ def render_zoomable_chart(fig, key, height=950):
     </script>
     """
   components.html(html, height=height + 60, scrolling=True)
-
 def _render_clickable_html(marker, inner_html, extra_style="", key_prefix=None, on_click=None, args=None):
   with st.container():
     st.markdown(f"<div class='{marker}' style='cursor:pointer;{extra_style}'>{inner_html}</div>", unsafe_allow_html=True)
@@ -1818,7 +1809,6 @@ def _render_clickable_html(marker, inner_html, extra_style="", key_prefix=None, 
         unsafe_allow_html=True,
     )
     st.button(" ", key=f"{key_prefix}_btn", on_click=on_click, args=args)
-
 def render_clickable_single_box(title, movers, key_prefix, on_click, compact=False):
   pad = "3px 8px" if compact else "8px 12px"
   font_sz = "10px" if compact else "11px"
@@ -1861,8 +1851,7 @@ def render_clickable_single_box(title, movers, key_prefix, on_click, compact=Fal
       on_click=on_click,
       args=(best["symbol"], best["display"]),
   )
-
-def render_clickable_list_box(title, movers, key_prefix, on_click, value_fmt=None):
+def render_clickable_list_box(title, movers, key_prefix, on_click, value_fmt=None, empty_text="No data"):
   st.markdown(
       f"<div style='background-color:{COLOR_PANEL_BG};border:1px solid {COLOR_BORDER};"
       f"border-radius:6px 6px 0 0;padding:8px 12px 6px 12px;margin-bottom:0px;'>"
@@ -1873,7 +1862,7 @@ def render_clickable_list_box(title, movers, key_prefix, on_click, value_fmt=Non
     st.markdown(
         f"<div style='background-color:{COLOR_PANEL_BG};border:1px solid {COLOR_BORDER};"
         f"border-top:none;border-radius:0 0 6px 6px;padding:8px 12px;margin-bottom:14px;"
-        f"font-size:12px;color:{COLOR_TEXT_MUTED};'>No data</div>",
+        f"font-size:12px;color:{COLOR_TEXT_MUTED};'>{empty_text}</div>",
         unsafe_allow_html=True,
     )
     return
@@ -1901,60 +1890,38 @@ def render_clickable_list_box(title, movers, key_prefix, on_click, value_fmt=Non
         on_click=on_click,
         args=(m["symbol"], m["display"]),
     )
-
-def render_high_conviction_combined_box(us100_results, nifty_results, key_prefix, on_click):
+def render_conviction_box(results_by_cat, key_prefix, on_click):
   st.markdown(
       f"<div style='background-color:{COLOR_PANEL_BG};border:1px solid {COLOR_BORDER};"
-      f"border-radius:6px;padding:10px 14px;margin-bottom:14px;'>"
-      f"<div style='font-size:12px;color:{COLOR_TEXT_MAIN};font-weight:700;margin-bottom:6px;'>🚨 High-Conviction BUY Alerts</div>"
-      f"<div style='font-size:11px;color:{COLOR_TEXT_MUTED};margin-bottom:10px;'>(Score ≥ 50%, TP1% ≥ 5%)</div>",
+      f"border-radius:6px;padding:10px 14px;margin-bottom:8px;'>"
+      f"<div style='font-size:12px;color:{COLOR_TEXT_MAIN};font-weight:700;margin-bottom:4px;'>🚨 High-Conviction Shares</div>"
+      f"<div style='font-size:10px;color:{COLOR_TEXT_MUTED};line-height:1.5;'>"
+      f"Daily: Close &gt; EMA200 · EMA9 &gt; EMA200 &amp; EMA20 · RSI14 &gt; 50 · Close &gt; 5d &amp; 10d-ago high · "
+      f"Low ≤ EMA9 &lt; Close · Volume &gt; 20d avg</div></div>",
       unsafe_allow_html=True,
   )
-  st.markdown(f"<div style='font-size:11px;color:{COLOR_TEXT_MAIN};font-weight:600;margin-bottom:6px;'>US100</div>", unsafe_allow_html=True)
-  if not us100_results:
-    st.markdown(f"<div style='font-size:11px;color:{COLOR_TEXT_MUTED};margin-bottom:8px;'>No matches</div>", unsafe_allow_html=True)
-  else:
-    for idx, m in enumerate(us100_results, start=1):
-      color = COLOR_GREEN if m["Signal"] == "BUY" else COLOR_RED
-      inner = (
-          f"<div style='font-size:11px;color:{COLOR_TEXT_MAIN};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.5;'>"
-          f"• <b>{m['Ticker']}</b>: <span style='color:{color};'>{m['Signal']}</span> | Price: {m['Price']}"
-          f" | Score: {m['Score']} | TP1: {m['TP1_PCT']}"
-          f"</div>"
+  for cat_name, hits in results_by_cat.items():
+    def _value_html(m, cat_name=cat_name):
+      color = COLOR_GREEN if m["chg"] >= 0 else COLOR_RED
+      arrow = "▲" if m["chg"] >= 0 else "▼"
+      return (
+          f"<span style='white-space:nowrap;'>"
+          f"<span style='color:{COLOR_TEXT_MUTED};'>{conviction_price_str(cat_name, m['price'])}</span> "
+          f"<span style='color:{color};'>{arrow} {m['chg']:+.2f}%</span></span>"
       )
-      marker = f"qfx-hc-us100-{idx}"
-      _render_clickable_html(
-          marker,
-          inner,
-          extra_style=f"background-color:{COLOR_PANEL_BG};border:1px solid {COLOR_BORDER};border-radius:4px;padding:6px 10px;margin-bottom:6px;",
-          key_prefix=f"{key_prefix}_us100_{idx}",
-          on_click=on_click,
-          args=(m["RawSymbol"], m["Ticker"]),
-      )
-  st.markdown(f"<div style='margin:10px 0;border-top:1px solid {COLOR_BORDER};'></div>", unsafe_allow_html=True)
-  st.markdown(f"<div style='font-size:11px;color:{COLOR_TEXT_MAIN};font-weight:600;margin-bottom:6px;'>Nifty500</div>", unsafe_allow_html=True)
-  if not nifty_results:
-    st.markdown(f"<div style='font-size:11px;color:{COLOR_TEXT_MUTED};margin-bottom:6px;'>No matches</div>", unsafe_allow_html=True)
-  else:
-    for idx, m in enumerate(nifty_results, start=1):
-      color = COLOR_GREEN if m["Signal"] == "BUY" else COLOR_RED
-      inner = (
-          f"<div style='font-size:11px;color:{COLOR_TEXT_MAIN};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.5;'>"
-          f"• <b>{m['Ticker']}</b>: <span style='color:{color};'>{m['Signal']}</span> | Price: {m['Price']}"
-          f" | Score: {m['Score']} | TP1: {m['TP1_PCT']}"
-          f"</div>"
-      )
-      marker = f"qfx-hc-nifty-{idx}"
-      _render_clickable_html(
-          marker,
-          inner,
-          extra_style=f"background-color:{COLOR_PANEL_BG};border:1px solid {COLOR_BORDER};border-radius:4px;padding:6px 10px;margin-bottom:6px;",
-          key_prefix=f"{key_prefix}_nifty_{idx}",
-          on_click=on_click,
-          args=(m["RawSymbol"], m["Ticker"]),
-      )
-  st.markdown("</div>", unsafe_allow_html=True)
-
+    shown = hits[:CONVICTION_MAX_DISPLAY]
+    extra = len(hits) - len(shown)
+    title = f"{cat_name} · {len(hits)} match{'es' if len(hits) != 1 else ''}"
+    if extra > 0:
+      title += f" (top {len(shown)} shown)"
+    render_clickable_list_box(
+        title,
+        shown,
+        key_prefix=f"{key_prefix}_{cat_name.lower().replace(' ', '')}",
+        on_click=on_click,
+        value_fmt=_value_html,
+        empty_text="No matches",
+    )
 # =====================================================================
 # SIDEBAR CONTROLS
 # =====================================================================
@@ -2016,13 +1983,14 @@ if "tg_token" not in st.session_state or "tg_chat" not in st.session_state:
   saved_token, saved_chat = load_telegram_config()
   st.session_state["tg_token"] = saved_token
   st.session_state["tg_chat"] = saved_chat
-
-def run_scan_and_send(tg_token, tg_chat, ema_fast, ema_mid, ema_slow, macd_fast, macd_slow, macd_signal):
-  """Scan Commodities/Forex for a 30m 3-EMA cross (either side) and scan
-  US100/Nifty500 for High-Conviction BUY setups, then push one Telegram
-  message (auto-split into multiple sends if it's too long). Returns
-  (ok, total_alerts, status_text). Shared by the manual button and the
-  scheduled auto-scan timer."""
+def run_scan_and_send(tg_token, tg_chat, ema_fast, ema_mid, ema_slow):
+  """Pushes one Telegram message (auto-split if long) containing:
+    * High-Conviction Shares (Nifty 500 / US 100 / Commodities / Forex) —
+      the FIRST scan sends the whole list; every later scan sends only the
+      stocks that were not in the previous scan's list.
+    * 30m 3-EMA cross (either side) for Commodities / Forex.
+  Returns (ok, total_alerts, status_text). Shared by the manual button and
+  the scheduled auto-scan timer."""
   triggered_messages = []
   # --- 30m 3-EMA cross triggers — Commodities / Forex, either side -------
   fx_comm_watchlist = [("Commodities", COMMODITIES), ("Forex", FOREX_PAIRS)]
@@ -2041,41 +2009,45 @@ def run_scan_and_send(tg_token, tg_chat, ema_fast, ema_mid, ema_slow, macd_fast,
             f"{emoji} *[30m 3-EMA Cross]* *{h['display']}* → *{h['direction']}* "
             f"(EMA {int(ema_fast)}/{int(ema_mid)}/{int(ema_slow)}, {cat_name})"
         )
-  # --- High-Conviction BUY alerts (US100 + Nifty500) ---------------------
-  hc_messages = []
-  hc_watchlist = [
-      ("US100", list(zip(us100_yf, us100_raw + ["IXIC"]))),
-      ("Nifty500", list(zip(nifty500_yf, nifty500_raw))),
-  ]
-  for cat_name, symbols in hc_watchlist:
-    hc_hits = fetch_high_conviction_results(
-        tuple(symbols),
-        min_score=50.0,
-        min_tp1=5.0,
-        max_results=10,
-        macd_fast=int(macd_fast),
-        macd_slow=int(macd_slow),
-        macd_signal=int(macd_signal),
-    )
-    for r in hc_hits:
-      hc_messages.append(
-          f"🔥 *{r['Ticker']}* ({cat_name}) → *BUY* | Score {r['Score']} | "
-          f"Price {r['Price']} ({r['ChangePct']}) | TP1 {r['TP1']} ({r['TP1_PCT']}) | SL {r['SL']}"
+  # --- High-Conviction Shares: first scan = all, afterwards = new only ----
+  state = load_conviction_state()
+  prev_last = state.get("last", {})
+  new_last = dict(prev_last)
+  conviction_lines = []
+  conviction_count = 0
+  for cat_name, symbols in CONVICTION_UNIVERSE.items():
+    hits, n_evaluated = scan_conviction_category(tuple(symbols))
+    if n_evaluated == 0:
+      continue  # data feed failed — leave this list's memory untouched
+    is_first = cat_name not in prev_last
+    prev_set = set(prev_last.get(cat_name, []))
+    fresh = hits if is_first else [h for h in hits if h["symbol"] not in prev_set]
+    new_last[cat_name] = [h["symbol"] for h in hits]
+    if not fresh:
+      continue
+    if conviction_lines:
+      conviction_lines.append("")
+    conviction_lines.append(f"*{cat_name}* ({'initial scan' if is_first else 'new additions'})")
+    for h in fresh:
+      conviction_lines.append(
+          f"🔥 *{h['display']}* — {conviction_price_str(cat_name, h['price'])} ({h['chg']:+.2f}%)"
       )
-
+    conviction_count += len(fresh)
   message_sections = []
-  if hc_messages:
-    message_sections.append("*🚨 High-Conviction BUY Alerts*\n" + "\n".join(hc_messages))
+  if conviction_lines:
+    message_sections.append("*🚨 High-Conviction Shares*\n" + "\n".join(conviction_lines))
   if triggered_messages:
     message_sections.append("*⚡ 30m 3-EMA Cross — Commodities & Forex*\n" + "\n".join(triggered_messages))
-
-  total_alerts = len(triggered_messages) + len(hc_messages)
+  total_alerts = len(triggered_messages) + conviction_count
   if not message_sections:
-    return True, 0, "No new active triggers matching rules."
+    save_conviction_state({"last": new_last})
+    return True, 0, "No new stocks added to the High-Conviction list since the last scan."
   combined_msg = "📢 *QuantFX Automated Triggers*\n\n" + "\n\n".join(message_sections)
   ok, m = send_telegram_alert_chunked(combined_msg, tg_token, tg_chat)
+  if ok:
+    # Only remember the list once Telegram accepted it, so a failed send is retried.
+    save_conviction_state({"last": new_last})
   return ok, total_alerts, m
-
 with st.sidebar.expander("🔔 Telegram Alerts & Automated Triggers", expanded=False):
   tg_token = st.text_input("Bot Token", value=st.session_state.get("tg_token", ""), type="password")
   tg_chat = st.text_input("Chat ID", value=st.session_state.get("tg_chat", ""))
@@ -2089,21 +2061,23 @@ with st.sidebar.expander("🔔 Telegram Alerts & Automated Triggers", expanded=F
     ok, msg = send_telegram_alert("🟢 *QuantFX Terminal Test Alert*", tg_token, tg_chat)
     st.success(msg) if ok else st.error(msg)
   st.caption(
-      "Auto scan sends: High-Conviction BUY alerts (US100/Nifty500) "
-      "and 30m 3-EMA cross alerts — either side (BUY or SELL) — for "
-      "Commodities/Forex."
+      "Auto scan sends: High-Conviction Shares (Nifty 500 / US 100 / Commodities / Forex) — "
+      "the full list on the first scan, then only newly added stocks — "
+      "plus 30m 3-EMA cross alerts (BUY or SELL) for Commodities/Forex."
   )
   if st.button("🚀 Run Auto Scan & Send", use_container_width=True):
     ok, total_alerts, status = run_scan_and_send(
-        tg_token, tg_chat, ema_fast, ema_mid, ema_slow, macd_fast, macd_slow, macd_signal
+        tg_token, tg_chat, ema_fast, ema_mid, ema_slow
     )
-    if total_alerts == 0:
-      st.info(status)
-    elif ok:
-      st.success(f"Dispatched {total_alerts} alert(s)!")
-    else:
+    if not ok:
       st.error(status)
-
+    elif total_alerts == 0:
+      st.info(status)
+    else:
+      st.success(f"Dispatched {total_alerts} alert(s)!")
+  if st.button("♻️ Reset alert memory (next scan sends full list)", use_container_width=True):
+    save_conviction_state({"last": {}})
+    st.success("Cleared — the next scan will send every current match again.")
   st.markdown("---")
   st.markdown("**⏱️ Scheduled Auto-Scan**")
   auto_send_enabled = st.checkbox(
@@ -2128,24 +2102,24 @@ with st.sidebar.expander("🔔 Telegram Alerts & Automated Triggers", expanded=F
     else:
       interval_ms = int(auto_interval_hours) * 60 * 60 * 1000
       refresh_count = st_autorefresh(interval=interval_ms, key="qfx_auto_refresh_timer")
-      last_count = st.session_state.get("_qfx_last_autorefresh_count", 0)
+      last_count = st.session_state.get("_qfx_last_autorefresh_count", -1)
       last_run_str = st.session_state.get("_qfx_last_autorun_at", "—")
       st.caption(f"🟢 Active — next auto-scan in up to {auto_interval_hours}h. Last run: {last_run_str}")
+      # Runs once right after it is enabled / the page loads (that is the
+      # "first scan"), then on every timer tick. Only new stocks are sent.
       if refresh_count != last_count:
         st.session_state["_qfx_last_autorefresh_count"] = refresh_count
-        if refresh_count > 0:
-          ok, total_alerts, status = run_scan_and_send(
-              tg_token, tg_chat, ema_fast, ema_mid, ema_slow, macd_fast, macd_slow, macd_signal
-          )
-          st.session_state["_qfx_last_autorun_at"] = pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S")
-          if not ok:
-            st.error(f"Scheduled send failed: {status}")
+        ok, total_alerts, status = run_scan_and_send(
+            tg_token, tg_chat, ema_fast, ema_mid, ema_slow
+        )
+        st.session_state["_qfx_last_autorun_at"] = pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S")
+        if not ok:
+          st.error(f"Scheduled send failed: {status}")
   else:
     st.caption("Auto-scan is off — use the button above to send on demand.")
 if st.sidebar.button("🔄 Refresh data", use_container_width=True):
   st.cache_data.clear()
   st.rerun()
-
 if "chart_symbol" not in st.session_state:
   st.session_state.chart_symbol = current_symbol
   st.session_state.chart_display = current_display
@@ -2154,27 +2128,21 @@ elif current_symbol != st.session_state._prev_sidebar_symbol:
   st.session_state.chart_symbol = current_symbol
   st.session_state.chart_display = current_display
   st.session_state._prev_sidebar_symbol = current_symbol
-
 chart_symbol = st.session_state.chart_symbol
 chart_display = st.session_state.chart_display
-
 # =====================================================================
 # MAIN LAYOUT
 # =====================================================================
 _header_top_commodity = fetch_top_n_movers(tuple(COMMODITIES), n=1)
 _header_top_forex = fetch_top_n_movers(tuple(FOREX_PAIRS), n=1)
-
 if "active_view" not in st.session_state:
   st.session_state.active_view = VIEWS[0]
-
 live_price, live_chg = get_live_price_and_chg(chart_symbol)
 price_str = f"${format_price(live_price)}"
 chg_color = COLOR_GREEN if live_chg >= 0 else COLOR_RED
 chg_arrow = "▲" if live_chg >= 0 else "▼"
 live_str = f"<span style='color:{chg_color};font-weight:700;'>{price_str} {chg_arrow} {live_chg:+.2f}%</span>" if live_price else ""
-
 header_col1, header_col2, top_commodity_col, top_forex_col = st.columns([0.42, 0.28, 0.15, 0.15])
-
 with header_col1:
   st.markdown(
       f"<div style='padding-top:4px;'>"
@@ -2184,16 +2152,12 @@ with header_col1:
       f"</div>",
       unsafe_allow_html=True,
   )
-
 with header_col2:
   active_view = st.radio("View", VIEWS, horizontal=True, label_visibility="collapsed", key="active_view")
-
 with top_commodity_col:
   render_clickable_single_box("Top Commodity", _header_top_commodity, key_prefix="header_top_commodity", on_click=go_to_chart, compact=True)
-
 with top_forex_col:
   render_clickable_single_box("Top Forex", _header_top_forex, key_prefix="header_top_forex", on_click=go_to_chart, compact=True)
-
 # ---- Charts view --------------------------------------------------------
 if active_view == "📊 Charts":
   with st.spinner(f"Fetching {chart_display}..."):
@@ -2223,24 +2187,7 @@ if active_view == "📊 Charts":
       ha_df = compute_heikin_ashi(renko_df, ema_fast=ema_fast, ema_slow=ema_slow, ema_mid=ema_mid)
       struct_event = latest_structure_event(renko_df, lookback=15)
       with st.spinner("Scanning watchlists..."):
-        hc_us100 = fetch_high_conviction_results(
-            tuple(zip(us100_yf, us100_raw + ["IXIC"])),
-            min_score=50.0,
-            min_tp1=5.0,
-            max_results=4,
-            macd_fast=macd_fast,
-            macd_slow=macd_slow,
-            macd_signal=macd_signal,
-        )
-        hc_nifty = fetch_high_conviction_results(
-            tuple(zip(nifty500_yf, nifty500_raw)),
-            min_score=50.0,
-            min_tp1=5.0,
-            max_results=4,
-            macd_fast=macd_fast,
-            macd_slow=macd_slow,
-            macd_signal=macd_signal,
-        )
+        conviction_results = get_conviction_results()
         ema_scanner_us100_watchlist = tuple(zip(us100_yf, us100_raw + ["IXIC"]))
         ema_scanner_nifty_watchlist = tuple(zip(nifty500_yf, nifty500_raw))
         ema_scanner_us100_hits = scan_triple_ema_cross_2h(
@@ -2260,42 +2207,6 @@ if active_view == "📊 Charts":
             max_results=len(ema_scanner_nifty_watchlist),
         )
         ema_scanner_nifty_hits = [h for h in ema_scanner_nifty_hits_all if h["direction"] == "BUY"][:6]
-        macd_scanner_us100_hits = scan_macd_cross_2h(
-            ema_scanner_us100_watchlist,
-            macd_fast=macd_fast,
-            macd_slow=macd_slow,
-            macd_signal=macd_signal,
-            macd_smooth=macd_smooth,
-            lookback=1,
-            max_results=6,
-        )
-        macd_scanner_nifty_hits = scan_macd_cross_2h(
-            ema_scanner_nifty_watchlist,
-            macd_fast=macd_fast,
-            macd_slow=macd_slow,
-            macd_signal=macd_signal,
-            macd_smooth=macd_smooth,
-            lookback=1,
-            max_results=6,
-        )
-        macd_scanner_commodities_hits = scan_macd_cross_30m(
-            tuple(COMMODITIES),
-            macd_fast=macd_fast,
-            macd_slow=macd_slow,
-            macd_signal=macd_signal,
-            macd_smooth=macd_smooth,
-            lookback=1,
-            max_results=6,
-        )
-        macd_scanner_forex_hits = scan_macd_cross_30m(
-            tuple(FOREX_PAIRS),
-            macd_fast=macd_fast,
-            macd_slow=macd_slow,
-            macd_signal=macd_signal,
-            macd_smooth=macd_smooth,
-            lookback=1,
-            max_results=6,
-        )
         outlook = compute_7day_outlook(
             chart_symbol,
             chart_display,
@@ -2382,7 +2293,7 @@ if active_view == "📊 Charts":
               f"</div>",
               unsafe_allow_html=True,
           )
-        render_high_conviction_combined_box(hc_us100, hc_nifty, key_prefix="hc_combined", on_click=go_to_chart)
+        render_conviction_box(conviction_results, key_prefix="hc", on_click=go_to_chart)
         render_clickable_list_box(
             "⚡ 3-EMA Cross Scanner (2H) — US100",
             ema_scanner_us100_hits,
@@ -2397,35 +2308,6 @@ if active_view == "📊 Charts":
             on_click=go_to_chart,
             value_fmt=_triple_ema_scanner_value_html,
         )
-        render_clickable_list_box(
-            "🚦 MACD Cross Scanner (2H) — US100",
-            macd_scanner_us100_hits,
-            key_prefix="macdscan_us100",
-            on_click=go_to_chart,
-            value_fmt=_triple_ema_scanner_value_html,
-        )
-        render_clickable_list_box(
-            "🚦 MACD Cross Scanner (2H) — Nifty500",
-            macd_scanner_nifty_hits,
-            key_prefix="macdscan_nifty",
-            on_click=go_to_chart,
-            value_fmt=_triple_ema_scanner_value_html,
-        )
-        render_clickable_list_box(
-            "🚦 MACD Cross Scanner (30M) — Commodities",
-            macd_scanner_commodities_hits,
-            key_prefix="macdscan_commodities",
-            on_click=go_to_chart,
-            value_fmt=_triple_ema_scanner_value_html,
-        )
-        render_clickable_list_box(
-            "🚦 MACD Cross Scanner (30M) — Forex",
-            macd_scanner_forex_hits,
-            key_prefix="macdscan_forex",
-            on_click=go_to_chart,
-            value_fmt=_triple_ema_scanner_value_html,
-        )
-
 # ---- Scanner view ---------------------------------------------------------
 elif active_view == "🔎 Scanner":
   st.caption("Runs the oracle score across a watchlist. Click any result to open it in the chart view.")

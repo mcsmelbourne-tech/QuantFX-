@@ -40,6 +40,11 @@ v6 additions:
   stocks that were NOT in the previous scan's list (state is kept in
   .qfx_conviction_state.json next to this file).
 - All MACD scanner boxes removed from the right-hand panel.
+v7 additions:
+- Right-side stock rows are real buttons: click any stock / commodity / forex
+  row and its chart opens immediately.
+- MACD settings live in a collapsed left-sidebar expander and can be saved
+  (.qfx_settings.json); the MACD histogram is drawn as a filled area.
 """
 import json
 import os
@@ -125,6 +130,28 @@ st.markdown(
     .js-plotly-plot .plotly .annotation text {{
         font-size: 10px !important;
     }}
+    /* Clickable stock rows (real Streamlit buttons -> reliable click-to-chart) */
+    div[class*="st-key-qfxrow_"] {{ margin-top: -0.35rem !important; }}
+    div[class*="st-key-qfxrow_"] button {{
+        width: 100%; min-height: 0; padding: 6px 12px;
+        background-color: {COLOR_PANEL_BG}; color: {COLOR_TEXT_MAIN};
+        border: 1px solid {COLOR_BORDER}; border-top: none; border-radius: 0;
+        justify-content: flex-start;
+    }}
+    div[class*="st-key-qfxrow_"] button:hover {{
+        background-color: #171C27; border-color: {COLOR_TEXT_MUTED};
+    }}
+    div[class*="st-key-qfxrow_"] button p,
+    div[class*="st-key-qfxtop_"] button p {{
+        font-size: 12px; text-align: left; margin: 0;
+        white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }}
+    div[class*="st-key-qfxtop_"] button {{
+        width: 100%; min-height: 0; padding: 4px 8px;
+        background-color: {COLOR_PANEL_BG}; color: {COLOR_TEXT_MAIN};
+        border: 1px solid {COLOR_BORDER}; border-radius: 6px; justify-content: flex-start;
+    }}
+    div[class*="st-key-qfxtop_"] button:hover {{ border-color: {COLOR_TEXT_MUTED}; }}
     /* Trim header whitespace without hiding content */
     .block-container, section.main > div.block-container {{
         padding-top: 1.5rem !important;
@@ -1613,16 +1640,23 @@ def create_chart_figure(
           yshift=14 if s_type in ("BOS_DEMAND", "CHOCH_DEMAND") else -14,
       )
   
-  hist_vals = renko_df["MACD_Hist"].values
-  hist_colors = [COLOR_GREEN if v >= 0 else COLOR_RED for v in hist_vals]
+  hist_vals = np.asarray(renko_df["MACD_Hist"].values, dtype=float)
+  hist_pos = np.where(hist_vals >= 0, hist_vals, 0.0)
+  hist_neg = np.where(hist_vals < 0, hist_vals, 0.0)
   fig.add_trace(
-      go.Bar(
-          x=x_renko,
-          y=hist_vals,
-          marker_color=hist_colors,
-          name="MACD Histogram Boxes",
-          opacity=0.85,
-          showlegend=False,
+      go.Scatter(
+          x=x_renko, y=hist_pos, mode="lines", fill="tozeroy",
+          line=dict(color=COLOR_GREEN, width=1), fillcolor="rgba(0,255,102,0.35)",
+          name="MACD Histogram (+)", showlegend=False,
+      ),
+      row=3,
+      col=1,
+  )
+  fig.add_trace(
+      go.Scatter(
+          x=x_renko, y=hist_neg, mode="lines", fill="tozeroy",
+          line=dict(color=COLOR_RED, width=1), fillcolor="rgba(255,51,51,0.35)",
+          name="MACD Histogram (-)", showlegend=False,
       ),
       row=3,
       col=1,
@@ -1778,79 +1812,32 @@ def render_zoomable_chart(fig, key, height=950):
     </script>
     """
   components.html(html, height=height + 60, scrolling=True)
-def _render_clickable_html(marker, inner_html, extra_style="", key_prefix=None, on_click=None, args=None):
-  with st.container():
-    st.markdown(f"<div class='{marker}' style='cursor:pointer;{extra_style}'>{inner_html}</div>", unsafe_allow_html=True)
-    st.markdown(
-        f"""<style>
-            div[data-testid="stVerticalBlock"]:has(> div[data-testid="stElementContainer"] .{marker}),
-            div[data-testid="stVerticalBlock"]:has(.{marker}):has(button) {{
-                position: relative;
-            }}
-            div[data-testid="stVerticalBlock"]:has(.{marker}) div[data-testid="stButton"] {{
-                position: absolute;
-                inset: 0;
-                margin: 0;
-                z-index: 5;
-            }}
-            div[data-testid="stVerticalBlock"]:has(.{marker}) div[data-testid="stButton"] button {{
-                width: 100%;
-                height: 100%;
-                min-height: 100%;
-                opacity: 0;
-                cursor: pointer;
-                padding: 0;
-                border: none;
-                background: transparent;
-            }}
-            .{marker}:hover {{ border-color: {COLOR_TEXT_MUTED} !important; }}
-            </style>""",
-        unsafe_allow_html=True,
-    )
-    st.button(" ", key=f"{key_prefix}_btn", on_click=on_click, args=args)
+def _md_safe(text):
+  # "$" would start LaTeX inside a button label — escape it.
+  return text.replace("$", "\\$")
 def render_clickable_single_box(title, movers, key_prefix, on_click, compact=False):
-  pad = "3px 8px" if compact else "8px 12px"
-  font_sz = "10px" if compact else "11px"
-  margin_b = "0px" if compact else "8px"
   if not movers:
     st.markdown(
         f"<div style='background-color:{COLOR_PANEL_BG};border:1px solid {COLOR_BORDER};"
-        f"border-radius:6px;padding:{pad};margin-bottom:{margin_b};'>"
-        f"<div style='font-size:{font_sz};color:{COLOR_TEXT_MUTED};font-weight:600;'>{title}:"
-        f" <span style='color:{COLOR_TEXT_MUTED};font-weight:400;'>No data</span></div></div>",
+        f"border-radius:6px;padding:3px 8px;'>"
+        f"<div style='font-size:10px;color:{COLOR_TEXT_MUTED};font-weight:600;'>{title}:"
+        f" <span style='font-weight:400;'>No data</span></div></div>",
         unsafe_allow_html=True,
     )
     return
   best = movers[0]
-  color = COLOR_GREEN if best["chg"] >= 0 else COLOR_RED
+  col = "green" if best["chg"] >= 0 else "red"
   arrow = "▲" if best["chg"] >= 0 else "▼"
-  price_str = f"${format_price(best['price'])}"
-  if compact:
-    inner = (
-        f"<div style='font-size:{font_sz};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;'>"
-        f"<span style='color:{COLOR_TEXT_MUTED};font-weight:600;'>{title}:</span>"
-        f" <span style='font-weight:700;color:{COLOR_TEXT_MAIN};'>{best['display']}</span>"
-        f" <span style='color:{COLOR_TEXT_MUTED};'>{price_str}</span>"
-        f" <span style='color:{color};'>{arrow} {best['chg']:+.2f}%</span>"
-        f"</div>"
-    )
-  else:
-    inner = (
-        f"<div style='font-size:11px;color:{COLOR_TEXT_MUTED};margin-bottom:4px;font-weight:600;'>{title}</div>"
-        f"<div style='font-size:11px;font-weight:700;color:{COLOR_TEXT_MAIN};'>{best['display']}</div>"
-        f"<div style='font-size:11px;color:{COLOR_TEXT_MUTED};'>{price_str}</div>"
-        f"<div style='font-size:11px;color:{color};'>{arrow} {best['chg']:+.2f}%</div>"
-    )
-  marker = f"qfx-hit-{key_prefix}"
-  _render_clickable_html(
-      marker,
-      inner,
-      extra_style=f"background-color:{COLOR_PANEL_BG};border:1px solid {COLOR_BORDER};border-radius:6px;padding:{pad};margin-bottom:{margin_b};",
-      key_prefix=key_prefix,
-      on_click=on_click,
-      args=(best["symbol"], best["display"]),
+  label = _md_safe(
+      f"{title}: **{best['display']}** ${format_price(best['price'])} :{col}[{arrow} {best['chg']:+.2f}%]"
+  )
+  st.button(
+      label, key=f"qfxtop_{key_prefix}", on_click=on_click,
+      args=(best["symbol"], best["display"]), use_container_width=True,
   )
 def render_clickable_list_box(title, movers, key_prefix, on_click, value_fmt=None, empty_text="No data"):
+  """Header + one real button per row. Clicking a row opens that symbol's chart.
+  value_fmt(m) must return Markdown (e.g. ':green[▲ +1.2%]')."""
   st.markdown(
       f"<div style='background-color:{COLOR_PANEL_BG};border:1px solid {COLOR_BORDER};"
       f"border-radius:6px 6px 0 0;padding:8px 12px 6px 12px;margin-bottom:0px;'>"
@@ -1865,30 +1852,21 @@ def render_clickable_list_box(title, movers, key_prefix, on_click, value_fmt=Non
         unsafe_allow_html=True,
     )
     return
-  n = len(movers)
   for idx, m in enumerate(movers, start=1):
-    is_last = idx == n
-    color = COLOR_GREEN if m["chg"] >= 0 else COLOR_RED
-    arrow = "▲" if m["chg"] >= 0 else "▼"
     if value_fmt:
-      value_html = value_fmt(m)
+      value_md = value_fmt(m)
     else:
-      value_html = f"<span style='color:{color};white-space:nowrap;'>{arrow} {m['chg']:+.2f}%</span>"
-    inner = (
-        f"<div style='font-size:12px;display:flex;justify-content:space-between;gap:8px;color:{COLOR_TEXT_MAIN};line-height:1.6;'>"
-        f"<span>{idx}. {m['display']}</span>{value_html}</div>"
-    )
-    radius = "0 0 6px 6px" if is_last else "0"
-    margin = "14px" if is_last else "0px"
-    marker = f"qfx-hit-{key_prefix}-{idx}"
-    _render_clickable_html(
-        marker,
-        inner,
-        extra_style=f"background-color:{COLOR_PANEL_BG};border:1px solid {COLOR_BORDER};border-top:none;border-radius:{radius};padding:7px 12px;margin-bottom:{margin};",
-        key_prefix=f"{key_prefix}_{idx}",
+      col = "green" if m["chg"] >= 0 else "red"
+      arrow = "▲" if m["chg"] >= 0 else "▼"
+      value_md = f":{col}[{arrow} {m['chg']:+.2f}%]"
+    st.button(
+        _md_safe(f"{idx}. **{m['display']}**  ·  {value_md}"),
+        key=f"qfxrow_{key_prefix}_{idx}",
         on_click=on_click,
         args=(m["symbol"], m["display"]),
+        use_container_width=True,
     )
+  st.markdown(f"<div style='height:12px;'></div>", unsafe_allow_html=True)
 def render_conviction_box(results_by_cat, key_prefix, on_click):
   st.markdown(
       f"<div style='background-color:{COLOR_PANEL_BG};border:1px solid {COLOR_BORDER};"
@@ -1901,13 +1879,9 @@ def render_conviction_box(results_by_cat, key_prefix, on_click):
   )
   for cat_name, hits in results_by_cat.items():
     def _value_html(m, cat_name=cat_name):
-      color = COLOR_GREEN if m["chg"] >= 0 else COLOR_RED
+      col = "green" if m["chg"] >= 0 else "red"
       arrow = "▲" if m["chg"] >= 0 else "▼"
-      return (
-          f"<span style='white-space:nowrap;'>"
-          f"<span style='color:{COLOR_TEXT_MUTED};'>{conviction_price_str(cat_name, m['price'])}</span> "
-          f"<span style='color:{color};'>{arrow} {m['chg']:+.2f}%</span></span>"
-      )
+      return f"{conviction_price_str(cat_name, m['price'])} :{col}[{arrow} {m['chg']:+.2f}%]"
     shown = hits[:CONVICTION_MAX_DISPLAY]
     extra = len(hits) - len(shown)
     title = f"{cat_name} · {len(hits)} match{'es' if len(hits) != 1 else ''}"
@@ -1946,15 +1920,43 @@ c3, c4 = st.sidebar.columns(2)
 atr_period = c3.number_input("ATR Period", min_value=2, max_value=100, value=21)
 atr_multiplier = c4.number_input("ATR Mult.", min_value=0.1, max_value=10.0, value=3.0, step=0.1)
 st.sidebar.markdown("---")
-st.sidebar.markdown("**MACD Settings**")
-mc1, mc2, mc3 = st.sidebar.columns(3)
-macd_fast = mc1.number_input("Fast", min_value=1, max_value=100, value=12)
-macd_slow = mc2.number_input("Slow", min_value=1, max_value=200, value=26)
-macd_signal = mc3.number_input("Signal", min_value=1, max_value=100, value=9)
-macd_smooth = st.sidebar.slider(
-    "MACD Smoothing", min_value=1, max_value=15, value=3,
-    help="Extra EMA applied to the MACD line so it (and the histogram) reads less jagged. 1 = classic raw MACD.",
+SETTINGS_PATH = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), ".qfx_settings.json"
 )
+def load_settings():
+  try:
+    if os.path.exists(SETTINGS_PATH):
+      with open(SETTINGS_PATH, "r") as f:
+        data = json.load(f)
+      if isinstance(data, dict):
+        return data
+  except Exception:
+    pass
+  return {}
+def save_settings(data):
+  try:
+    with open(SETTINGS_PATH, "w") as f:
+      json.dump(data, f)
+    return True
+  except Exception:
+    return False
+_saved_settings = load_settings()
+with st.sidebar.expander("⚙️ MACD Settings", expanded=False):
+  mc1, mc2, mc3 = st.columns(3)
+  macd_fast = mc1.number_input("Fast", min_value=1, max_value=100, value=int(_saved_settings.get("macd_fast", 12)), key="macd_fast_in")
+  macd_slow = mc2.number_input("Slow", min_value=1, max_value=200, value=int(_saved_settings.get("macd_slow", 26)), key="macd_slow_in")
+  macd_signal = mc3.number_input("Signal", min_value=1, max_value=100, value=int(_saved_settings.get("macd_signal", 9)), key="macd_signal_in")
+  macd_smooth = st.slider(
+      "MACD Smoothing", min_value=1, max_value=15, value=int(_saved_settings.get("macd_smooth", 3)), key="macd_smooth_in",
+      help="Extra EMA applied to the MACD line so it (and the histogram) reads less jagged. 1 = classic raw MACD.",
+  )
+  if st.button("💾 Save MACD settings", use_container_width=True, key="save_macd_settings"):
+    ok = save_settings({
+        **load_settings(),
+        "macd_fast": int(macd_fast), "macd_slow": int(macd_slow),
+        "macd_signal": int(macd_signal), "macd_smooth": int(macd_smooth),
+    })
+    st.success("Saved — these values load automatically next time.") if ok else st.error("Could not write settings file.")
 signal_cooldown = st.sidebar.slider(
     "Signal Cooldown (bricks)", min_value=1, max_value=20, value=5,
     help="Minimum bricks between BUY/SELL signals. Higher = fewer, more confident signals.",
@@ -2250,15 +2252,10 @@ if active_view == "📊 Charts":
           st.success(m) if ok else st.error(m)
       with right_panel_col:
         def _triple_ema_scanner_value_html(m):
-          color = COLOR_GREEN if m["direction"] == "BUY" else COLOR_RED
+          col = "green" if m["direction"] == "BUY" else "red"
           arrow = "▲" if m["direction"] == "BUY" else "▼"
           recency = "latest" if m["bars_ago"] == 0 else f"{m['bars_ago']} bars ago"
-          return (
-              f"<div style='text-align:right;font-size:11px;'>"
-              f"<span style='color:{color};'>{arrow} {m['direction']}</span>"
-              f"<span style='color:{COLOR_TEXT_MUTED};'> · {recency}</span>"
-              f"</div>"
-          )
+          return f":{col}[{arrow} {m['direction']}] · {recency}"
         if outlook:
           dir_color = (
               COLOR_GREEN

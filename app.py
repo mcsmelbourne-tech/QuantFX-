@@ -53,6 +53,11 @@ v8 additions:
 v9 additions:
 - EMA 9 x 27 cross screener boxes (2H) for Nifty 500 and US 100 (EMA Mid default is now 27).
 - Renko (and RSI) Buy/Sell now fire on the EMA 9 x 27 cross; MACD histogram drawn as tiny separated bricks.
+
+v10 additions:
+- Panel order is now Heikin Ashi -> ATR Renko -> MACD -> RSI.
+- Heikin Ashi: EMA colour fill removed; candles use the same colours as the Renko bricks.
+- All four panels zoom / pan / reset together (Renko bricks are mapped onto the real-candle timeline).
 """
 import json
 import os
@@ -1550,8 +1555,8 @@ def add_buy_sell_markers(
           row=row,
           col=col,
       )
-COLOR_HA_UP = "#26A69A"
-COLOR_HA_DOWN = "#F0456F"
+COLOR_HA_UP = COLOR_BULL    # Heikin Ashi candles use the Renko brick colours
+COLOR_HA_DOWN = COLOR_BEAR
 COLOR_PILL_BUY = "#4E9E90"
 COLOR_PILL_SELL = "#D0827E"
 # TradingView-style 4-colour MACD histogram
@@ -1622,9 +1627,12 @@ def create_chart_figure(
     live_price=None, live_chg=None, symbol_label=None, raw_df=None, macd_params=None,
 ):
   """Rows: 1) real Heikin Ashi (built from the actual candles)
-           2) MACD (independent, from the actual candles)
-           3) ATR Renko          4) RSI (Renko bricks)
-  Rows 1+2 share one time axis; rows 3+4 share the brick axis."""
+           2) ATR Renko
+           3) MACD (independent, from the actual candles)
+           4) RSI (Renko bricks)
+  Rows 1+3 share the real-candle time axis; rows 2+4 share the brick axis.
+  Both groups are kept on the same time window when zooming / panning (see the
+  zoom-sync map below and qfxLinkAxes in render_zoomable_chart)."""
   macd_params = macd_params or {}
   n_ha = len(ha_df)
   x_ha = list(range(n_ha))
@@ -1653,13 +1661,13 @@ def create_chart_figure(
   )
   fig = make_subplots(
       rows=4, cols=1, shared_xaxes=False,
-      row_heights=[0.34, 0.16, 0.30, 0.20],
+      row_heights=[0.34, 0.30, 0.16, 0.20],
       vertical_spacing=0.035,
       subplot_titles=(
-          f"{display} — Heikin Ashi (EMA {ema_fast}/{ema_mid or ema_slow} ribbon)",
-          f"MACD {macd_params.get('fast', 12)}/{macd_params.get('slow', 26)}/{macd_params.get('signal', 9)} — independent Buy/Sell (MACD × Signal)",
+          f"{display} — Heikin Ashi (EMA {ema_fast}/{ema_mid or ema_slow})",
           f"{display} — ATR Renko (Buy/Sell = EMA {ema_fast} × {ema_mid or ema_slow} cross)",
-          f"RSI (Buy/Sell = Renko EMA {ema_fast} × {ema_mid or ema_slow} cross · Green 30 / Red 70 levels)",
+          f"MACD {macd_params.get('fast', 12)}/{macd_params.get('slow', 26)}/{macd_params.get('signal', 9)} — independent Buy/Sell (MACD × Signal)",
+          f"RSI (Buy/Sell = Renko EMA {ema_fast} × {ema_mid or ema_slow} cross • Green 30 / Red 70 levels)",
       ),
   )
   # ---------------- Row 1: real Heikin Ashi -----------------------------
@@ -1674,14 +1682,8 @@ def create_chart_figure(
                            line=dict(color=COLOR_HA_UP, width=1, dash="dash"), opacity=0.7, showlegend=False), row=1, col=1)
   fig.add_trace(go.Scatter(x=x_ha, y=bb_mid - 2 * bb_std, mode="lines", hoverinfo="skip",
                            line=dict(color="#FF5252", width=1, dash="dash"), opacity=0.7, showlegend=False), row=1, col=1)
-  # EMA ribbon (fast vs mid), coloured by which one is on top
+  # (EMA ribbon colour fill removed - only the three EMA lines below are drawn)
   f_arr, m_arr = fast_s.values, mid_s.values
-  bull_mask = f_arr >= m_arr
-  for mask, color in ((bull_mask, "rgba(130,165,145,0.45)"), (~bull_mask, "rgba(205,140,140,0.45)")):
-    fig.add_trace(go.Scatter(x=x_ha, y=np.where(mask, m_arr, np.nan), mode="lines", hoverinfo="skip",
-                             line=dict(width=0), showlegend=False), row=1, col=1)
-    fig.add_trace(go.Scatter(x=x_ha, y=np.where(mask, f_arr, np.nan), mode="lines", hoverinfo="skip",
-                             line=dict(width=0), fill="tonexty", fillcolor=color, showlegend=False), row=1, col=1)
   fig.add_trace(
       go.Candlestick(
           x=x_ha, open=ha_df["Open"], high=ha_df["High"], low=ha_df["Low"], close=ha_df["Close"],
@@ -1729,45 +1731,21 @@ def create_chart_figure(
         )
     except Exception:
       pass
-  # ---------------- Row 2: independent MACD (TradingView style) ---------
-  hist = macd_df["Hist"].values.astype(float)
-  prev_hist = np.r_[np.nan, hist[:-1]]
-  hist_colors = []
-  for h, p in zip(hist, prev_hist):
-    rising = (not np.isfinite(p)) or h >= p
-    if h >= 0:
-      hist_colors.append(COLOR_HIST_POS_UP if rising else COLOR_HIST_POS_DOWN)
-    else:
-      hist_colors.append(COLOR_HIST_NEG_UP if rising else COLOR_HIST_NEG_DOWN)
-  fig.add_trace(go.Bar(x=x_ha, y=hist, marker_color=hist_colors, marker_line_color=COLOR_BG_DARK, marker_line_width=1,
-                       name="Histogram", showlegend=False), row=2, col=1)
-  fig.add_trace(go.Scatter(x=x_ha, y=macd_df["MACD"], line=dict(color=COLOR_MACD_LINE, width=1.3),
-                           name="MACD", showlegend=False), row=2, col=1)
-  fig.add_trace(go.Scatter(x=x_ha, y=macd_df["Signal"], line=dict(color=COLOR_SIGNAL_LINE, width=1.3),
-                           name="Signal", showlegend=False), row=2, col=1)
-  fig.add_hline(y=0, line=dict(color="#787B86", width=1, dash="dot"), row=2, col=1)
-  m_vals = macd_df["MACD"].values.astype(float)
-  s_vals = macd_df["Signal"].values.astype(float)
-  finite = np.concatenate([m_vals[np.isfinite(m_vals)], s_vals[np.isfinite(s_vals)], hist[np.isfinite(hist)]])
-  m_pad = (finite.max() - finite.min()) * 0.10 if finite.size else 0.001
-  lo_line = np.minimum(np.minimum(m_vals, s_vals), hist)
-  hi_line = np.maximum(np.maximum(m_vals, s_vals), hist)
-  add_pill_signals(fig, x_ha, macd_df["Cross"].values, lo_line - m_pad, hi_line + m_pad, row=2)
-  # ---------------- Row 3: ATR Renko -------------------------------------
+  # ---------------- Row 2: ATR Renko -------------------------------------
   fig.add_trace(
       go.Candlestick(
           x=x_renko, open=renko_df["Open"], high=renko_df["High"], low=renko_df["Low"], close=renko_df["Close"],
           increasing_line_color=COLOR_BULL, decreasing_line_color=COLOR_BEAR,
           increasing_fillcolor=COLOR_BULL, decreasing_fillcolor=COLOR_BEAR,
           name="ATR Renko", showlegend=False,
-      ), row=3, col=1,
+      ), row=2, col=1,
   )
-  fig.add_trace(go.Scatter(x=x_renko, y=renko_df["EMA_FAST"], line=dict(color=COLOR_MA_FAST, width=1.5), name=f"EMA {ema_fast}", showlegend=False), row=3, col=1)
-  fig.add_trace(go.Scatter(x=x_renko, y=renko_df["EMA_SLOW"], line=dict(color=COLOR_MA_SLOW, width=1.5), name=f"EMA {ema_slow}", showlegend=False), row=3, col=1)
+  fig.add_trace(go.Scatter(x=x_renko, y=renko_df["EMA_FAST"], line=dict(color=COLOR_MA_FAST, width=1.5), name=f"EMA {ema_fast}", showlegend=False), row=2, col=1)
+  fig.add_trace(go.Scatter(x=x_renko, y=renko_df["EMA_SLOW"], line=dict(color=COLOR_MA_SLOW, width=1.5), name=f"EMA {ema_slow}", showlegend=False), row=2, col=1)
   if ema_mid is not None and "EMA_MID" in renko_df.columns:
-    fig.add_trace(go.Scatter(x=x_renko, y=renko_df["EMA_MID"], line=dict(color="#FFFFFF", width=1.3), name=f"EMA {ema_mid}", showlegend=False), row=3, col=1)
+    fig.add_trace(go.Scatter(x=x_renko, y=renko_df["EMA_MID"], line=dict(color="#FFFFFF", width=1.3), name=f"EMA {ema_mid}", showlegend=False), row=2, col=1)
   _rk_pad = float(np.nanmax(renko_df["High"].values) - np.nanmin(renko_df["Low"].values)) * 0.02 if len(renko_df) else 0.0
-  add_pill_signals(fig, x_renko, master_signal, renko_df["Low"].values - _rk_pad, renko_df["High"].values + _rk_pad, row=3)
+  add_pill_signals(fig, x_renko, master_signal, renko_df["Low"].values - _rk_pad, renko_df["High"].values + _rk_pad, row=2)
   struct_style = {
       "BOS_DEMAND": (COLOR_BOS_DEMAND, "B-S"),
       "BOS_SUPPLY": (COLOR_BOS_SUPPLY, "B-D"),
@@ -1784,11 +1762,35 @@ def create_chart_figure(
       origin_idx = renko_df["StructureOriginIdx"].iloc[i]
       span_start = int(origin_idx) if pd.notna(origin_idx) else max(i - 6, 0)
       fig.add_shape(type="line", x0=span_start, x1=len(renko_df) - 1, y0=s_level, y1=s_level,
-                    line=dict(color=color, width=1.5, dash="dash"), opacity=0.6, row=3, col=1)
+                    line=dict(color=color, width=1.5, dash="dash"), opacity=0.6, row=2, col=1)
       fig.add_annotation(x=i, y=s_level, text=label, showarrow=False,
                          font=dict(color="#FFFFFF", size=10), bgcolor="#1E222D", bordercolor=color,
-                         borderwidth=1, row=3, col=1,
+                         borderwidth=1, row=2, col=1,
                          yshift=14 if s_type in ("BOS_DEMAND", "CHOCH_DEMAND") else -14)
+  # ---------------- Row 3: independent MACD (TradingView style) ---------
+  hist = macd_df["Hist"].values.astype(float)
+  prev_hist = np.r_[np.nan, hist[:-1]]
+  hist_colors = []
+  for h, p in zip(hist, prev_hist):
+    rising = (not np.isfinite(p)) or h >= p
+    if h >= 0:
+      hist_colors.append(COLOR_HIST_POS_UP if rising else COLOR_HIST_POS_DOWN)
+    else:
+      hist_colors.append(COLOR_HIST_NEG_UP if rising else COLOR_HIST_NEG_DOWN)
+  fig.add_trace(go.Bar(x=x_ha, y=hist, marker_color=hist_colors, marker_line_color=COLOR_BG_DARK, marker_line_width=1,
+                       name="Histogram", showlegend=False), row=3, col=1)
+  fig.add_trace(go.Scatter(x=x_ha, y=macd_df["MACD"], line=dict(color=COLOR_MACD_LINE, width=1.3),
+                           name="MACD", showlegend=False), row=3, col=1)
+  fig.add_trace(go.Scatter(x=x_ha, y=macd_df["Signal"], line=dict(color=COLOR_SIGNAL_LINE, width=1.3),
+                           name="Signal", showlegend=False), row=3, col=1)
+  fig.add_hline(y=0, line=dict(color="#787B86", width=1, dash="dot"), row=3, col=1)
+  m_vals = macd_df["MACD"].values.astype(float)
+  s_vals = macd_df["Signal"].values.astype(float)
+  finite = np.concatenate([m_vals[np.isfinite(m_vals)], s_vals[np.isfinite(s_vals)], hist[np.isfinite(hist)]])
+  m_pad = (finite.max() - finite.min()) * 0.10 if finite.size else 0.001
+  lo_line = np.minimum(np.minimum(m_vals, s_vals), hist)
+  hi_line = np.maximum(np.maximum(m_vals, s_vals), hist)
+  add_pill_signals(fig, x_ha, macd_df["Cross"].values, lo_line - m_pad, hi_line + m_pad, row=3)
   # ---------------- Row 4: RSI (Renko bricks) ----------------------------
   rsi_vals = renko_df["RSI"].values
   fig.add_trace(go.Scatter(x=x_renko, y=rsi_vals, line=dict(color="#00D4FF", width=1.8), name="RSI", showlegend=False), row=4, col=1)
@@ -1796,6 +1798,31 @@ def create_chart_figure(
   fig.add_hline(y=30, line=dict(color=COLOR_GREEN, width=1, dash="dash"), row=4, col=1)
   fig.update_yaxes(range=[0, 100], row=4, col=1)
   add_buy_sell_markers(fig, x_renko, master_signal, renko_df["RSI"], renko_df["RSI"], row=4, col=1, absolute_offset=12.0)
+  # ---------------- Zoom-sync map (Renko bricks <-> real candles) --------
+  # Bricks are not time based, so bricks and candles cannot share one x axis.
+  # Every brick is given a position on the real-candle axis (the candle it formed
+  # on; several bricks from one candle are spread inside that candle's slot).
+  # The table travels with the figure (layout.meta) and render_zoomable_chart uses
+  # it to keep every panel on the same time window while zooming / panning.
+  n_rk = len(renko_df)
+  brick_pos = None
+  if n_ha > 1 and n_rk > 1:
+    try:
+      if ha_dates and "Date" in renko_df.columns:
+        c_dates = pd.DatetimeIndex(ha_dates)
+        if c_dates.is_monotonic_increasing:
+          c_idx = np.clip(c_dates.searchsorted(pd.DatetimeIndex(renko_df["Date"]), side="right") - 1, 0, n_ha - 1)
+          c_ser = pd.Series(c_idx)
+          k_in = c_ser.groupby(c_ser).cumcount().values
+          m_in = c_ser.groupby(c_ser).transform("size").values
+          brick_pos = c_idx - 0.5 + (k_in + 0.5) / m_in
+    except Exception:
+      brick_pos = None
+    if brick_pos is None:
+      brick_pos = np.linspace(0, n_ha - 1, n_rk)   # no usable dates: sync by relative position
+    if np.all(np.diff(brick_pos) > 0):
+      fig.update_layout(meta=dict(qfx_sync=dict(
+          brick_pos=[round(float(v), 6) for v in brick_pos], n_candles=int(n_ha))))
   # ---------------- Watermark + layout -----------------------------------
   ticker_label = (symbol_label or display or "").strip()
   if live_price is not None:
@@ -1820,12 +1847,14 @@ def create_chart_figure(
       margin=dict(l=48, r=70, t=40, b=10), bargap=0.45,
   )
   fig.update_xaxes(rangeslider_visible=False, showgrid=False, tickfont=dict(size=10))
-  # rows 1+2 zoom together (real candles); rows 3+4 zoom together (bricks)
+  # Heikin Ashi (x) + MACD (x3) share the real-candle axis; Renko (x2) + RSI (x4) share
+  # the brick axis. qfxLinkAxes() (render_zoomable_chart) locks the two groups to the
+  # same time window, so all four panels zoom / pan / reset together.
   fig.update_xaxes(showticklabels=False, row=1, col=1)
-  fig.update_xaxes(matches="x", row=2, col=1, showticklabels=bool(ha_tick_vals),
+  fig.update_xaxes(showticklabels=False, row=2, col=1)
+  fig.update_xaxes(matches="x", row=3, col=1, showticklabels=bool(ha_tick_vals),
                    tickvals=ha_tick_vals or None, ticktext=ha_tick_texts or None)
-  fig.update_xaxes(showticklabels=False, row=3, col=1)
-  fig.update_xaxes(matches="x3", row=4, col=1, showticklabels=bool(rk_tick_vals),
+  fig.update_xaxes(matches="x2", row=4, col=1, showticklabels=bool(rk_tick_vals),
                    tickvals=rk_tick_vals or None, ticktext=rk_tick_texts or None)
   for r in range(1, 4):
     fig.update_yaxes(gridcolor="#2A2F3A", side="right", row=r, col=1, tickformat="f",
@@ -1849,6 +1878,70 @@ def run_chart_search():
       go_to_chart(sym, disp)
       return
   go_to_chart(query, query)
+QFX_SYNC_JS = r"""
+// Keeps the Heikin Ashi + MACD axes (real candles) and the Renko + RSI axes (bricks)
+// on the same time window while zooming, panning and resetting. The brick -> candle
+// position table comes from layout.meta.qfx_sync (built in create_chart_figure).
+function qfxLinkAxes(el, spec) {
+  var meta = spec && spec.layout && spec.layout.meta;
+  var sync = meta && meta.qfx_sync;
+  if (!sync || !sync.brick_pos || sync.brick_pos.length < 2) { return; }
+  var P = sync.brick_pos, nB = P.length;
+  var CANDLE = ["xaxis", "xaxis3"];   // Heikin Ashi + MACD
+  var BRICK = ["xaxis2", "xaxis4"];   // Renko + RSI
+  var perCandle = (nB - 1) / Math.max(P[nB - 1] - P[0], 1e-9);   // bricks per candle (edge extrapolation)
+  function candleToBrick(x) {
+    if (x <= P[0]) { return (x - P[0]) * perCandle; }
+    if (x >= P[nB - 1]) { return (nB - 1) + (x - P[nB - 1]) * perCandle; }
+    var lo = 0, hi = nB - 1;
+    while (hi - lo > 1) { var mid = (lo + hi) >> 1; if (P[mid] <= x) { lo = mid; } else { hi = mid; } }
+    return lo + (x - P[lo]) / (P[lo + 1] - P[lo]);
+  }
+  function brickToCandle(b) {
+    if (b <= 0) { return P[0] + b / perCandle; }
+    if (b >= nB - 1) { return P[nB - 1] + (b - (nB - 1)) / perCandle; }
+    var j = Math.floor(b);
+    return P[j] + (b - j) * (P[j + 1] - P[j]);
+  }
+  function touched(ev, names) {
+    return Object.keys(ev).some(function (k) {
+      return names.some(function (n) { return k.indexOf(n + ".range") === 0 || k.indexOf(n + ".autorange") === 0; });
+    });
+  }
+  function pickRange(ev, names) {
+    for (var i = 0; i < names.length; i++) {
+      var a = ev[names[i] + ".range[0]"], b = ev[names[i] + ".range[1]"], r = ev[names[i] + ".range"];
+      if (a !== undefined && b !== undefined) { return [a, b]; }
+      if (r && r.length === 2) { return [r[0], r[1]]; }
+    }
+    return null;
+  }
+  var busy = false;
+  function apply(names, range) {
+    var upd = {};
+    names.forEach(function (n) {
+      if (range) { upd[n + ".range"] = [range[0], range[1]]; } else { upd[n + ".autorange"] = true; }
+    });
+    busy = true;
+    Plotly.relayout(el, upd).then(function () { busy = false; }, function () { busy = false; });
+  }
+  el.on("plotly_relayout", function (ev) {
+    if (busy || !ev) { return; }
+    var fromCandle = touched(ev, CANDLE), fromBrick = touched(ev, BRICK);
+    if (fromCandle === fromBrick) { return; }
+    var src = fromCandle ? CANDLE : BRICK, dst = fromCandle ? BRICK : CANDLE;
+    if (src.some(function (n) { return ev[n + ".autorange"] === true; })) { apply(dst, null); return; }
+    var r = pickRange(ev, src);
+    if (!r) { return; }
+    var lo = Math.min(r[0], r[1]), hi = Math.max(r[0], r[1]);
+    var out = fromCandle ? [candleToBrick(lo), candleToBrick(hi)] : [brickToCandle(lo), brickToCandle(hi)];
+    var cur = null;
+    try { cur = el._fullLayout[dst[0]].range; } catch (e) { cur = null; }
+    if (cur && Math.abs(cur[0] - out[0]) < 1e-6 && Math.abs(cur[1] - out[1]) < 1e-6) { return; }
+    apply(dst, out);
+  });
+}
+"""
 def render_zoomable_chart(fig, key, height=950):
   fig_json = fig.to_json()
   div_id = f"qfx_chart_{key}"
@@ -1865,6 +1958,7 @@ def render_zoomable_chart(fig, key, height=950):
     </div>
     <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
     <script>
+      {QFX_SYNC_JS}
       (function() {{
         var figSpec = {fig_json};
         var config = {{scrollZoom: true, displaylogo: false, responsive: false}};
@@ -1877,6 +1971,7 @@ def render_zoomable_chart(fig, key, height=950):
               ann.classList.add('qfx-blinking-signal');
             }}
           }});
+          qfxLinkAxes(el, figSpec);
         }});
         var wrapper = document.getElementById("{div_id}_wrapper");
         if (window.ResizeObserver) {{
@@ -1937,7 +2032,7 @@ def render_clickable_list_box(title, movers, key_prefix, on_click, value_fmt=Non
       arrow = "▲" if m["chg"] >= 0 else "▼"
       value_md = f":{col}[{arrow} {m['chg']:+.2f}%]"
     st.button(
-        _md_safe(f"{idx}. **{m['display']}**  ·  {value_md}"),
+        _md_safe(f"{idx}. **{m['display']}**  •  {value_md}"),
         key=f"qfxrow_{key_prefix}_{idx}",
         on_click=on_click,
         args=(m["symbol"], m["display"]),
@@ -1950,8 +2045,8 @@ def render_conviction_box(results_by_cat, key_prefix, on_click):
       f"border-radius:6px;padding:10px 14px;margin-bottom:8px;'>"
       f"<div style='font-size:12px;color:{COLOR_TEXT_MAIN};font-weight:700;margin-bottom:4px;'>🚨 High-Conviction Shares</div>"
       f"<div style='font-size:10px;color:{COLOR_TEXT_MUTED};line-height:1.5;'>"
-      f"Daily: Close &gt; EMA200 · EMA9 &gt; EMA200 &amp; EMA20 · RSI14 &gt; 50 · Close &gt; 5d &amp; 10d-ago high · "
-      f"Low ≤ EMA9 &lt; Close · Volume &gt; 20d avg</div></div>",
+      f"Daily: Close &gt; EMA200 • EMA9 &gt; EMA200 &amp; EMA20 • RSI14 &gt; 50 • Close &gt; 5d &amp; 10d-ago high • "
+      f"Low ≤ EMA9 &lt; Close • Volume &gt; 20d avg</div></div>",
       unsafe_allow_html=True,
   )
   for cat_name, hits in results_by_cat.items():
@@ -1961,7 +2056,7 @@ def render_conviction_box(results_by_cat, key_prefix, on_click):
       return f"{conviction_price_str(cat_name, m['price'])} :{col}[{arrow} {m['chg']:+.2f}%]"
     shown = hits[:CONVICTION_MAX_DISPLAY]
     extra = len(hits) - len(shown)
-    title = f"{cat_name} · {len(hits)} match{'es' if len(hits) != 1 else ''}"
+    title = f"{cat_name} • {len(hits)} match{'es' if len(hits) != 1 else ''}"
     if extra > 0:
       title += f" (top {len(shown)} shown)"
     render_clickable_list_box(
@@ -2181,8 +2276,8 @@ else:
     st.session_state["_qfx_last_autorun_at"] = pd.Timestamp.now().strftime("%H:%M:%S")
     st.session_state["_qfx_last_autorun_status"] = "✅ ok" if _ok else f"❌ {_status}"
   st.sidebar.caption(
-      f"🟢 Auto-scan every {AUTO_SCAN_MINUTES} min · last run {st.session_state.get('_qfx_last_autorun_at', '—')} "
-      f"· {st.session_state.get('_qfx_last_autorun_status', '')}"
+      f"🟢 Auto-scan every {AUTO_SCAN_MINUTES} min • last run {st.session_state.get('_qfx_last_autorun_at', '—')} "
+      f"• {st.session_state.get('_qfx_last_autorun_status', '')}"
   )
 if st.sidebar.button("🔄 Refresh data", use_container_width=True):
   st.cache_data.clear()
@@ -2319,7 +2414,7 @@ if active_view == "📊 Charts":
             col = "green" if m["direction"] == "BUY" else "red"
             arrow = "▲" if m["direction"] == "BUY" else "▼"
             recency = "latest" if m["bars_ago"] == 0 else f"{m['bars_ago']} bar ago"
-            return f"{conviction_price_str(cat_name, m['price'])} · :{col}[{arrow} {m['direction']}] · {recency}"
+            return f"{conviction_price_str(cat_name, m['price'])} • :{col}[{arrow} {m['direction']}] • {recency}"
           return _fmt
         if outlook:
           dir_color = (
@@ -2346,7 +2441,7 @@ if active_view == "📊 Charts":
         render_conviction_box(conviction_results, key_prefix="hc", on_click=go_to_chart)
         for _cat, _hits, _kp in (("Nifty 500", ema_cross_nifty, "emax_nifty"), ("US 100", ema_cross_us100, "emax_us100")):
           _shown = _hits[:CONVICTION_MAX_DISPLAY]
-          _title = f"⚡ EMA {int(ema_fast)} × {int(ema_mid)} Cross (2H) — {_cat} · {len(_hits)}"
+          _title = f"⚡ EMA {int(ema_fast)} × {int(ema_mid)} Cross (2H) — {_cat} • {len(_hits)}"
           if len(_hits) > len(_shown):
             _title += f" (newest {len(_shown)} shown)"
           render_clickable_list_box(

@@ -1245,7 +1245,6 @@ TIMEFRAME_PERIODS = {
     "15m": "10d",
     "30m": "20d",
     "60m": "60d",
-    "1h": "60d",
     "2h": "60d",
     "4h": "180d",
     "1d": "1y",
@@ -1351,7 +1350,7 @@ def _frame_for_symbol(data, sym):
     return data
   except Exception:
     return None
-@st.cache_data(ttl=900, show_spinner=False)
+@st.cache_data(ttl=300, show_spinner=False)
 def scan_conviction_category(symbols_tuple):
   """Runs the clause over one watchlist. Returns (hits, n_evaluated).
   n_evaluated == 0 means the data feed failed, so callers must not treat
@@ -1992,6 +1991,10 @@ def run_scan_and_send(tg_token, tg_chat, ema_fast, ema_mid, ema_slow):
   Returns (ok, total_alerts, status_text). Shared by the manual button and
   the scheduled auto-scan timer."""
   triggered_messages = []
+  state = load_conviction_state()
+  prev_last = state.get("last", {})
+  prev_ema30 = state.get("ema30")  # None => first scan
+  active_ema30 = []
   # --- 30m 3-EMA cross triggers — Commodities / Forex, either side -------
   fx_comm_watchlist = [("Commodities", COMMODITIES), ("Forex", FOREX_PAIRS)]
   for cat_name, symbols in fx_comm_watchlist:
@@ -2004,14 +2007,16 @@ def run_scan_and_send(tg_token, tg_chat, ema_fast, ema_mid, ema_slow):
     )
     for h in hits:
       if h["bars_ago"] <= 1:
+        key = f"{h['display']}|{h['direction']}"
+        active_ema30.append(key)
+        if prev_ema30 is not None and key in prev_ema30:
+          continue  # already alerted on an earlier scan
         emoji = "🟢" if h["direction"] == "BUY" else "🔴"
         triggered_messages.append(
             f"{emoji} *[30m 3-EMA Cross]* *{h['display']}* → *{h['direction']}* "
             f"(EMA {int(ema_fast)}/{int(ema_mid)}/{int(ema_slow)}, {cat_name})"
         )
   # --- High-Conviction Shares: first scan = all, afterwards = new only ----
-  state = load_conviction_state()
-  prev_last = state.get("last", {})
   new_last = dict(prev_last)
   conviction_lines = []
   conviction_count = 0
@@ -2040,13 +2045,13 @@ def run_scan_and_send(tg_token, tg_chat, ema_fast, ema_mid, ema_slow):
     message_sections.append("*⚡ 30m 3-EMA Cross — Commodities & Forex*\n" + "\n".join(triggered_messages))
   total_alerts = len(triggered_messages) + conviction_count
   if not message_sections:
-    save_conviction_state({"last": new_last})
+    save_conviction_state({"last": new_last, "ema30": active_ema30})
     return True, 0, "No new stocks added to the High-Conviction list since the last scan."
   combined_msg = "📢 *QuantFX Automated Triggers*\n\n" + "\n\n".join(message_sections)
   ok, m = send_telegram_alert_chunked(combined_msg, tg_token, tg_chat)
   if ok:
     # Only remember the list once Telegram accepted it, so a failed send is retried.
-    save_conviction_state({"last": new_last})
+    save_conviction_state({"last": new_last, "ema30": active_ema30})
   return ok, total_alerts, m
 with st.sidebar.expander("🔔 Telegram Alerts & Automated Triggers", expanded=False):
   tg_token = st.text_input("Bot Token", value=st.session_state.get("tg_token", ""), type="password")
@@ -2063,7 +2068,8 @@ with st.sidebar.expander("🔔 Telegram Alerts & Automated Triggers", expanded=F
   st.caption(
       "Auto scan sends: High-Conviction Shares (Nifty 500 / US 100 / Commodities / Forex) — "
       "the full list on the first scan, then only newly added stocks — "
-      "plus 30m 3-EMA cross alerts (BUY or SELL) for Commodities/Forex."
+      "plus 30m 3-EMA cross alerts (BUY or SELL) for Commodities/Forex. "
+      "Runs automatically every 5 minutes while the app is open."
   )
   if st.button("🚀 Run Auto Scan & Send", use_container_width=True):
     ok, total_alerts, status = run_scan_and_send(
@@ -2076,47 +2082,29 @@ with st.sidebar.expander("🔔 Telegram Alerts & Automated Triggers", expanded=F
     else:
       st.success(f"Dispatched {total_alerts} alert(s)!")
   if st.button("♻️ Reset alert memory (next scan sends full list)", use_container_width=True):
-    save_conviction_state({"last": {}})
+    save_conviction_state({"last": {}, "ema30": None})
     st.success("Cleared — the next scan will send every current match again.")
-  st.markdown("---")
-  st.markdown("**⏱️ Scheduled Auto-Scan**")
-  auto_send_enabled = st.checkbox(
-      "Enable automatic scanning", value=st.session_state.get("auto_send_enabled", False)
+AUTO_SCAN_MINUTES = 5
+if not AUTOREFRESH_AVAILABLE:
+  st.sidebar.warning(
+      "Auto-scan every 5 min needs the `streamlit-autorefresh` package. "
+      "Run `pip install streamlit-autorefresh` and restart the app."
   )
-  st.session_state["auto_send_enabled"] = auto_send_enabled
-  auto_interval_hours = st.radio(
-      "Scan & send every",
-      [1, 2, 4],
-      format_func=lambda h: f"{h} hr",
-      horizontal=True,
-      key="auto_interval_hours",
+elif not (tg_token and tg_chat):
+  st.sidebar.warning("Auto-scan is waiting for your Telegram Bot Token / Chat ID (open 🔔 Telegram Alerts above and save them).")
+else:
+  # Always on: scans immediately when the app opens (the first scan sends the
+  # full list), then every 5 minutes. Only newly added stocks are sent after that.
+  _refresh_count = st_autorefresh(interval=AUTO_SCAN_MINUTES * 60 * 1000, key="qfx_auto_refresh_timer")
+  if _refresh_count != st.session_state.get("_qfx_last_autorefresh_count", -1):
+    st.session_state["_qfx_last_autorefresh_count"] = _refresh_count
+    _ok, _n, _status = run_scan_and_send(tg_token, tg_chat, ema_fast, ema_mid, ema_slow)
+    st.session_state["_qfx_last_autorun_at"] = pd.Timestamp.now().strftime("%H:%M:%S")
+    st.session_state["_qfx_last_autorun_status"] = "✅ ok" if _ok else f"❌ {_status}"
+  st.sidebar.caption(
+      f"🟢 Auto-scan every {AUTO_SCAN_MINUTES} min · last run {st.session_state.get('_qfx_last_autorun_at', '—')} "
+      f"· {st.session_state.get('_qfx_last_autorun_status', '')}"
   )
-  if auto_send_enabled:
-    if not AUTOREFRESH_AVAILABLE:
-      st.warning(
-          "Scheduled auto-scan needs the `streamlit-autorefresh` package. "
-          "Install it with `pip install streamlit-autorefresh` and restart the app."
-      )
-    elif not (tg_token and tg_chat):
-      st.warning("Add and save your Bot Token / Chat ID above first.")
-    else:
-      interval_ms = int(auto_interval_hours) * 60 * 60 * 1000
-      refresh_count = st_autorefresh(interval=interval_ms, key="qfx_auto_refresh_timer")
-      last_count = st.session_state.get("_qfx_last_autorefresh_count", -1)
-      last_run_str = st.session_state.get("_qfx_last_autorun_at", "—")
-      st.caption(f"🟢 Active — next auto-scan in up to {auto_interval_hours}h. Last run: {last_run_str}")
-      # Runs once right after it is enabled / the page loads (that is the
-      # "first scan"), then on every timer tick. Only new stocks are sent.
-      if refresh_count != last_count:
-        st.session_state["_qfx_last_autorefresh_count"] = refresh_count
-        ok, total_alerts, status = run_scan_and_send(
-            tg_token, tg_chat, ema_fast, ema_mid, ema_slow
-        )
-        st.session_state["_qfx_last_autorun_at"] = pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S")
-        if not ok:
-          st.error(f"Scheduled send failed: {status}")
-  else:
-    st.caption("Auto-scan is off — use the button above to send on demand.")
 if st.sidebar.button("🔄 Refresh data", use_container_width=True):
   st.cache_data.clear()
   st.rerun()

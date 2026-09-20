@@ -1231,11 +1231,12 @@ def create_chart_figure(
   x_ha = list(range(n_ha))
   ha_dates = list(raw_df.index) if raw_df is not None and len(raw_df) == n_ha else []
   ha_tick_vals, ha_tick_texts = _date_ticks(ha_dates)
-  brick_pos = _brick_positions(ha_dates, renko_df, n_ha)
-  x_renko = list(brick_pos)
-  # bricks formed in one candle sit at different price levels, so they may be a full candle wide;
-  # when bricks are sparse (slow trend) make them wider so they stay visible
-  brick_w = float(min(max(0.8, 0.5 * n_ha / max(len(renko_df), 1)), 10.0))
+  brick_pos = _brick_positions(ha_dates, renko_df, n_ha)   # only used to keep the time window in sync
+  x_renko = list(range(len(renko_df)))
+  if "Date" in renko_df.columns and len(renko_df) > 0:
+    rk_tick_vals, rk_tick_texts = _date_ticks(list(renko_df["Date"]))
+  else:
+    rk_tick_vals, rk_tick_texts = [], []
   # Renko / RSI signal: Buy when EMA fast crosses above EMA mid (9 x 27), Sell when below.
   _rf = renko_df["EMA_FAST"].astype(float).values
   _rm = (renko_df["EMA_MID"] if "EMA_MID" in renko_df.columns else renko_df["EMA_SLOW"]).astype(float).values
@@ -1325,20 +1326,33 @@ def create_chart_figure(
     except Exception:
       pass
   # ---------------- Row 2: ATR Renko -------------------------------------
-  _r_open = renko_df["Open"].astype(float).values
-  _r_close = renko_df["Close"].astype(float).values
+  RK_UP, RK_DN = "#089981", "#F23645"          # TradingView Renko teal / red
+  _rc = renko_df["Close"].astype(float)
+  _bb_m, _bb_s = _rc.rolling(20, min_periods=5).mean(), _rc.rolling(20, min_periods=5).std()
+  fig.add_trace(go.Scatter(x=x_renko, y=_bb_m + 2 * _bb_s, mode="lines", hoverinfo="skip", showlegend=False,
+                           line=dict(color=RK_UP, width=1, dash="dash"), opacity=0.7), row=2, col=1)
+  fig.add_trace(go.Scatter(x=x_renko, y=_bb_m - 2 * _bb_s, mode="lines", hoverinfo="skip", showlegend=False,
+                           line=dict(color=RK_DN, width=1, dash="dash"), opacity=0.7), row=2, col=1)
+  # EMA ribbon: green while fast > mid, pink while fast < mid
+  _fa = renko_df["EMA_FAST"].astype(float)
+  _mi = (renko_df["EMA_MID"] if "EMA_MID" in renko_df.columns else renko_df["EMA_SLOW"]).astype(float)
+  _hi_g, _lo_p = _fa.where(_fa >= _mi, _mi), _fa.where(_fa < _mi, _mi)
+  for _base, _top, _fill in ((_mi, _hi_g, "rgba(130,170,140,0.45)"), (_lo_p, _mi, "rgba(200,140,140,0.45)")):
+    fig.add_trace(go.Scatter(x=x_renko, y=_base, mode="lines", line=dict(width=0), hoverinfo="skip", showlegend=False), row=2, col=1)
+    fig.add_trace(go.Scatter(x=x_renko, y=_top, mode="lines", line=dict(width=0), fill="tonexty", fillcolor=_fill,
+                             hoverinfo="skip", showlegend=False), row=2, col=1)
   fig.add_trace(
-      go.Bar(
-          x=x_renko, y=np.abs(_r_close - _r_open), base=np.minimum(_r_open, _r_close), width=brick_w,
-          marker=dict(color=[COLOR_BULL if c >= o else COLOR_BEAR for o, c in zip(_r_open, _r_close)],
-                      line=dict(width=0)),
-          name="ATR Renko", showlegend=False, hoverinfo="skip",
+      go.Candlestick(
+          x=x_renko, open=renko_df["Open"], high=renko_df["High"], low=renko_df["Low"], close=renko_df["Close"],
+          increasing_line_color=RK_UP, decreasing_line_color=RK_DN,
+          increasing_fillcolor=RK_UP, decreasing_fillcolor=RK_DN,
+          name="ATR Renko", showlegend=False,
       ), row=2, col=1,
   )
-  fig.add_trace(go.Scatter(x=x_renko, y=renko_df["EMA_FAST"], line=dict(color=COLOR_MA_FAST, width=1.5), name=f"EMA {ema_fast}", showlegend=False), row=2, col=1)
+  fig.add_trace(go.Scatter(x=x_renko, y=renko_df["EMA_FAST"], line=dict(color="#FFFFFF", width=1.3), name=f"EMA {ema_fast}", showlegend=False), row=2, col=1)
   fig.add_trace(go.Scatter(x=x_renko, y=renko_df["EMA_SLOW"], line=dict(color=COLOR_MA_SLOW, width=1.5), name=f"EMA {ema_slow}", showlegend=False), row=2, col=1)
   if ema_mid is not None and "EMA_MID" in renko_df.columns:
-    fig.add_trace(go.Scatter(x=x_renko, y=renko_df["EMA_MID"], line=dict(color="#FFFFFF", width=1.3), name=f"EMA {ema_mid}", showlegend=False), row=2, col=1)
+    fig.add_trace(go.Scatter(x=x_renko, y=renko_df["EMA_MID"], line=dict(color="#F0456F", width=1.2), name=f"EMA {ema_mid}", showlegend=False), row=2, col=1)
   _rk_pad = float(np.nanmax(renko_df["High"].values) - np.nanmin(renko_df["Low"].values)) * 0.02 if len(renko_df) else 0.0
   add_pill_signals(fig, x_renko, master_signal, renko_df["Low"].values - _rk_pad, renko_df["High"].values + _rk_pad, row=2)
   struct_style = {
@@ -1356,12 +1370,13 @@ def create_chart_figure(
       i = len(renko_df) - 1 - last_struct_event["bars_ago"]
       origin_idx = renko_df["StructureOriginIdx"].iloc[i]
       span_start = int(origin_idx) if pd.notna(origin_idx) else max(i - 6, 0)
-      fig.add_shape(type="line", x0=x_renko[span_start], x1=x_renko[-1], y0=s_level, y1=s_level,
+      fig.add_shape(type="line", x0=span_start, x1=len(renko_df) - 1, y0=s_level, y1=s_level,
                     line=dict(color=color, width=1.5, dash="dash"), opacity=0.6, row=2, col=1)
-      fig.add_annotation(x=x_renko[i], y=s_level, text=label, showarrow=False,
-                         font=dict(color="#FFFFFF", size=10), bgcolor="#1E222D", bordercolor=color,
-                         borderwidth=1, row=2, col=1,
-                         yshift=14 if s_type in ("BOS_DEMAND", "CHOCH_DEMAND") else -14)
+      _seq = renko_df["StructureSeq"].iloc[i]
+      fig.add_annotation(x=i, y=s_level, text=f"{STRUCT_NAMES.get(s_type, label)}" + (f" ({int(_seq)})" if pd.notna(_seq) else ""),
+                         showarrow=False, font=dict(color="#FFFFFF", size=10), bgcolor="#4A4F5C", bordercolor="#4A4F5C",
+                         borderwidth=1, borderpad=4, opacity=0.95, row=2, col=1,
+                         yshift=16 if s_type in ("BOS_DEMAND", "CHOCH_DEMAND") else -16)
   # ---------------- Row 3: independent MACD (TradingView style) ---------
   hist = macd_df["Hist"].values.astype(float)
   prev_hist = np.r_[np.nan, hist[:-1]]
@@ -1394,6 +1409,9 @@ def create_chart_figure(
   fig.update_yaxes(range=[0, 100], row=4, col=1)
   add_buy_sell_markers(fig, x_renko, master_signal, renko_df["RSI"], renko_df["RSI"], row=4, col=1, absolute_offset=12.0)
   # ---------------- Zoom-sync map (Renko bricks <-> real candles) --------
+  if len(brick_pos) > 1 and n_ha > 1:
+    fig.update_layout(meta=dict(qfx_sync=dict(
+        brick_pos=[round(float(v), 6) for v in brick_pos], n_candles=int(n_ha))))
   # ---------------- Watermark + layout -----------------------------------
   ticker_label = (symbol_label or display or "").strip()
   if live_price is not None:
@@ -1418,14 +1436,14 @@ def create_chart_figure(
       margin=dict(l=48, r=70, t=40, b=10), bargap=0.45,
   )
   fig.update_xaxes(rangeslider_visible=False, showgrid=False, tickfont=dict(size=10))
-  # All four panels share ONE time axis (Renko bricks are placed on the candle they formed on),
-  # so zoom / pan / reset move every panel together and the panels line up under Heikin Ashi.
-  for _r in (1, 2, 3):
-    fig.update_xaxes(showticklabels=False, row=_r, col=1)
-  for _r in (2, 3, 4):
-    fig.update_xaxes(matches="x", row=_r, col=1)
-  fig.update_xaxes(showticklabels=bool(ha_tick_vals), tickvals=ha_tick_vals or None,
-                   ticktext=ha_tick_texts or None, row=4, col=1)
+  # Heikin Ashi (x) + MACD (x3) use the real-candle axis; Renko (x2) + RSI (x4) use evenly spaced bricks.
+  # qfxLinkAxes() (render_zoomable_chart) keeps both groups on the same time window while zooming / panning.
+  fig.update_xaxes(showticklabels=False, row=1, col=1)
+  fig.update_xaxes(showticklabels=False, row=2, col=1)
+  fig.update_xaxes(matches="x", row=3, col=1, showticklabels=bool(ha_tick_vals),
+                   tickvals=ha_tick_vals or None, ticktext=ha_tick_texts or None)
+  fig.update_xaxes(matches="x2", row=4, col=1, showticklabels=bool(rk_tick_vals),
+                   tickvals=rk_tick_vals or None, ticktext=rk_tick_texts or None)
   for r in range(1, 4):
     fig.update_yaxes(gridcolor="#2A2F3A", side="right", row=r, col=1, tickformat="f",
                      hoverformat="f", tickfont=dict(size=10), automargin=True,
@@ -2080,4 +2098,3 @@ with _auto_status_slot:
           f"🟢 In-app auto-scan every {int(auto_scan_minutes)} min • last run {st.session_state.get('_qfx_last_autorun_at', '—')} "
           f"• {st.session_state.get('_qfx_last_autorun_status', '')}"
       )
-

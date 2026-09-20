@@ -58,13 +58,6 @@ v10 additions:
 - Panel order is now Heikin Ashi -> ATR Renko -> MACD -> RSI.
 - Heikin Ashi: EMA colour fill removed; candles use the same colours as the Renko bricks.
 - All four panels zoom / pan / reset together (Renko bricks are mapped onto the real-candle timeline).
-v11 additions:
-- Drag = pan (left / right / up / down) and every panel moves with it; zoom in / out (wheel, box, axis drag,
-  modebar) and Reset also act on all four panels together. Vertical moves / zooms are copied as the same
-  fraction of each panel's own range (price, MACD and RSI have different scales).
-- Mobile: 1 finger pans, 2 fingers pinch-zoom, all panels follow; "Touch: pan chart / scroll page" button
-  lets you scroll the page when the chart fills the screen; "Reset view" button under the chart.
-- Right-side stock rows are forced to start at the left edge of each box.
 """
 import json
 import os
@@ -166,27 +159,6 @@ f"""
        font-size: 12px; text-align: left; margin: 0;
        white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
    }}
-    /* Right-side stock rows: label always starts at the LEFT edge (never centred) */
-    div[class*="st-key-qfxrow_"] div[data-testid="stButton"],
-    div[class*="st-key-qfxrow_"] div[data-testid="stElementContainer"] {{
-        width: 100% !important;
-    }}
-    div[class*="st-key-qfxrow_"] button {{
-        display: flex !important;
-        justify-content: flex-start !important;
-        align-items: center !important;
-        text-align: left !important;
-        width: 100% !important;
-    }}
-    div[class*="st-key-qfxrow_"] button > div,
-    div[class*="st-key-qfxrow_"] button [data-testid="stMarkdownContainer"],
-    div[class*="st-key-qfxrow_"] button p {{
-        display: block !important;
-        width: 100% !important;
-        margin: 0 !important;
-        text-align: left !important;
-        justify-content: flex-start !important;
-    }}
    div[class*="st-key-qfxtop_"] button {{
        width: 100%; min-height: 0; padding: 4px 8px;
        background-color: {COLOR_PANEL_BG}; color: {COLOR_TEXT_MAIN};
@@ -1583,6 +1555,8 @@ yanchor="bottom",
 row=row,
 col=col,
 )
+COLOR_HA_UP = "#26A69A"
+COLOR_HA_DOWN = "#F0456F"
 COLOR_HA_UP = COLOR_BULL    # Heikin Ashi candles use the Renko brick colours
 COLOR_HA_DOWN = COLOR_BEAR
 COLOR_PILL_BUY = "#4E9E90"
@@ -1655,12 +1629,15 @@ renko_df, ha_df, brick_size, display, ema_fast, ema_slow, ema_mid=None,
 live_price=None, live_chg=None, symbol_label=None, raw_df=None, macd_params=None,
 ):
 """Rows: 1) real Heikin Ashi (built from the actual candles)
-          2) ATR Renko
-          3) MACD (independent, from the actual candles)
-          4) RSI (Renko bricks)
- Rows 1+3 share the real-candle time axis; rows 2+4 share the brick axis.
- Both groups are kept on the same time window when zooming / panning (see the
- zoom-sync map below and qfxLinkAxes in render_zoomable_chart)."""
+           2) MACD (independent, from the actual candles)
+           3) ATR Renko          4) RSI (Renko bricks)
+  Rows 1+2 share one time axis; rows 3+4 share the brick axis."""
+           2) ATR Renko
+           3) MACD (independent, from the actual candles)
+           4) RSI (Renko bricks)
+  Rows 1+3 share the real-candle time axis; rows 2+4 share the brick axis.
+  Both groups are kept on the same time window when zooming / panning (see the
+  zoom-sync map below and qfxLinkAxes in render_zoomable_chart)."""
 macd_params = macd_params or {}
 n_ha = len(ha_df)
 x_ha = list(range(n_ha))
@@ -1689,13 +1666,17 @@ signal=macd_params.get("signal", 9), smooth=macd_params.get("smooth", 3),
 )
 fig = make_subplots(
 rows=4, cols=1, shared_xaxes=False,
-row_heights=[0.34, 0.30, 0.16, 0.20],
+      row_heights=[0.34, 0.16, 0.30, 0.20],
+      row_heights=[0.34, 0.30, 0.16, 0.20],
 vertical_spacing=0.035,
 subplot_titles=(
-f"{display} — Heikin Ashi (EMA {ema_fast}/{ema_mid or ema_slow})",
+          f"{display} — Heikin Ashi (EMA {ema_fast}/{ema_mid or ema_slow} ribbon)",
+          f"MACD {macd_params.get('fast', 12)}/{macd_params.get('slow', 26)}/{macd_params.get('signal', 9)} — independent Buy/Sell (MACD × Signal)",
+          f"{display} — Heikin Ashi (EMA {ema_fast}/{ema_mid or ema_slow})",
 f"{display} — ATR Renko (Buy/Sell = EMA {ema_fast} × {ema_mid or ema_slow} cross)",
-f"MACD {macd_params.get('fast', 12)}/{macd_params.get('slow', 26)}/{macd_params.get('signal', 9)} — independent Buy/Sell (MACD × Signal)",
-f"RSI (Buy/Sell = Renko EMA {ema_fast} × {ema_mid or ema_slow} cross • Green 30 / Red 70 levels)",
+          f"RSI (Buy/Sell = Renko EMA {ema_fast} × {ema_mid or ema_slow} cross · Green 30 / Red 70 levels)",
+          f"MACD {macd_params.get('fast', 12)}/{macd_params.get('slow', 26)}/{macd_params.get('signal', 9)} — independent Buy/Sell (MACD × Signal)",
+          f"RSI (Buy/Sell = Renko EMA {ema_fast} × {ema_mid or ema_slow} cross • Green 30 / Red 70 levels)",
 ),
 )
 # ---------------- Row 1: real Heikin Ashi -----------------------------
@@ -1710,8 +1691,15 @@ fig.add_trace(go.Scatter(x=x_ha, y=bb_mid + 2 * bb_std, mode="lines", hoverinfo=
 line=dict(color=COLOR_HA_UP, width=1, dash="dash"), opacity=0.7, showlegend=False), row=1, col=1)
 fig.add_trace(go.Scatter(x=x_ha, y=bb_mid - 2 * bb_std, mode="lines", hoverinfo="skip",
 line=dict(color="#FF5252", width=1, dash="dash"), opacity=0.7, showlegend=False), row=1, col=1)
-# (EMA ribbon colour fill removed - only the three EMA lines below are drawn)
+  # EMA ribbon (fast vs mid), coloured by which one is on top
+  # (EMA ribbon colour fill removed - only the three EMA lines below are drawn)
 f_arr, m_arr = fast_s.values, mid_s.values
+  bull_mask = f_arr >= m_arr
+  for mask, color in ((bull_mask, "rgba(130,165,145,0.45)"), (~bull_mask, "rgba(205,140,140,0.45)")):
+    fig.add_trace(go.Scatter(x=x_ha, y=np.where(mask, m_arr, np.nan), mode="lines", hoverinfo="skip",
+                             line=dict(width=0), showlegend=False), row=1, col=1)
+    fig.add_trace(go.Scatter(x=x_ha, y=np.where(mask, f_arr, np.nan), mode="lines", hoverinfo="skip",
+                             line=dict(width=0), fill="tonexty", fillcolor=color, showlegend=False), row=1, col=1)
 fig.add_trace(
 go.Candlestick(
 x=x_ha, open=ha_df["Open"], high=ha_df["High"], low=ha_df["Low"], close=ha_df["Close"],
@@ -1759,21 +1747,51 @@ borderwidth=1, borderpad=4, opacity=0.95, yshift=-16 if is_up else 16, row=1, co
 )
 except Exception:
 pass
-# ---------------- Row 2: ATR Renko -------------------------------------
+  # ---------------- Row 2: independent MACD (TradingView style) ---------
+  hist = macd_df["Hist"].values.astype(float)
+  prev_hist = np.r_[np.nan, hist[:-1]]
+  hist_colors = []
+  for h, p in zip(hist, prev_hist):
+    rising = (not np.isfinite(p)) or h >= p
+    if h >= 0:
+      hist_colors.append(COLOR_HIST_POS_UP if rising else COLOR_HIST_POS_DOWN)
+    else:
+      hist_colors.append(COLOR_HIST_NEG_UP if rising else COLOR_HIST_NEG_DOWN)
+  fig.add_trace(go.Bar(x=x_ha, y=hist, marker_color=hist_colors, marker_line_color=COLOR_BG_DARK, marker_line_width=1,
+                       name="Histogram", showlegend=False), row=2, col=1)
+  fig.add_trace(go.Scatter(x=x_ha, y=macd_df["MACD"], line=dict(color=COLOR_MACD_LINE, width=1.3),
+                           name="MACD", showlegend=False), row=2, col=1)
+  fig.add_trace(go.Scatter(x=x_ha, y=macd_df["Signal"], line=dict(color=COLOR_SIGNAL_LINE, width=1.3),
+                           name="Signal", showlegend=False), row=2, col=1)
+  fig.add_hline(y=0, line=dict(color="#787B86", width=1, dash="dot"), row=2, col=1)
+  m_vals = macd_df["MACD"].values.astype(float)
+  s_vals = macd_df["Signal"].values.astype(float)
+  finite = np.concatenate([m_vals[np.isfinite(m_vals)], s_vals[np.isfinite(s_vals)], hist[np.isfinite(hist)]])
+  m_pad = (finite.max() - finite.min()) * 0.10 if finite.size else 0.001
+  lo_line = np.minimum(np.minimum(m_vals, s_vals), hist)
+  hi_line = np.maximum(np.maximum(m_vals, s_vals), hist)
+  add_pill_signals(fig, x_ha, macd_df["Cross"].values, lo_line - m_pad, hi_line + m_pad, row=2)
+  # ---------------- Row 3: ATR Renko -------------------------------------
+  # ---------------- Row 2: ATR Renko -------------------------------------
 fig.add_trace(
 go.Candlestick(
 x=x_renko, open=renko_df["Open"], high=renko_df["High"], low=renko_df["Low"], close=renko_df["Close"],
 increasing_line_color=COLOR_BULL, decreasing_line_color=COLOR_BEAR,
 increasing_fillcolor=COLOR_BULL, decreasing_fillcolor=COLOR_BEAR,
 name="ATR Renko", showlegend=False,
-), row=2, col=1,
+      ), row=3, col=1,
+      ), row=2, col=1,
 )
-fig.add_trace(go.Scatter(x=x_renko, y=renko_df["EMA_FAST"], line=dict(color=COLOR_MA_FAST, width=1.5), name=f"EMA {ema_fast}", showlegend=False), row=2, col=1)
-fig.add_trace(go.Scatter(x=x_renko, y=renko_df["EMA_SLOW"], line=dict(color=COLOR_MA_SLOW, width=1.5), name=f"EMA {ema_slow}", showlegend=False), row=2, col=1)
+  fig.add_trace(go.Scatter(x=x_renko, y=renko_df["EMA_FAST"], line=dict(color=COLOR_MA_FAST, width=1.5), name=f"EMA {ema_fast}", showlegend=False), row=3, col=1)
+  fig.add_trace(go.Scatter(x=x_renko, y=renko_df["EMA_SLOW"], line=dict(color=COLOR_MA_SLOW, width=1.5), name=f"EMA {ema_slow}", showlegend=False), row=3, col=1)
+  fig.add_trace(go.Scatter(x=x_renko, y=renko_df["EMA_FAST"], line=dict(color=COLOR_MA_FAST, width=1.5), name=f"EMA {ema_fast}", showlegend=False), row=2, col=1)
+  fig.add_trace(go.Scatter(x=x_renko, y=renko_df["EMA_SLOW"], line=dict(color=COLOR_MA_SLOW, width=1.5), name=f"EMA {ema_slow}", showlegend=False), row=2, col=1)
 if ema_mid is not None and "EMA_MID" in renko_df.columns:
-fig.add_trace(go.Scatter(x=x_renko, y=renko_df["EMA_MID"], line=dict(color="#FFFFFF", width=1.3), name=f"EMA {ema_mid}", showlegend=False), row=2, col=1)
+    fig.add_trace(go.Scatter(x=x_renko, y=renko_df["EMA_MID"], line=dict(color="#FFFFFF", width=1.3), name=f"EMA {ema_mid}", showlegend=False), row=3, col=1)
+    fig.add_trace(go.Scatter(x=x_renko, y=renko_df["EMA_MID"], line=dict(color="#FFFFFF", width=1.3), name=f"EMA {ema_mid}", showlegend=False), row=2, col=1)
 _rk_pad = float(np.nanmax(renko_df["High"].values) - np.nanmin(renko_df["Low"].values)) * 0.02 if len(renko_df) else 0.0
-add_pill_signals(fig, x_renko, master_signal, renko_df["Low"].values - _rk_pad, renko_df["High"].values + _rk_pad, row=2)
+  add_pill_signals(fig, x_renko, master_signal, renko_df["Low"].values - _rk_pad, renko_df["High"].values + _rk_pad, row=3)
+  add_pill_signals(fig, x_renko, master_signal, renko_df["Low"].values - _rk_pad, renko_df["High"].values + _rk_pad, row=2)
 struct_style = {
 "BOS_DEMAND": (COLOR_BOS_DEMAND, "B-S"),
 "BOS_SUPPLY": (COLOR_BOS_SUPPLY, "B-D"),
@@ -1790,35 +1808,37 @@ i = len(renko_df) - 1 - last_struct_event["bars_ago"]
 origin_idx = renko_df["StructureOriginIdx"].iloc[i]
 span_start = int(origin_idx) if pd.notna(origin_idx) else max(i - 6, 0)
 fig.add_shape(type="line", x0=span_start, x1=len(renko_df) - 1, y0=s_level, y1=s_level,
-line=dict(color=color, width=1.5, dash="dash"), opacity=0.6, row=2, col=1)
+                    line=dict(color=color, width=1.5, dash="dash"), opacity=0.6, row=3, col=1)
+                    line=dict(color=color, width=1.5, dash="dash"), opacity=0.6, row=2, col=1)
 fig.add_annotation(x=i, y=s_level, text=label, showarrow=False,
 font=dict(color="#FFFFFF", size=10), bgcolor="#1E222D", bordercolor=color,
-borderwidth=1, row=2, col=1,
+                         borderwidth=1, row=3, col=1,
+                         borderwidth=1, row=2, col=1,
 yshift=14 if s_type in ("BOS_DEMAND", "CHOCH_DEMAND") else -14)
-# ---------------- Row 3: independent MACD (TradingView style) ---------
-hist = macd_df["Hist"].values.astype(float)
-prev_hist = np.r_[np.nan, hist[:-1]]
-hist_colors = []
-for h, p in zip(hist, prev_hist):
-rising = (not np.isfinite(p)) or h >= p
-if h >= 0:
-hist_colors.append(COLOR_HIST_POS_UP if rising else COLOR_HIST_POS_DOWN)
-else:
-hist_colors.append(COLOR_HIST_NEG_UP if rising else COLOR_HIST_NEG_DOWN)
-fig.add_trace(go.Bar(x=x_ha, y=hist, marker_color=hist_colors, marker_line_color=COLOR_BG_DARK, marker_line_width=1,
-name="Histogram", showlegend=False), row=3, col=1)
-fig.add_trace(go.Scatter(x=x_ha, y=macd_df["MACD"], line=dict(color=COLOR_MACD_LINE, width=1.3),
-name="MACD", showlegend=False), row=3, col=1)
-fig.add_trace(go.Scatter(x=x_ha, y=macd_df["Signal"], line=dict(color=COLOR_SIGNAL_LINE, width=1.3),
-name="Signal", showlegend=False), row=3, col=1)
-fig.add_hline(y=0, line=dict(color="#787B86", width=1, dash="dot"), row=3, col=1)
-m_vals = macd_df["MACD"].values.astype(float)
-s_vals = macd_df["Signal"].values.astype(float)
-finite = np.concatenate([m_vals[np.isfinite(m_vals)], s_vals[np.isfinite(s_vals)], hist[np.isfinite(hist)]])
-m_pad = (finite.max() - finite.min()) * 0.10 if finite.size else 0.001
-lo_line = np.minimum(np.minimum(m_vals, s_vals), hist)
-hi_line = np.maximum(np.maximum(m_vals, s_vals), hist)
-add_pill_signals(fig, x_ha, macd_df["Cross"].values, lo_line - m_pad, hi_line + m_pad, row=3)
+  # ---------------- Row 3: independent MACD (TradingView style) ---------
+  hist = macd_df["Hist"].values.astype(float)
+  prev_hist = np.r_[np.nan, hist[:-1]]
+  hist_colors = []
+  for h, p in zip(hist, prev_hist):
+    rising = (not np.isfinite(p)) or h >= p
+    if h >= 0:
+      hist_colors.append(COLOR_HIST_POS_UP if rising else COLOR_HIST_POS_DOWN)
+    else:
+      hist_colors.append(COLOR_HIST_NEG_UP if rising else COLOR_HIST_NEG_DOWN)
+  fig.add_trace(go.Bar(x=x_ha, y=hist, marker_color=hist_colors, marker_line_color=COLOR_BG_DARK, marker_line_width=1,
+                       name="Histogram", showlegend=False), row=3, col=1)
+  fig.add_trace(go.Scatter(x=x_ha, y=macd_df["MACD"], line=dict(color=COLOR_MACD_LINE, width=1.3),
+                           name="MACD", showlegend=False), row=3, col=1)
+  fig.add_trace(go.Scatter(x=x_ha, y=macd_df["Signal"], line=dict(color=COLOR_SIGNAL_LINE, width=1.3),
+                           name="Signal", showlegend=False), row=3, col=1)
+  fig.add_hline(y=0, line=dict(color="#787B86", width=1, dash="dot"), row=3, col=1)
+  m_vals = macd_df["MACD"].values.astype(float)
+  s_vals = macd_df["Signal"].values.astype(float)
+  finite = np.concatenate([m_vals[np.isfinite(m_vals)], s_vals[np.isfinite(s_vals)], hist[np.isfinite(hist)]])
+  m_pad = (finite.max() - finite.min()) * 0.10 if finite.size else 0.001
+  lo_line = np.minimum(np.minimum(m_vals, s_vals), hist)
+  hi_line = np.maximum(np.maximum(m_vals, s_vals), hist)
+  add_pill_signals(fig, x_ha, macd_df["Cross"].values, lo_line - m_pad, hi_line + m_pad, row=3)
 # ---------------- Row 4: RSI (Renko bricks) ----------------------------
 rsi_vals = renko_df["RSI"].values
 fig.add_trace(go.Scatter(x=x_renko, y=rsi_vals, line=dict(color="#00D4FF", width=1.8), name="RSI", showlegend=False), row=4, col=1)
@@ -1826,31 +1846,31 @@ fig.add_hline(y=70, line=dict(color=COLOR_RED, width=1, dash="dash"), row=4, col
 fig.add_hline(y=30, line=dict(color=COLOR_GREEN, width=1, dash="dash"), row=4, col=1)
 fig.update_yaxes(range=[0, 100], row=4, col=1)
 add_buy_sell_markers(fig, x_renko, master_signal, renko_df["RSI"], renko_df["RSI"], row=4, col=1, absolute_offset=12.0)
-# ---------------- Zoom-sync map (Renko bricks <-> real candles) --------
-# Bricks are not time based, so bricks and candles cannot share one x axis.
-# Every brick is given a position on the real-candle axis (the candle it formed
-# on; several bricks from one candle are spread inside that candle's slot).
-# The table travels with the figure (layout.meta) and render_zoomable_chart uses
-# it to keep every panel on the same time window while zooming / panning.
-n_rk = len(renko_df)
-brick_pos = None
-if n_ha > 1 and n_rk > 1:
-try:
-if ha_dates and "Date" in renko_df.columns:
-c_dates = pd.DatetimeIndex(ha_dates)
-if c_dates.is_monotonic_increasing:
-c_idx = np.clip(c_dates.searchsorted(pd.DatetimeIndex(renko_df["Date"]), side="right") - 1, 0, n_ha - 1)
-c_ser = pd.Series(c_idx)
-k_in = c_ser.groupby(c_ser).cumcount().values
-m_in = c_ser.groupby(c_ser).transform("size").values
-brick_pos = c_idx - 0.5 + (k_in + 0.5) / m_in
-except Exception:
-brick_pos = None
-if brick_pos is None:
-brick_pos = np.linspace(0, n_ha - 1, n_rk)   # no usable dates: sync by relative position
-if np.all(np.diff(brick_pos) > 0):
-fig.update_layout(meta=dict(qfx_sync=dict(
-brick_pos=[round(float(v), 6) for v in brick_pos], n_candles=int(n_ha))))
+  # ---------------- Zoom-sync map (Renko bricks <-> real candles) --------
+  # Bricks are not time based, so bricks and candles cannot share one x axis.
+  # Every brick is given a position on the real-candle axis (the candle it formed
+  # on; several bricks from one candle are spread inside that candle's slot).
+  # The table travels with the figure (layout.meta) and render_zoomable_chart uses
+  # it to keep every panel on the same time window while zooming / panning.
+  n_rk = len(renko_df)
+  brick_pos = None
+  if n_ha > 1 and n_rk > 1:
+    try:
+      if ha_dates and "Date" in renko_df.columns:
+        c_dates = pd.DatetimeIndex(ha_dates)
+        if c_dates.is_monotonic_increasing:
+          c_idx = np.clip(c_dates.searchsorted(pd.DatetimeIndex(renko_df["Date"]), side="right") - 1, 0, n_ha - 1)
+          c_ser = pd.Series(c_idx)
+          k_in = c_ser.groupby(c_ser).cumcount().values
+          m_in = c_ser.groupby(c_ser).transform("size").values
+          brick_pos = c_idx - 0.5 + (k_in + 0.5) / m_in
+    except Exception:
+      brick_pos = None
+    if brick_pos is None:
+      brick_pos = np.linspace(0, n_ha - 1, n_rk)   # no usable dates: sync by relative position
+    if np.all(np.diff(brick_pos) > 0):
+      fig.update_layout(meta=dict(qfx_sync=dict(
+          brick_pos=[round(float(v), 6) for v in brick_pos], n_candles=int(n_ha))))
 # ---------------- Watermark + layout -----------------------------------
 ticker_label = (symbol_label or display or "").strip()
 if live_price is not None:
@@ -1873,17 +1893,20 @@ fig.update_layout(
 height=950, paper_bgcolor=COLOR_BG_DARK, plot_bgcolor=COLOR_BG_DARK,
 font=dict(color=COLOR_TEXT_MUTED, size=10), showlegend=False,
 margin=dict(l=48, r=70, t=40, b=10), bargap=0.45,
-      dragmode="pan",
 )
 fig.update_xaxes(rangeslider_visible=False, showgrid=False, tickfont=dict(size=10))
-# Heikin Ashi (x) + MACD (x3) share the real-candle axis; Renko (x2) + RSI (x4) share
-# the brick axis. qfxLinkAxes() (render_zoomable_chart) locks the two groups to the
-# same time window, so all four panels zoom / pan / reset together.
+  # rows 1+2 zoom together (real candles); rows 3+4 zoom together (bricks)
+  # Heikin Ashi (x) + MACD (x3) share the real-candle axis; Renko (x2) + RSI (x4) share
+  # the brick axis. qfxLinkAxes() (render_zoomable_chart) locks the two groups to the
+  # same time window, so all four panels zoom / pan / reset together.
 fig.update_xaxes(showticklabels=False, row=1, col=1)
-fig.update_xaxes(showticklabels=False, row=2, col=1)
-fig.update_xaxes(matches="x", row=3, col=1, showticklabels=bool(ha_tick_vals),
+  fig.update_xaxes(matches="x", row=2, col=1, showticklabels=bool(ha_tick_vals),
+  fig.update_xaxes(showticklabels=False, row=2, col=1)
+  fig.update_xaxes(matches="x", row=3, col=1, showticklabels=bool(ha_tick_vals),
 tickvals=ha_tick_vals or None, ticktext=ha_tick_texts or None)
-fig.update_xaxes(matches="x2", row=4, col=1, showticklabels=bool(rk_tick_vals),
+  fig.update_xaxes(showticklabels=False, row=3, col=1)
+  fig.update_xaxes(matches="x3", row=4, col=1, showticklabels=bool(rk_tick_vals),
+  fig.update_xaxes(matches="x2", row=4, col=1, showticklabels=bool(rk_tick_vals),
 tickvals=rk_tick_vals or None, ticktext=rk_tick_texts or None)
 for r in range(1, 4):
 fig.update_yaxes(gridcolor="#2A2F3A", side="right", row=r, col=1, tickformat="f",
@@ -1911,144 +1934,49 @@ QFX_SYNC_JS = r"""
 // Keeps the Heikin Ashi + MACD axes (real candles) and the Renko + RSI axes (bricks)
 // on the same time window while zooming, panning and resetting. The brick -> candle
 // position table comes from layout.meta.qfx_sync (built in create_chart_figure).
-// ---------------------------------------------------------------------------------
-// qfxLinkAxes - ONE controller that keeps every panel (Heikin Ashi, Renko, MACD, RSI)
-// moving together:
-//   * pan left / right / up / down            -> all four panels move
-//   * zoom in / out (wheel, box, axis drag, +/- buttons, touch pinch) -> all four zoom
-//   * reset / autoscale                       -> all four reset
-// X axis: Heikin Ashi + MACD use the real-candle axis, Renko + RSI use the brick axis.
-//         The brick -> candle table in layout.meta.qfx_sync converts between the two.
-// Y axis: every panel has its own scale (price / MACD / RSI), so a vertical move or a
-//         vertical zoom is copied as the same FRACTION of each panel's starting range.
-// Touch:  1 finger = pan, 2 fingers = pinch zoom. Plotly's own touch drag is switched
-//         off (capture-phase listeners) so it cannot fight with this handler.
-// ---------------------------------------------------------------------------------
 function qfxLinkAxes(el, spec) {
-  var PANELS = [
-    {xa: "xaxis",  ya: "yaxis",  g: "c"},   // Heikin Ashi (real candles)
-    {xa: "xaxis2", ya: "yaxis2", g: "b"},   // ATR Renko   (bricks)
-    {xa: "xaxis3", ya: "yaxis3", g: "c"},   // MACD        (real candles)
-    {xa: "xaxis4", ya: "yaxis4", g: "b"}    // RSI         (bricks)
-  ];
-  var api = {reset: function () {}, toggleTouch: function () { return "chart"; }};
-  var L0 = el._fullLayout;
-  if (!L0 || !L0.yaxis4 || !L0.xaxis4) { return api; }
-  // ---- brick <-> candle x mapping --------------------------------------------------
- var meta = spec && spec.layout && spec.layout.meta;
- var sync = meta && meta.qfx_sync;
+  var meta = spec && spec.layout && spec.layout.meta;
+  var sync = meta && meta.qfx_sync;
   if (!sync || !sync.brick_pos || sync.brick_pos.length < 2) { return; }
   var P = sync.brick_pos, nB = P.length;
   var CANDLE = ["xaxis", "xaxis3"];   // Heikin Ashi + MACD
   var BRICK = ["xaxis2", "xaxis4"];   // Renko + RSI
   var perCandle = (nB - 1) / Math.max(P[nB - 1] - P[0], 1e-9);   // bricks per candle (edge extrapolation)
-  var P = (sync && sync.brick_pos && sync.brick_pos.length > 1) ? sync.brick_pos : null;
-  var nB = P ? P.length : 0;
-  var perCandle = P ? (nB - 1) / Math.max(P[nB - 1] - P[0], 1e-9) : 1;   // bricks per candle
- function candleToBrick(x) {
-    if (!P) { return x; }
-   if (x <= P[0]) { return (x - P[0]) * perCandle; }
-   if (x >= P[nB - 1]) { return (nB - 1) + (x - P[nB - 1]) * perCandle; }
-   var lo = 0, hi = nB - 1;
-   while (hi - lo > 1) { var mid = (lo + hi) >> 1; if (P[mid] <= x) { lo = mid; } else { hi = mid; } }
-   return lo + (x - P[lo]) / (P[lo + 1] - P[lo]);
- }
- function brickToCandle(b) {
-    if (!P) { return b; }
-   if (b <= 0) { return P[0] + b / perCandle; }
-   if (b >= nB - 1) { return P[nB - 1] + (b - (nB - 1)) / perCandle; }
-   var j = Math.floor(b);
-   return P[j] + (b - j) * (P[j + 1] - P[j]);
- }
+  function candleToBrick(x) {
+    if (x <= P[0]) { return (x - P[0]) * perCandle; }
+    if (x >= P[nB - 1]) { return (nB - 1) + (x - P[nB - 1]) * perCandle; }
+    var lo = 0, hi = nB - 1;
+    while (hi - lo > 1) { var mid = (lo + hi) >> 1; if (P[mid] <= x) { lo = mid; } else { hi = mid; } }
+    return lo + (x - P[lo]) / (P[lo + 1] - P[lo]);
+  }
+  function brickToCandle(b) {
+    if (b <= 0) { return P[0] + b / perCandle; }
+    if (b >= nB - 1) { return P[nB - 1] + (b - (nB - 1)) / perCandle; }
+    var j = Math.floor(b);
+    return P[j] + (b - j) * (P[j + 1] - P[j]);
+  }
   function touched(ev, names) {
     return Object.keys(ev).some(function (k) {
       return names.some(function (n) { return k.indexOf(n + ".range") === 0 || k.indexOf(n + ".autorange") === 0; });
     });
-  // ---- starting y ranges (used to copy vertical moves / zooms between panels) -------
-  var Y0 = {};
-  PANELS.forEach(function (p) {
-    var r = el._fullLayout[p.ya].range;
-    Y0[p.ya] = [r[0], r[1]];
-  });
-  function yFrom(fromIdx, toIdx, r) {
-    var s = Y0[PANELS[fromIdx].ya], d = Y0[PANELS[toIdx].ya];
-    var span = s[1] - s[0];
-    if (!span) { return [d[0], d[1]]; }
-    var f0 = (r[0] - s[0]) / span, f1 = (r[1] - s[0]) / span, dspan = d[1] - d[0];
-    return [d[0] + f0 * dspan, d[0] + f1 * dspan];
- }
+  }
   function pickRange(ev, names) {
     for (var i = 0; i < names.length; i++) {
       var a = ev[names[i] + ".range[0]"], b = ev[names[i] + ".range[1]"], r = ev[names[i] + ".range"];
       if (a !== undefined && b !== undefined) { return [a, b]; }
       if (r && r.length === 2) { return [r[0], r[1]]; }
-  // ---- build one relayout update that moves every other panel ------------------------
-  // xs / ys = index of the panel the move came from (-1 = none); xr / yr = its new range.
-  // withSource = also write the source panel itself (needed for touch, not for Plotly's own drag).
-  function buildUpdate(xs, xr, ys, yr, withSource) {
-    var upd = {};
-    if (xs >= 0 && xr) {
-      var sg = PANELS[xs].g;
-      var lo = Math.min(xr[0], xr[1]), hi = Math.max(xr[0], xr[1]);
-      var conv = (sg === "c") ? [candleToBrick(lo), candleToBrick(hi)] : [brickToCandle(lo), brickToCandle(hi)];
-      PANELS.forEach(function (p) {
-        if (p.g !== sg) { upd[p.xa + ".range"] = conv.slice(); }
-        else if (withSource) { upd[p.xa + ".range"] = [xr[0], xr[1]]; }
-      });
     }
-    if (ys >= 0 && yr) {
-      PANELS.forEach(function (p, i) {
-        if (i !== ys) { upd[p.ya + ".range"] = yFrom(ys, i, yr); }
-        else if (withSource) { upd[p.ya + ".range"] = [yr[0], yr[1]]; }
-      });
-   }
     return null;
-    return upd;
- }
+  }
   var busy = false;
   function apply(names, range) {
-  function sameRange(a, b) {
-    var tol = 1e-9 * (Math.abs(a[1] - a[0]) + 1);
-    return Math.abs(a[0] - b[0]) <= tol && Math.abs(a[1] - b[1]) <= tol;
-  }
-  function prune(upd) {          // drop axes that are already there; null when nothing is left
-    var L = el._fullLayout, n = 0;
-    Object.keys(upd).forEach(function (k) {
-      var ax = L[k.replace(".range", "")];
-      if (ax && ax.range && !ax.autorange && sameRange(ax.range, upd[k])) { delete upd[k]; } else { n++; }
-    });
-    return n ? upd : null;
-  }
-  function resetUpdate() {
-   var upd = {};
+    var upd = {};
     names.forEach(function (n) {
       if (range) { upd[n + ".range"] = [range[0], range[1]]; } else { upd[n + ".autorange"] = true; }
-    PANELS.forEach(function (p) {
-      upd[p.xa + ".autorange"] = true;
-      upd[p.ya + ".range"] = [Y0[p.ya][0], Y0[p.ya][1]];
-   });
-    return upd;
-  }
-  // ---- apply updates (one relayout per animation frame, newest wins) -------------------
-  var busy = false, pending = null, running = false, deferred = null, replays = 0;
-  function done() {
-    busy = false;
-    if (pending) { requestAnimationFrame(flush); return; }
-    running = false;
-    if (deferred && replays < 2) {         // a Plotly event arrived while we were busy: re-check once
-      var d = deferred; deferred = null; replays++;
-      onNative(d, true);
-    } else { deferred = null; }
-  }
-  function flush() {
-    var u = pending; pending = null;
-    if (!u) { running = false; return; }
-   busy = true;
+    });
+    busy = true;
     Plotly.relayout(el, upd).then(function () { busy = false; }, function () { busy = false; });
-    var pr;
-    try { pr = Plotly.relayout(el, u); } catch (err) { done(); return; }
-    pr.then(done, done);
- }
+  }
   el.on("plotly_relayout", function (ev) {
     if (busy || !ev) { return; }
     var fromCandle = touched(ev, CANDLE), fromBrick = touched(ev, BRICK);
@@ -2064,163 +1992,28 @@ function qfxLinkAxes(el, spec) {
     if (cur && Math.abs(cur[0] - out[0]) < 1e-6 && Math.abs(cur[1] - out[1]) < 1e-6) { return; }
     apply(dst, out);
   });
-  function schedule(u) {
-    if (!u) { return; }
-    pending = u;
-    if (!running) { running = true; requestAnimationFrame(flush); }
-  }
-  // ---- Plotly's own pan / zoom / reset (mouse, wheel, modebar, axis drag) --------------
-  function axRange(ev, name) {
-    var a = ev[name + ".range[0]"], b = ev[name + ".range[1]"], r = ev[name + ".range"];
-    if (a !== undefined && b !== undefined) { return [a, b]; }
-    if (r && r.length === 2) { return [r[0], r[1]]; }
-    var ax = el._fullLayout[name];
-    return (ax && ax.range) ? [ax.range[0], ax.range[1]] : null;
-  }
-  function parseAxes(ev) {
-    var out = {xi: -1, yi: -1, reset: false};
-    Object.keys(ev).forEach(function (k) {
-      var m = /^([xy])axis(\d*)\.(range|autorange)/.exec(k);
-      if (!m) { return; }
-      var i = (m[2] ? parseInt(m[2], 10) : 1) - 1;
-      if (i < 0 || i >= PANELS.length) { return; }
-      if (m[3] === "autorange") { if (ev[k] === true) { out.reset = true; } return; }
-      if (m[1] === "x") { if (out.xi < 0) { out.xi = i; } } else if (out.yi < 0) { out.yi = i; }
-    });
-    return out;
-  }
-  function onNative(ev, isReplay) {
-    if (!ev) { return; }
-    if (busy) { deferred = ev; return; }
-    if (!isReplay) { replays = 0; }
-    var a = parseAxes(ev);
-    if (a.reset) { if (!isReplay) { schedule(resetUpdate()); } return; }
-    if (a.xi < 0 && a.yi < 0) { return; }
-    var xr = a.xi >= 0 ? axRange(ev, PANELS[a.xi].xa) : null;
-    var yr = a.yi >= 0 ? axRange(ev, PANELS[a.yi].ya) : null;
-    schedule(prune(buildUpdate(a.xi, xr, a.yi, yr, false)));
-  }
-  el.on("plotly_relayout", function (ev) { onNative(ev, false); });
-  el.on("plotly_relayouting", function (ev) { onNative(ev, false); });   // live, while dragging
-  // ---- touch: 1 finger = pan (left/right/up/down), 2 fingers = pinch zoom -------------
-  var mode = "chart", G = null;
-  el.style.touchAction = "none";
-  function pt(t) {
-    var r = el.getBoundingClientRect();
-    return [t.clientX - r.left, t.clientY - r.top];
-  }
-  function describe(touches) {
-    var a = pt(touches[0]), b = touches.length > 1 ? pt(touches[1]) : null;
-    return {
-      n: b ? 2 : 1,
-      mid: b ? [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2] : a,
-      dist: b ? Math.sqrt(Math.pow(a[0] - b[0], 2) + Math.pow(a[1] - b[1], 2)) : 0
-    };
-  }
-  function panelAt(y) {           // panel whose plot area is closest (vertically) to y
-    var best = 0, bd = 1e12, L = el._fullLayout;
-    PANELS.forEach(function (p, i) {
-      var ya = L[p.ya];
-      if (!ya) { return; }
-      var top = ya._offset, bot = ya._offset + ya._length;
-      var d = y < top ? top - y : (y > bot ? y - bot : 0);
-      if (d < bd) { bd = d; best = i; }
-    });
-    return best;
-  }
-  function begin(touches) {       // remember the start of a gesture (re-called when a finger is added / lifted)
-    var d = describe(touches), L = el._fullLayout, i = panelAt(d.mid[1]), p = PANELS[i];
-    var xa = L[p.xa], ya = L[p.ya];
-    if (!xa || !ya || !xa.range || !ya.range || !(xa._length > 0) || !(ya._length > 0)) { return null; }
-    return {
-      n: d.n, mid: d.mid, dist: d.dist, i: i,
-      xr: [xa.range[0], xa.range[1]], yr: [ya.range[0], ya.range[1]],
-      xo: xa._offset, xl: xa._length, yo: ya._offset, yl: ya._length
-    };
-  }
-  function moveGesture(touches) {
-    var d = describe(touches), s = 1;
-    if (G.n === 2 && d.n === 2 && G.dist > 10 && d.dist > 10) { s = G.dist / d.dist; }   // fingers apart -> s < 1 -> zoom in
-    var xs0 = G.xr[1] - G.xr[0], ys0 = G.yr[1] - G.yr[0];
-    s = Math.min(20, Math.max(s, 0.05));
-    if (s < 1 && xs0 * s < 3) { s = Math.min(1, 3 / xs0); }     // never fewer than ~3 candles / bricks
-    var xs = xs0 * s, ys = ys0 * s;
-    var fx = G.xr[0] + (G.mid[0] - G.xo) / G.xl * xs0;            // data point that was under the fingers
-    var x0 = fx - (d.mid[0] - G.xo) / G.xl * xs;
-    var fy = G.yr[1] - (G.mid[1] - G.yo) / G.yl * ys0;
-    var y1 = fy + (d.mid[1] - G.yo) / G.yl * ys;
-    schedule(prune(buildUpdate(G.i, [x0, x0 + xs], G.i, [y1 - ys, y1], true)));
-  }
-  function inModebar(e) {
-    var t = e.target;
-    return !!(t && t.closest && t.closest(".modebar"));
-  }
-  function onTouchStart(e) {
-    if (inModebar(e)) { return; }
-    e.stopPropagation();
-    G = (mode === "chart" && e.touches.length <= 2) ? begin(e.touches) : null;
-  }
-  function onTouchMove(e) {
-    if (inModebar(e)) { return; }
-    e.stopPropagation();
-    if (mode !== "chart" || !G) { return; }
-    if (e.cancelable) { e.preventDefault(); }
-    if (e.touches.length !== G.n) { G = e.touches.length <= 2 ? begin(e.touches) : null; return; }
-    moveGesture(e.touches);
-  }
-  function onTouchEnd(e) {
-    if (inModebar(e)) { return; }
-    e.stopPropagation();
-    G = (mode === "chart" && e.touches.length > 0 && e.touches.length <= 2) ? begin(e.touches) : null;
-  }
-  var opt = {capture: true, passive: false};
-  el.addEventListener("touchstart", onTouchStart, opt);
-  el.addEventListener("touchmove", onTouchMove, opt);
-  el.addEventListener("touchend", onTouchEnd, opt);
-  el.addEventListener("touchcancel", onTouchEnd, opt);
-  api.reset = function () { schedule(resetUpdate()); };
-  api.toggleTouch = function () {          // "chart" = finger pans / pinches the chart, "scroll" = finger scrolls the page
-    mode = (mode === "chart") ? "scroll" : "chart";
-    el.style.touchAction = (mode === "chart") ? "none" : "auto";
-    G = null;
-    return mode;
-  };
-  return api;
 }
 """
 def render_zoomable_chart(fig, key, height=950):
 fig_json = fig.to_json()
 div_id = f"qfx_chart_{key}"
-  btn_css = (
-      f"background:{COLOR_PANEL_BG};color:{COLOR_TEXT_MAIN};border:1px solid {COLOR_BORDER};"
-      f"border-radius:4px;padding:3px 10px;font-size:11px;cursor:pointer;"
-  )
 html = f"""
    <div id="{div_id}_wrapper" style="
        resize: both; overflow: auto; width: 100%; height: {height}px;
        min-width: 320px; min-height: 400px; max-width: 100%;
        border: 1px solid {COLOR_BORDER}; border-radius: 6px;
        background-color: {COLOR_BG_DARK}; padding: 4px; box-sizing: border-box;">
-      <div id="{div_id}" style="width: 100%; height: 100%;"></div>
-      <div id="{div_id}" style="width: 100%; height: 100%; touch-action: none;"></div>
+     <div id="{div_id}" style="width: 100%; height: 100%;"></div>
    </div>
-    <div style="font-size:10px;color:{COLOR_TEXT_MUTED};margin-top:4px;">
-      🖱️ Scroll to zoom • Drag to box-zoom • Drag corner to resize
-    <div style="display:flex;flex-wrap:wrap;align-items:center;gap:8px;font-size:10px;color:{COLOR_TEXT_MUTED};margin-top:4px;">
-      <span>🖱️ Drag = pan • Scroll = zoom • 📱 1 finger = pan • 2 fingers = pinch zoom • all panels move together</span>
-      <button id="{div_id}_reset" type="button" style="{btn_css}">↺ Reset view</button>
-      <button id="{div_id}_touch" type="button" style="{btn_css}">✋ Touch: pan chart</button>
+   <div style="font-size:10px;color:{COLOR_TEXT_MUTED};margin-top:4px;">
+     🖱️ Scroll to zoom • Drag to box-zoom • Drag corner to resize
    </div>
    <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
    <script>
-     {QFX_SYNC_JS}
+      {QFX_SYNC_JS}
      (function() {{
        var figSpec = {fig_json};
-        var config = {{scrollZoom: true, displaylogo: false, responsive: false}};
-        var config = {{
-          scrollZoom: true, displaylogo: false, responsive: false, displayModeBar: true,
-          modeBarButtonsToRemove: ["select2d", "lasso2d"]
-        }};
+       var config = {{scrollZoom: true, displaylogo: false, responsive: false}};
        var el = document.getElementById("{div_id}");
        Plotly.newPlot(el, figSpec.data, figSpec.layout, config).then(function() {{
          var annotations = el.querySelectorAll('.annotation');
@@ -2231,12 +2024,6 @@ html = f"""
            }}
          }});
           qfxLinkAxes(el, figSpec);
-          var link = qfxLinkAxes(el, figSpec);
-          document.getElementById("{div_id}_reset").onclick = function() {{ link.reset(); }};
-          var touchBtn = document.getElementById("{div_id}_touch");
-          touchBtn.onclick = function() {{
-            touchBtn.textContent = (link.toggleTouch() === "chart") ? "✋ Touch: pan chart" : "📜 Touch: scroll page";
-          }};
        }});
        var wrapper = document.getElementById("{div_id}_wrapper");
        if (window.ResizeObserver) {{
@@ -2297,7 +2084,8 @@ col = "green" if m["chg"] >= 0 else "red"
 arrow = "▲" if m["chg"] >= 0 else "▼"
 value_md = f":{col}[{arrow} {m['chg']:+.2f}%]"
 st.button(
-_md_safe(f"{idx}. **{m['display']}**  •  {value_md}"),
+        _md_safe(f"{idx}. **{m['display']}**  ·  {value_md}"),
+        _md_safe(f"{idx}. **{m['display']}**  •  {value_md}"),
 key=f"qfxrow_{key_prefix}_{idx}",
 on_click=on_click,
 args=(m["symbol"], m["display"]),
@@ -2310,8 +2098,10 @@ f"<div style='background-color:{COLOR_PANEL_BG};border:1px solid {COLOR_BORDER};
 f"border-radius:6px;padding:10px 14px;margin-bottom:8px;'>"
 f"<div style='font-size:12px;color:{COLOR_TEXT_MAIN};font-weight:700;margin-bottom:4px;'>🚨 High-Conviction Shares</div>"
 f"<div style='font-size:10px;color:{COLOR_TEXT_MUTED};line-height:1.5;'>"
-f"Daily: Close &gt; EMA200 • EMA9 &gt; EMA200 &amp; EMA20 • RSI14 &gt; 50 • Close &gt; 5d &amp; 10d-ago high • "
-f"Low ≤ EMA9 &lt; Close • Volume &gt; 20d avg</div></div>",
+      f"Daily: Close &gt; EMA200 · EMA9 &gt; EMA200 &amp; EMA20 · RSI14 &gt; 50 · Close &gt; 5d &amp; 10d-ago high · "
+      f"Low ≤ EMA9 &lt; Close · Volume &gt; 20d avg</div></div>",
+      f"Daily: Close &gt; EMA200 • EMA9 &gt; EMA200 &amp; EMA20 • RSI14 &gt; 50 • Close &gt; 5d &amp; 10d-ago high • "
+      f"Low ≤ EMA9 &lt; Close • Volume &gt; 20d avg</div></div>",
 unsafe_allow_html=True,
 )
 for cat_name, hits in results_by_cat.items():
@@ -2321,7 +2111,8 @@ arrow = "▲" if m["chg"] >= 0 else "▼"
 return f"{conviction_price_str(cat_name, m['price'])} :{col}[{arrow} {m['chg']:+.2f}%]"
 shown = hits[:CONVICTION_MAX_DISPLAY]
 extra = len(hits) - len(shown)
-title = f"{cat_name} • {len(hits)} match{'es' if len(hits) != 1 else ''}"
+    title = f"{cat_name} · {len(hits)} match{'es' if len(hits) != 1 else ''}"
+    title = f"{cat_name} • {len(hits)} match{'es' if len(hits) != 1 else ''}"
 if extra > 0:
 title += f" (top {len(shown)} shown)"
 render_clickable_list_box(
@@ -2541,8 +2332,10 @@ _ok, _n, _status = run_scan_and_send(tg_token, tg_chat, ema_fast, ema_mid, ema_s
 st.session_state["_qfx_last_autorun_at"] = pd.Timestamp.now().strftime("%H:%M:%S")
 st.session_state["_qfx_last_autorun_status"] = "✅ ok" if _ok else f"❌ {_status}"
 st.sidebar.caption(
-f"🟢 Auto-scan every {AUTO_SCAN_MINUTES} min • last run {st.session_state.get('_qfx_last_autorun_at', '—')} "
-f"• {st.session_state.get('_qfx_last_autorun_status', '')}"
+      f"🟢 Auto-scan every {AUTO_SCAN_MINUTES} min · last run {st.session_state.get('_qfx_last_autorun_at', '—')} "
+      f"· {st.session_state.get('_qfx_last_autorun_status', '')}"
+      f"🟢 Auto-scan every {AUTO_SCAN_MINUTES} min • last run {st.session_state.get('_qfx_last_autorun_at', '—')} "
+      f"• {st.session_state.get('_qfx_last_autorun_status', '')}"
 )
 if st.sidebar.button("🔄 Refresh data", use_container_width=True):
 st.cache_data.clear()
@@ -2679,7 +2472,8 @@ def _fmt(m):
 col = "green" if m["direction"] == "BUY" else "red"
 arrow = "▲" if m["direction"] == "BUY" else "▼"
 recency = "latest" if m["bars_ago"] == 0 else f"{m['bars_ago']} bar ago"
-return f"{conviction_price_str(cat_name, m['price'])} • :{col}[{arrow} {m['direction']}] • {recency}"
+            return f"{conviction_price_str(cat_name, m['price'])} · :{col}[{arrow} {m['direction']}] · {recency}"
+            return f"{conviction_price_str(cat_name, m['price'])} • :{col}[{arrow} {m['direction']}] • {recency}"
 return _fmt
 if outlook:
 dir_color = (
@@ -2706,7 +2500,8 @@ unsafe_allow_html=True,
 render_conviction_box(conviction_results, key_prefix="hc", on_click=go_to_chart)
 for _cat, _hits, _kp in (("Nifty 500", ema_cross_nifty, "emax_nifty"), ("US 100", ema_cross_us100, "emax_us100")):
 _shown = _hits[:CONVICTION_MAX_DISPLAY]
-_title = f"⚡ EMA {int(ema_fast)} × {int(ema_mid)} Cross (2H) — {_cat} • {len(_hits)}"
+          _title = f"⚡ EMA {int(ema_fast)} × {int(ema_mid)} Cross (2H) — {_cat} · {len(_hits)}"
+          _title = f"⚡ EMA {int(ema_fast)} × {int(ema_mid)} Cross (2H) — {_cat} • {len(_hits)}"
 if len(_hits) > len(_shown):
 _title += f" (newest {len(_shown)} shown)"
 render_clickable_list_box(

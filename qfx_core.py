@@ -568,11 +568,13 @@ def scan_triple_ema_cross_30m(symbols_tuple, ema_fast=9, ema_mid=21, ema_slow=50
 # ---- the alert run (shared by the dashboard button, the in-app timer and scan_job.py) ----
 def run_scan_and_send(tg_token, tg_chat, ema_fast, ema_mid, ema_slow, *,
                       conviction_scan=None, cross30_scan=None, state_path=None,
-                      dry_run=False, seed_only=False, log=None):
+                      dry_run=False, seed_only=False, full_list=False, log=None):
   """Builds ONE Telegram message (auto-split if long):
     * High-Conviction Shares (Nifty 500 / US 100 / Commodities / Forex) - the FIRST scan
       sends the whole list; every later scan sends only stocks not in the previous list.
     * 30m 3-EMA cross (either side) for Commodities / Forex.
+  full_list=True sends the COMPLETE current list (every match + every active 30m cross) regardless of what was
+  sent before, and leaves the alert memory untouched.
   Returns (ok, total_alerts, status_text)."""
   conviction_scan = conviction_scan or scan_conviction_category
   cross30_scan = cross30_scan or scan_triple_ema_cross_30m
@@ -602,7 +604,7 @@ def run_scan_and_send(tg_token, tg_chat, ema_fast, ema_mid, ema_slow, *,
       if h["bars_ago"] <= 1:
         key = f"{h['display']}|{h['direction']}"
         active_ema30.append(key)
-        if prev_ema30 is not None and key in prev_ema30:
+        if not full_list and prev_ema30 is not None and key in prev_ema30:
           continue  # already alerted on an earlier scan
         emoji = "🟢" if h["direction"] == "BUY" else "🔴"
         triggered_messages.append(
@@ -620,15 +622,20 @@ def run_scan_and_send(tg_token, tg_chat, ema_fast, ema_mid, ema_slow, *,
     if n_evaluated == 0:
       continue  # data feed failed - leave this list's memory untouched
     any_data = True
-    is_first = cat_name not in prev_last
+    is_first = full_list or cat_name not in prev_last
     prev_set = set(prev_last.get(cat_name, []))
     fresh = hits if is_first else [h for h in hits if h["symbol"] not in prev_set]
     new_last[cat_name] = [h["symbol"] for h in hits]
+    if full_list and not fresh:
+      if conviction_lines:
+        conviction_lines.append("")
+      conviction_lines.append(f"*{cat_name}* (full list) — no matches")
+      continue
     if not fresh:
       continue
     if conviction_lines:
       conviction_lines.append("")
-    conviction_lines.append(f"*{cat_name}* ({'initial scan' if is_first else 'new additions'})")
+    conviction_lines.append(f"*{cat_name}* ({'full list' if full_list else ('initial scan' if is_first else 'new additions')}) — {len(fresh)}")
     for h in fresh:
       conviction_lines.append(
           f"🔥 *{h['display']}* — {conviction_price_str(cat_name, h['price'])} ({h['chg']:+.2f}%)"
@@ -640,7 +647,7 @@ def run_scan_and_send(tg_token, tg_chat, ema_fast, ema_mid, ema_slow, *,
                       "nothing was evaluated, alert memory left untouched.")
 
   new_state = {"last": new_last, "ema30": active_ema30}
-  if seed_only:
+  if seed_only and not full_list:
     save_conviction_state(new_state, state_path)
     return True, 0, "Seeded alert memory with the current matches (nothing sent)."
 
@@ -652,7 +659,7 @@ def run_scan_and_send(tg_token, tg_chat, ema_fast, ema_mid, ema_slow, *,
   total_alerts = len(triggered_messages) + conviction_count
 
   if not message_sections:
-    if not dry_run:
+    if not dry_run and not full_list:
       save_conviction_state(new_state, state_path)
     return True, 0, "No new stocks added to the High-Conviction list since the last scan."
 
@@ -662,7 +669,7 @@ def run_scan_and_send(tg_token, tg_chat, ema_fast, ema_mid, ema_slow, *,
     return True, total_alerts, "Dry run - nothing sent, alert memory not saved."
 
   ok, m = send_telegram_alert_chunked(combined_msg, tg_token, tg_chat)
-  if ok:
+  if ok and not full_list:
     # Only remember the list once Telegram accepted it, so a failed send is retried.
     save_conviction_state(new_state, state_path)
   return ok, total_alerts, m

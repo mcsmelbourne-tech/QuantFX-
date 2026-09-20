@@ -58,6 +58,15 @@ v10 additions:
 - Panel order is now Heikin Ashi -> ATR Renko -> MACD -> RSI.
 - Heikin Ashi: EMA colour fill removed; candles use the same colours as the Renko bricks.
 - All four panels zoom / pan / reset together (Renko bricks are mapped onto the real-candle timeline).
+v11 additions:
+- Drag = pan (left / right / up / down) and every panel moves with it; zoom in / out (wheel, box, axis drag,
+  modebar) and Reset also act on all four panels together. Vertical moves / zooms are copied as the same
+  fraction of each panel's own range (price, MACD and RSI have different scales).
+- Mobile: 1 finger pans, 2 fingers pinch-zoom, all panels follow; "Touch: pan chart / scroll page" button
+  lets you scroll the page when the chart fills the screen; "Reset view" button under the chart.
+- Right-side stock rows are forced to start at the left edge of each box.
+- Faster start-up: the chart is drawn first; the watchlist scans (right-hand boxes) and the 5-minute
+  Telegram auto-scan now run AFTER the page has rendered instead of before it.
 """
 import json
 import os
@@ -158,6 +167,27 @@ st.markdown(
     div[class*="st-key-qfxtop_"] button p {{
         font-size: 12px; text-align: left; margin: 0;
         white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }}
+    /* Right-side stock rows: label always starts at the LEFT edge (never centred) */
+    div[class*="st-key-qfxrow_"] div[data-testid="stButton"],
+    div[class*="st-key-qfxrow_"] div[data-testid="stElementContainer"] {{
+        width: 100% !important;
+    }}
+    div[class*="st-key-qfxrow_"] button {{
+        display: flex !important;
+        justify-content: flex-start !important;
+        align-items: center !important;
+        text-align: left !important;
+        width: 100% !important;
+    }}
+    div[class*="st-key-qfxrow_"] button > div,
+    div[class*="st-key-qfxrow_"] button [data-testid="stMarkdownContainer"],
+    div[class*="st-key-qfxrow_"] button p {{
+        display: block !important;
+        width: 100% !important;
+        margin: 0 !important;
+        text-align: left !important;
+        justify-content: flex-start !important;
     }}
     div[class*="st-key-qfxtop_"] button {{
         width: 100%; min-height: 0; padding: 4px 8px;
@@ -1845,6 +1875,7 @@ def create_chart_figure(
       height=950, paper_bgcolor=COLOR_BG_DARK, plot_bgcolor=COLOR_BG_DARK,
       font=dict(color=COLOR_TEXT_MUTED, size=10), showlegend=False,
       margin=dict(l=48, r=70, t=40, b=10), bargap=0.45,
+      dragmode="pan",
   )
   fig.update_xaxes(rangeslider_visible=False, showgrid=False, tickfont=dict(size=10))
   # Heikin Ashi (x) + MACD (x3) share the real-candle axis; Renko (x2) + RSI (x4) share
@@ -1879,18 +1910,37 @@ def run_chart_search():
       return
   go_to_chart(query, query)
 QFX_SYNC_JS = r"""
-// Keeps the Heikin Ashi + MACD axes (real candles) and the Renko + RSI axes (bricks)
-// on the same time window while zooming, panning and resetting. The brick -> candle
-// position table comes from layout.meta.qfx_sync (built in create_chart_figure).
+// ---------------------------------------------------------------------------------
+// qfxLinkAxes - ONE controller that keeps every panel (Heikin Ashi, Renko, MACD, RSI)
+// moving together:
+//   * pan left / right / up / down            -> all four panels move
+//   * zoom in / out (wheel, box, axis drag, +/- buttons, touch pinch) -> all four zoom
+//   * reset / autoscale                       -> all four reset
+// X axis: Heikin Ashi + MACD use the real-candle axis, Renko + RSI use the brick axis.
+//         The brick -> candle table in layout.meta.qfx_sync converts between the two.
+// Y axis: every panel has its own scale (price / MACD / RSI), so a vertical move or a
+//         vertical zoom is copied as the same FRACTION of each panel's starting range.
+// Touch:  1 finger = pan, 2 fingers = pinch zoom. Plotly's own touch drag is switched
+//         off (capture-phase listeners) so it cannot fight with this handler.
+// ---------------------------------------------------------------------------------
 function qfxLinkAxes(el, spec) {
+  var PANELS = [
+    {xa: "xaxis",  ya: "yaxis",  g: "c"},   // Heikin Ashi (real candles)
+    {xa: "xaxis2", ya: "yaxis2", g: "b"},   // ATR Renko   (bricks)
+    {xa: "xaxis3", ya: "yaxis3", g: "c"},   // MACD        (real candles)
+    {xa: "xaxis4", ya: "yaxis4", g: "b"}    // RSI         (bricks)
+  ];
+  var api = {reset: function () {}, toggleTouch: function () { return "chart"; }};
+  var L0 = el._fullLayout;
+  if (!L0 || !L0.yaxis4 || !L0.xaxis4) { return api; }
+  // ---- brick <-> candle x mapping --------------------------------------------------
   var meta = spec && spec.layout && spec.layout.meta;
   var sync = meta && meta.qfx_sync;
-  if (!sync || !sync.brick_pos || sync.brick_pos.length < 2) { return; }
-  var P = sync.brick_pos, nB = P.length;
-  var CANDLE = ["xaxis", "xaxis3"];   // Heikin Ashi + MACD
-  var BRICK = ["xaxis2", "xaxis4"];   // Renko + RSI
-  var perCandle = (nB - 1) / Math.max(P[nB - 1] - P[0], 1e-9);   // bricks per candle (edge extrapolation)
+  var P = (sync && sync.brick_pos && sync.brick_pos.length > 1) ? sync.brick_pos : null;
+  var nB = P ? P.length : 0;
+  var perCandle = P ? (nB - 1) / Math.max(P[nB - 1] - P[0], 1e-9) : 1;   // bricks per candle
   function candleToBrick(x) {
+    if (!P) { return x; }
     if (x <= P[0]) { return (x - P[0]) * perCandle; }
     if (x >= P[nB - 1]) { return (nB - 1) + (x - P[nB - 1]) * perCandle; }
     var lo = 0, hi = nB - 1;
@@ -1898,70 +1948,239 @@ function qfxLinkAxes(el, spec) {
     return lo + (x - P[lo]) / (P[lo + 1] - P[lo]);
   }
   function brickToCandle(b) {
+    if (!P) { return b; }
     if (b <= 0) { return P[0] + b / perCandle; }
     if (b >= nB - 1) { return P[nB - 1] + (b - (nB - 1)) / perCandle; }
     var j = Math.floor(b);
     return P[j] + (b - j) * (P[j + 1] - P[j]);
   }
-  function touched(ev, names) {
-    return Object.keys(ev).some(function (k) {
-      return names.some(function (n) { return k.indexOf(n + ".range") === 0 || k.indexOf(n + ".autorange") === 0; });
-    });
-  }
-  function pickRange(ev, names) {
-    for (var i = 0; i < names.length; i++) {
-      var a = ev[names[i] + ".range[0]"], b = ev[names[i] + ".range[1]"], r = ev[names[i] + ".range"];
-      if (a !== undefined && b !== undefined) { return [a, b]; }
-      if (r && r.length === 2) { return [r[0], r[1]]; }
-    }
-    return null;
-  }
-  var busy = false;
-  function apply(names, range) {
-    var upd = {};
-    names.forEach(function (n) {
-      if (range) { upd[n + ".range"] = [range[0], range[1]]; } else { upd[n + ".autorange"] = true; }
-    });
-    busy = true;
-    Plotly.relayout(el, upd).then(function () { busy = false; }, function () { busy = false; });
-  }
-  el.on("plotly_relayout", function (ev) {
-    if (busy || !ev) { return; }
-    var fromCandle = touched(ev, CANDLE), fromBrick = touched(ev, BRICK);
-    if (fromCandle === fromBrick) { return; }
-    var src = fromCandle ? CANDLE : BRICK, dst = fromCandle ? BRICK : CANDLE;
-    if (src.some(function (n) { return ev[n + ".autorange"] === true; })) { apply(dst, null); return; }
-    var r = pickRange(ev, src);
-    if (!r) { return; }
-    var lo = Math.min(r[0], r[1]), hi = Math.max(r[0], r[1]);
-    var out = fromCandle ? [candleToBrick(lo), candleToBrick(hi)] : [brickToCandle(lo), brickToCandle(hi)];
-    var cur = null;
-    try { cur = el._fullLayout[dst[0]].range; } catch (e) { cur = null; }
-    if (cur && Math.abs(cur[0] - out[0]) < 1e-6 && Math.abs(cur[1] - out[1]) < 1e-6) { return; }
-    apply(dst, out);
+  // ---- starting y ranges (used to copy vertical moves / zooms between panels) -------
+  var Y0 = {};
+  PANELS.forEach(function (p) {
+    var r = el._fullLayout[p.ya].range;
+    Y0[p.ya] = [r[0], r[1]];
   });
+  function yFrom(fromIdx, toIdx, r) {
+    var s = Y0[PANELS[fromIdx].ya], d = Y0[PANELS[toIdx].ya];
+    var span = s[1] - s[0];
+    if (!span) { return [d[0], d[1]]; }
+    var f0 = (r[0] - s[0]) / span, f1 = (r[1] - s[0]) / span, dspan = d[1] - d[0];
+    return [d[0] + f0 * dspan, d[0] + f1 * dspan];
+  }
+  // ---- build one relayout update that moves every other panel ------------------------
+  // xs / ys = index of the panel the move came from (-1 = none); xr / yr = its new range.
+  // withSource = also write the source panel itself (needed for touch, not for Plotly's own drag).
+  function buildUpdate(xs, xr, ys, yr, withSource) {
+    var upd = {};
+    if (xs >= 0 && xr) {
+      var sg = PANELS[xs].g;
+      var lo = Math.min(xr[0], xr[1]), hi = Math.max(xr[0], xr[1]);
+      var conv = (sg === "c") ? [candleToBrick(lo), candleToBrick(hi)] : [brickToCandle(lo), brickToCandle(hi)];
+      PANELS.forEach(function (p) {
+        if (p.g !== sg) { upd[p.xa + ".range"] = conv.slice(); }
+        else if (withSource) { upd[p.xa + ".range"] = [xr[0], xr[1]]; }
+      });
+    }
+    if (ys >= 0 && yr) {
+      PANELS.forEach(function (p, i) {
+        if (i !== ys) { upd[p.ya + ".range"] = yFrom(ys, i, yr); }
+        else if (withSource) { upd[p.ya + ".range"] = [yr[0], yr[1]]; }
+      });
+    }
+    return upd;
+  }
+  function sameRange(a, b) {
+    var tol = 1e-9 * (Math.abs(a[1] - a[0]) + 1);
+    return Math.abs(a[0] - b[0]) <= tol && Math.abs(a[1] - b[1]) <= tol;
+  }
+  function prune(upd) {          // drop axes that are already there; null when nothing is left
+    var L = el._fullLayout, n = 0;
+    Object.keys(upd).forEach(function (k) {
+      var ax = L[k.replace(".range", "")];
+      if (ax && ax.range && !ax.autorange && sameRange(ax.range, upd[k])) { delete upd[k]; } else { n++; }
+    });
+    return n ? upd : null;
+  }
+  function resetUpdate() {
+    var upd = {};
+    PANELS.forEach(function (p) {
+      upd[p.xa + ".autorange"] = true;
+      upd[p.ya + ".range"] = [Y0[p.ya][0], Y0[p.ya][1]];
+    });
+    return upd;
+  }
+  // ---- apply updates (one relayout per animation frame, newest wins) -------------------
+  var busy = false, pending = null, running = false, deferred = null, replays = 0;
+  function done() {
+    busy = false;
+    if (pending) { requestAnimationFrame(flush); return; }
+    running = false;
+    if (deferred && replays < 2) {         // a Plotly event arrived while we were busy: re-check once
+      var d = deferred; deferred = null; replays++;
+      onNative(d, true);
+    } else { deferred = null; }
+  }
+  function flush() {
+    var u = pending; pending = null;
+    if (!u) { running = false; return; }
+    busy = true;
+    var pr;
+    try { pr = Plotly.relayout(el, u); } catch (err) { done(); return; }
+    pr.then(done, done);
+  }
+  function schedule(u) {
+    if (!u) { return; }
+    pending = u;
+    if (!running) { running = true; requestAnimationFrame(flush); }
+  }
+  // ---- Plotly's own pan / zoom / reset (mouse, wheel, modebar, axis drag) --------------
+  function axRange(ev, name) {
+    var a = ev[name + ".range[0]"], b = ev[name + ".range[1]"], r = ev[name + ".range"];
+    if (a !== undefined && b !== undefined) { return [a, b]; }
+    if (r && r.length === 2) { return [r[0], r[1]]; }
+    var ax = el._fullLayout[name];
+    return (ax && ax.range) ? [ax.range[0], ax.range[1]] : null;
+  }
+  function parseAxes(ev) {
+    var out = {xi: -1, yi: -1, reset: false};
+    Object.keys(ev).forEach(function (k) {
+      var m = /^([xy])axis(\d*)\.(range|autorange)/.exec(k);
+      if (!m) { return; }
+      var i = (m[2] ? parseInt(m[2], 10) : 1) - 1;
+      if (i < 0 || i >= PANELS.length) { return; }
+      if (m[3] === "autorange") { if (ev[k] === true) { out.reset = true; } return; }
+      if (m[1] === "x") { if (out.xi < 0) { out.xi = i; } } else if (out.yi < 0) { out.yi = i; }
+    });
+    return out;
+  }
+  function onNative(ev, isReplay) {
+    if (!ev) { return; }
+    if (busy) { deferred = ev; return; }
+    if (!isReplay) { replays = 0; }
+    var a = parseAxes(ev);
+    if (a.reset) { if (!isReplay) { schedule(resetUpdate()); } return; }
+    if (a.xi < 0 && a.yi < 0) { return; }
+    var xr = a.xi >= 0 ? axRange(ev, PANELS[a.xi].xa) : null;
+    var yr = a.yi >= 0 ? axRange(ev, PANELS[a.yi].ya) : null;
+    schedule(prune(buildUpdate(a.xi, xr, a.yi, yr, false)));
+  }
+  el.on("plotly_relayout", function (ev) { onNative(ev, false); });
+  el.on("plotly_relayouting", function (ev) { onNative(ev, false); });   // live, while dragging
+  // ---- touch: 1 finger = pan (left/right/up/down), 2 fingers = pinch zoom -------------
+  var mode = "chart", G = null;
+  el.style.touchAction = "none";
+  function pt(t) {
+    var r = el.getBoundingClientRect();
+    return [t.clientX - r.left, t.clientY - r.top];
+  }
+  function describe(touches) {
+    var a = pt(touches[0]), b = touches.length > 1 ? pt(touches[1]) : null;
+    return {
+      n: b ? 2 : 1,
+      mid: b ? [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2] : a,
+      dist: b ? Math.sqrt(Math.pow(a[0] - b[0], 2) + Math.pow(a[1] - b[1], 2)) : 0
+    };
+  }
+  function panelAt(y) {           // panel whose plot area is closest (vertically) to y
+    var best = 0, bd = 1e12, L = el._fullLayout;
+    PANELS.forEach(function (p, i) {
+      var ya = L[p.ya];
+      if (!ya) { return; }
+      var top = ya._offset, bot = ya._offset + ya._length;
+      var d = y < top ? top - y : (y > bot ? y - bot : 0);
+      if (d < bd) { bd = d; best = i; }
+    });
+    return best;
+  }
+  function begin(touches) {       // remember the start of a gesture (re-called when a finger is added / lifted)
+    var d = describe(touches), L = el._fullLayout, i = panelAt(d.mid[1]), p = PANELS[i];
+    var xa = L[p.xa], ya = L[p.ya];
+    if (!xa || !ya || !xa.range || !ya.range || !(xa._length > 0) || !(ya._length > 0)) { return null; }
+    return {
+      n: d.n, mid: d.mid, dist: d.dist, i: i,
+      xr: [xa.range[0], xa.range[1]], yr: [ya.range[0], ya.range[1]],
+      xo: xa._offset, xl: xa._length, yo: ya._offset, yl: ya._length
+    };
+  }
+  function moveGesture(touches) {
+    var d = describe(touches), s = 1;
+    if (G.n === 2 && d.n === 2 && G.dist > 10 && d.dist > 10) { s = G.dist / d.dist; }   // fingers apart -> s < 1 -> zoom in
+    var xs0 = G.xr[1] - G.xr[0], ys0 = G.yr[1] - G.yr[0];
+    s = Math.min(20, Math.max(s, 0.05));
+    if (s < 1 && xs0 * s < 3) { s = Math.min(1, 3 / xs0); }     // never fewer than ~3 candles / bricks
+    var xs = xs0 * s, ys = ys0 * s;
+    var fx = G.xr[0] + (G.mid[0] - G.xo) / G.xl * xs0;            // data point that was under the fingers
+    var x0 = fx - (d.mid[0] - G.xo) / G.xl * xs;
+    var fy = G.yr[1] - (G.mid[1] - G.yo) / G.yl * ys0;
+    var y1 = fy + (d.mid[1] - G.yo) / G.yl * ys;
+    schedule(prune(buildUpdate(G.i, [x0, x0 + xs], G.i, [y1 - ys, y1], true)));
+  }
+  function inModebar(e) {
+    var t = e.target;
+    return !!(t && t.closest && t.closest(".modebar"));
+  }
+  function onTouchStart(e) {
+    if (inModebar(e)) { return; }
+    e.stopPropagation();
+    G = (mode === "chart" && e.touches.length <= 2) ? begin(e.touches) : null;
+  }
+  function onTouchMove(e) {
+    if (inModebar(e)) { return; }
+    e.stopPropagation();
+    if (mode !== "chart" || !G) { return; }
+    if (e.cancelable) { e.preventDefault(); }
+    if (e.touches.length !== G.n) { G = e.touches.length <= 2 ? begin(e.touches) : null; return; }
+    moveGesture(e.touches);
+  }
+  function onTouchEnd(e) {
+    if (inModebar(e)) { return; }
+    e.stopPropagation();
+    G = (mode === "chart" && e.touches.length > 0 && e.touches.length <= 2) ? begin(e.touches) : null;
+  }
+  var opt = {capture: true, passive: false};
+  el.addEventListener("touchstart", onTouchStart, opt);
+  el.addEventListener("touchmove", onTouchMove, opt);
+  el.addEventListener("touchend", onTouchEnd, opt);
+  el.addEventListener("touchcancel", onTouchEnd, opt);
+  api.reset = function () { schedule(resetUpdate()); };
+  api.toggleTouch = function () {          // "chart" = finger pans / pinches the chart, "scroll" = finger scrolls the page
+    mode = (mode === "chart") ? "scroll" : "chart";
+    el.style.touchAction = (mode === "chart") ? "none" : "auto";
+    G = null;
+    return mode;
+  };
+  return api;
 }
 """
 def render_zoomable_chart(fig, key, height=950):
   fig_json = fig.to_json()
   div_id = f"qfx_chart_{key}"
+  btn_css = (
+      f"background:{COLOR_PANEL_BG};color:{COLOR_TEXT_MAIN};border:1px solid {COLOR_BORDER};"
+      f"border-radius:4px;padding:3px 10px;font-size:11px;cursor:pointer;"
+  )
   html = f"""
     <div id="{div_id}_wrapper" style="
         resize: both; overflow: auto; width: 100%; height: {height}px;
         min-width: 320px; min-height: 400px; max-width: 100%;
         border: 1px solid {COLOR_BORDER}; border-radius: 6px;
         background-color: {COLOR_BG_DARK}; padding: 4px; box-sizing: border-box;">
-      <div id="{div_id}" style="width: 100%; height: 100%;"></div>
+      <div id="{div_id}" style="width: 100%; height: 100%; touch-action: none;"></div>
     </div>
-    <div style="font-size:10px;color:{COLOR_TEXT_MUTED};margin-top:4px;">
-      🖱️ Scroll to zoom • Drag to box-zoom • Drag corner to resize
+    <div style="display:flex;flex-wrap:wrap;align-items:center;gap:8px;font-size:10px;color:{COLOR_TEXT_MUTED};margin-top:4px;">
+      <span>🖱️ Drag = pan • Scroll = zoom • 📱 1 finger = pan • 2 fingers = pinch zoom • all panels move together</span>
+      <button id="{div_id}_reset" type="button" style="{btn_css}">↺ Reset view</button>
+      <button id="{div_id}_touch" type="button" style="{btn_css}">✋ Touch: pan chart</button>
     </div>
     <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
     <script>
       {QFX_SYNC_JS}
       (function() {{
         var figSpec = {fig_json};
-        var config = {{scrollZoom: true, displaylogo: false, responsive: false}};
+        var config = {{
+          scrollZoom: true, displaylogo: false, responsive: false, displayModeBar: true,
+          modeBarButtonsToRemove: ["select2d", "lasso2d"]
+        }};
         var el = document.getElementById("{div_id}");
         Plotly.newPlot(el, figSpec.data, figSpec.layout, config).then(function() {{
           var annotations = el.querySelectorAll('.annotation');
@@ -1971,7 +2190,12 @@ def render_zoomable_chart(fig, key, height=950):
               ann.classList.add('qfx-blinking-signal');
             }}
           }});
-          qfxLinkAxes(el, figSpec);
+          var link = qfxLinkAxes(el, figSpec);
+          document.getElementById("{div_id}_reset").onclick = function() {{ link.reset(); }};
+          var touchBtn = document.getElementById("{div_id}_touch");
+          touchBtn.onclick = function() {{
+            touchBtn.textContent = (link.toggleTouch() === "chart") ? "✋ Touch: pan chart" : "📜 Touch: scroll page";
+          }};
         }});
         var wrapper = document.getElementById("{div_id}_wrapper");
         if (window.ResizeObserver) {{
@@ -2259,6 +2483,11 @@ with st.sidebar.expander("🔔 Telegram Alerts & Automated Triggers", expanded=F
     save_conviction_state({"last": {}, "ema30": None})
     st.success("Cleared — the next scan will send every current match again.")
 AUTO_SCAN_MINUTES = 5
+_autoscan_due = False
+_autoscan_count = None
+_autoscan_slot = None
+def _autoscan_caption(status):
+  return f"🟢 Auto-scan every {AUTO_SCAN_MINUTES} min • last run {st.session_state.get('_qfx_last_autorun_at', '—')} • {status}"
 if not AUTOREFRESH_AVAILABLE:
   st.sidebar.warning(
       "Auto-scan every 5 min needs the `streamlit-autorefresh` package. "
@@ -2270,15 +2499,11 @@ else:
   # Always on: scans immediately when the app opens (the first scan sends the
   # full list), then every 5 minutes. Only newly added stocks are sent after that.
   _refresh_count = st_autorefresh(interval=AUTO_SCAN_MINUTES * 60 * 1000, key="qfx_auto_refresh_timer")
-  if _refresh_count != st.session_state.get("_qfx_last_autorefresh_count", -1):
-    st.session_state["_qfx_last_autorefresh_count"] = _refresh_count
-    _ok, _n, _status = run_scan_and_send(tg_token, tg_chat, ema_fast, ema_mid, ema_slow)
-    st.session_state["_qfx_last_autorun_at"] = pd.Timestamp.now().strftime("%H:%M:%S")
-    st.session_state["_qfx_last_autorun_status"] = "✅ ok" if _ok else f"❌ {_status}"
-  st.sidebar.caption(
-      f"🟢 Auto-scan every {AUTO_SCAN_MINUTES} min • last run {st.session_state.get('_qfx_last_autorun_at', '—')} "
-      f"• {st.session_state.get('_qfx_last_autorun_status', '')}"
-  )
+  _autoscan_count = _refresh_count
+  _autoscan_due = _refresh_count != st.session_state.get("_qfx_last_autorefresh_count", -1)
+  # The scan itself runs at the very END of this script (see bottom), so the chart never waits for it.
+  _autoscan_slot = st.sidebar.empty()
+  _autoscan_slot.caption(_autoscan_caption("⏳ scanning after the chart has loaded…" if _autoscan_due else st.session_state.get("_qfx_last_autorun_status", "")))
 if st.sidebar.button("🔄 Refresh data", use_container_width=True):
   st.cache_data.clear()
   st.rerun()
@@ -2349,19 +2574,6 @@ if active_view == "📊 Charts":
       real_df = raw_df.dropna(subset=["Open", "High", "Low", "Close"]).copy()
       ha_df = compute_heikin_ashi(real_df, ema_fast=ema_fast, ema_slow=ema_slow, ema_mid=ema_mid)  # real Heikin Ashi (actual candles)
       struct_event = latest_structure_event(renko_df, lookback=15)
-      with st.spinner("Scanning watchlists..."):
-        conviction_results = get_conviction_results()
-        ema_cross_nifty, _ = scan_ema_cross_2h(tuple(zip(nifty500_yf, nifty500_raw)), fast=int(ema_fast), slow=int(ema_mid), lookback=1)
-        ema_cross_us100, _ = scan_ema_cross_2h(tuple(zip(us100_yf, us100_raw + ["IXIC"])), fast=int(ema_fast), slow=int(ema_mid), lookback=1)
-        outlook = compute_7day_outlook(
-            chart_symbol,
-            chart_display,
-            period="1y",
-            interval="1d",
-            macd_fast=macd_fast,
-            macd_slow=macd_slow,
-            macd_signal=macd_signal,
-        )
       fig = create_chart_figure(
           renko_df, ha_df, brick_size, chart_display, ema_fast, ema_slow, ema_mid,
           live_price=live_price, live_chg=live_chg, symbol_label=chart_display,
@@ -2409,6 +2621,19 @@ if active_view == "📊 Charts":
           ok, m = send_telegram_alert(msg, tg_token, tg_chat)
           st.success(m) if ok else st.error(m)
       with right_panel_col:
+        with st.spinner("Scanning watchlists..."):
+          conviction_results = get_conviction_results()
+          ema_cross_nifty, _ = scan_ema_cross_2h(tuple(zip(nifty500_yf, nifty500_raw)), fast=int(ema_fast), slow=int(ema_mid), lookback=1)
+          ema_cross_us100, _ = scan_ema_cross_2h(tuple(zip(us100_yf, us100_raw + ["IXIC"])), fast=int(ema_fast), slow=int(ema_mid), lookback=1)
+          outlook = compute_7day_outlook(
+              chart_symbol,
+              chart_display,
+              period="1y",
+              interval="1d",
+              macd_fast=macd_fast,
+              macd_slow=macd_slow,
+              macd_signal=macd_signal,
+          )
         def _ema_cross_value_md(cat_name):
           def _fmt(m):
             col = "green" if m["direction"] == "BUY" else "red"
@@ -2487,3 +2712,13 @@ elif active_view == "🔎 Scanner":
     )
   elif df_res is not None:
     st.info("No results — data source may be rate-limiting.")
+# =====================================================================
+# DEFERRED AUTO-SCAN — runs after everything above has been drawn, so the
+# chart and lists appear immediately instead of waiting for the scan.
+# =====================================================================
+if _autoscan_due and _autoscan_slot is not None:
+  _ok, _n, _status = run_scan_and_send(tg_token, tg_chat, ema_fast, ema_mid, ema_slow)
+  st.session_state["_qfx_last_autorefresh_count"] = _autoscan_count
+  st.session_state["_qfx_last_autorun_at"] = pd.Timestamp.now().strftime("%H:%M:%S")
+  st.session_state["_qfx_last_autorun_status"] = "✅ ok" if _ok else f"❌ {_status}"
+  _autoscan_slot.caption(_autoscan_caption(st.session_state["_qfx_last_autorun_status"]))

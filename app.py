@@ -342,15 +342,19 @@ def detect_rsi_signals(renko_df, min_gap=1.5, cooldown=3):
   return rsi_signals, rsi_types
 
 @st.cache_data(ttl=300, show_spinner=False)
-def fetch_2h_ohlc(symbol, period="60d"):
+def fetch_resampled_ohlc(symbol, period="60d", rule="2h"):
+  """Yahoo has no 2h / 4h bars - build them from 60m bars."""
   df = fetch_live_ohlc(symbol, period=period, interval="60m")
   if df.empty:
     return df
   agg = {"Open": "first", "High": "max", "Low": "min", "Close": "last"}
   if "Volume" in df.columns:
     agg["Volume"] = "sum"
-  df_2h = df.resample("2h").agg(agg).dropna(subset=["Close"])
-  return df_2h
+  return df.resample(rule).agg(agg).dropna(subset=["Close"])
+
+
+def fetch_2h_ohlc(symbol, period="60d"):
+  return fetch_resampled_ohlc(symbol, period=period, rule="2h")
 
 def detect_market_structure(high, low, close, swing_lookback=5, brick_type=None):
   high = pd.Series(high).reset_index(drop=True)
@@ -1023,11 +1027,11 @@ for _cat_symbols in WATCHLIST_CATEGORIES.values():
     DISPLAY_TO_SYMBOL[_disp] = _sym
 VIEWS = ["📊 Charts", "🔎 Scanner"]
 TIMEFRAME_PERIODS = {
-    "5m": "5d",
-    "15m": "10d",
-    "30m": "20d",
-    "60m": "60d",
-    "2h": "60d",
+    "5m": "10d",
+    "15m": "30d",
+    "30m": "60d",
+    "60m": "180d",
+    "2h": "180d",
     "4h": "180d",
     "1d": "1y",
     "1wk": "5y",
@@ -1217,7 +1221,7 @@ def _brick_positions(ha_dates, renko_df, n_ha):
 
 def create_chart_figure(
     renko_df, ha_df, brick_size, display, ema_fast, ema_slow, ema_mid=None,
-    live_price=None, live_chg=None, symbol_label=None, raw_df=None, macd_params=None,
+    live_price=None, live_chg=None, symbol_label=None, raw_df=None, macd_params=None, view_days=None,
 ):
   """Rows: 1) real Heikin Ashi (built from the actual candles)
            2) ATR Renko
@@ -1449,7 +1453,44 @@ def create_chart_figure(
     fig.update_yaxes(gridcolor="#2A2F3A", side="right", row=r, col=1, tickformat="f",
                      hoverformat="f", tickfont=dict(size=10), automargin=True,
                      ticklabelposition="outside right")
+  if view_days and ha_dates and n_ha > 5:
+    try:
+      _set_home_window(fig, ha_df, renko_df, macd_df, brick_pos, ha_dates, view_days)
+    except Exception:
+      pass                                   # never lose the chart over the initial zoom
   return fig
+
+
+def _set_home_window(fig, ha_df, renko_df, macd_df, brick_pos, ha_dates, view_days):
+  """Open on the last `view_days` days (x + matching y ranges); everything else stays loaded."""
+  n_ha, n_rk = len(ha_df), len(renko_df)
+  idx = pd.DatetimeIndex(ha_dates)
+  i0 = int(idx.searchsorted(idx[-1] - pd.Timedelta(days=view_days), side="left"))
+  i0 = min(i0, n_ha - 5)
+  pad = max(2.0, 0.03 * (n_ha - i0))
+  xr = [i0 - 0.5, n_ha - 1 + pad]
+  # same window on the brick axis
+  j0 = int(np.searchsorted(brick_pos, i0 - 0.5, side="left"))
+  j0 = min(j0, n_rk - 1)
+  per_candle = (n_rk - 1) / max(brick_pos[-1] - brick_pos[0], 1e-9)
+  bxr = [j0 - 0.5, n_rk - 1 + pad * per_candle]
+
+  def _span(lo, hi, frac=0.08):
+    lo, hi = float(np.nanmin(lo)), float(np.nanmax(hi))
+    d = (hi - lo) or abs(hi) * 0.01 or 1.0
+    return [lo - d * frac, hi + d * frac]
+
+  ha_lo = np.minimum(ha_df["Low"].values[i0:], ha_df["EMA_FAST"].values[i0:])
+  ha_hi = np.maximum(ha_df["High"].values[i0:], ha_df["EMA_FAST"].values[i0:])
+  ry = _span(renko_df["Low"].values[j0:], renko_df["High"].values[j0:], 0.12)
+  my = _span(np.minimum(macd_df["MACD"].values[i0:], macd_df["Hist"].values[i0:]),
+             np.maximum(macd_df["MACD"].values[i0:], macd_df["Hist"].values[i0:]), 0.25)
+  for r in (1, 3, 4):
+    fig.update_xaxes(range=xr, row=r, col=1)
+  fig.update_xaxes(range=bxr, row=2, col=1)
+  fig.update_yaxes(range=_span(ha_lo, ha_hi, 0.12), row=1, col=1)
+  fig.update_yaxes(range=ry, row=2, col=1)
+  fig.update_yaxes(range=my, row=3, col=1)
 
 def go_to_chart(symbol, display):
   st.session_state.chart_symbol = symbol
@@ -1473,6 +1514,25 @@ QFX_SYNC_JS = r"""
 // Keeps the Heikin Ashi + MACD axes (real candles) and the Renko + RSI axes (bricks)
 // on the same time window while zooming, panning and resetting. The brick -> candle
 // position table comes from layout.meta.qfx_sync (built in create_chart_figure).
+var qfxHold = false;
+function qfxHome(el, spec) {
+  // Reset (double-click / toolbar autoscale) returns to the opening window instead of "all data".
+  var L = (spec && spec.layout) || {}, home = {};
+  Object.keys(L).forEach(function (k) {
+    if (/^[xy]axis\d*$/.test(k) && L[k] && L[k].range) { home[k + ".range"] = L[k].range.slice(); }
+  });
+  if (!Object.keys(home).length) { return; }
+  el.on("plotly_relayout", function (ev) {
+    if (qfxHold || !ev) { return; }
+    var reset = Object.keys(ev).some(function (k) { return /^[xy]axis\d*\.autorange$/.test(k) && ev[k] === true; });
+    if (!reset) { return; }
+    qfxHold = true;
+    setTimeout(function () {
+      Plotly.relayout(el, home).then(function () { setTimeout(function () { qfxHold = false; }, 50); },
+                                     function () { qfxHold = false; });
+    }, 0);
+  });
+}
 function qfxLinkY(el) {
   // Heikin Ashi (yaxis) and Renko (yaxis2) are both price panels: moving / zooming one moves the other by the same amount.
   var A = "yaxis", B = "yaxis2", busy = false, prev = {};
@@ -1485,7 +1545,7 @@ function qfxLinkY(el) {
     return null;
   }
   function onEvent(ev) {
-    if (busy || !ev) { return; }
+    if (busy || qfxHold || !ev) { return; }
     var srcName = null;
     [A, B].forEach(function (n) { if (srcName === null && (evRange(ev, n) || ev[n + ".autorange"] === true)) { srcName = n; } });
     if (!srcName) { return; }
@@ -1507,6 +1567,7 @@ function qfxLinkY(el) {
   });
 }
 function qfxLinkAxes(el, spec) {
+  qfxHome(el, spec);
   qfxLinkY(el);
   var meta = spec && spec.layout && spec.layout.meta;
   var sync = meta && meta.qfx_sync;
@@ -1551,7 +1612,7 @@ function qfxLinkAxes(el, spec) {
     Plotly.relayout(el, upd).then(function () { busy = false; }, function () { busy = false; });
   }
   function onXEvent(ev) {
-    if (busy || !ev) { return; }
+    if (busy || qfxHold || !ev) { return; }
     var fromCandle = touched(ev, CANDLE), fromBrick = touched(ev, BRICK);
     if (fromCandle === fromBrick) { return; }
     var src = fromCandle ? CANDLE : BRICK, dst = fromCandle ? BRICK : CANDLE;
@@ -1761,6 +1822,13 @@ else:
   current_display = st.sidebar.text_input("Display name", value=current_symbol)
 interval = st.sidebar.select_slider("Timeframe", options=list(TIMEFRAME_PERIODS.keys()), value="30m")
 period = TIMEFRAME_PERIODS[interval]
+INTRADAY = ("5m", "15m", "30m", "60m", "2h", "4h")
+view_choice = st.sidebar.selectbox(
+    "Chart window (intraday)", ["Last 7 days", "Last 30 days", "All loaded data"], index=0,
+    help="All the loaded history stays in the chart - drag / scroll to go back further. "
+         "Double-click returns to this window.",
+)
+VIEW_DAYS = {"Last 7 days": 7, "Last 30 days": 30}.get(view_choice) if interval in INTRADAY else None
 st.sidebar.markdown("---")
 c1, c2, c2b = st.sidebar.columns(3)
 ema_fast = c1.number_input("EMA Fast", min_value=1, max_value=200, value=9)
@@ -1926,8 +1994,8 @@ with top_forex_col:
 # ---- Charts view --------------------------------------------------------
 if active_view == "📊 Charts":
   with st.spinner(f"Fetching {chart_display}..."):
-    if interval == "2h":
-      raw_df = fetch_2h_ohlc(chart_symbol, period=period)
+    if interval in ("2h", "4h"):
+      raw_df = fetch_resampled_ohlc(chart_symbol, period=period, rule=interval)
     else:
       raw_df = fetch_live_ohlc(chart_symbol, period=period, interval=interval)
   if raw_df.empty:
@@ -1958,6 +2026,7 @@ if active_view == "📊 Charts":
           live_price=live_price, live_chg=live_chg, symbol_label=chart_display,
           raw_df=real_df,
           macd_params=dict(fast=macd_fast, slow=macd_slow, signal=macd_signal, smooth=macd_smooth),
+          view_days=VIEW_DAYS,
       )
       chart_col, right_panel_col = st.columns([0.74, 0.26])
       with chart_col:

@@ -1,3 +1,4 @@
+import datetime
 import json
 import os
 import re
@@ -127,10 +128,9 @@ st.markdown(
 )
 
 # =====================================================================
-# TELEGRAM CONFIGURATION (Safe for Read-Only Environments)
+# TELEGRAM CONFIGURATION & FILE PATHS
 # =====================================================================
 def get_safe_path(filename):
-    # Fallback to /tmp if app directory is read-only on Streamlit Cloud
     try:
         path = os.path.join(os.path.dirname(os.path.abspath(__file__)), filename)
         with open(path, "a"):
@@ -1713,7 +1713,7 @@ def create_chart_figure(
     fig.add_hline(y=30, line=dict(color=COLOR_GREEN, width=1, dash="dash"), row=4, col=1)
     fig.update_yaxes(range=[0, 100], row=4, col=1)
     add_buy_sell_markers(fig, x_renko, master_signal, renko_df["RSI"], renko_df["RSI"], row=4, col=1, absolute_offset=12.0)
-
+    
     n_rk = len(renko_df)
     brick_pos = None
     if n_ha > 1 and n_rk > 1:
@@ -1734,30 +1734,10 @@ def create_chart_figure(
             fig.update_layout(meta=dict(qfx_sync=dict(
                 brick_pos=[round(float(v), 6) for v in brick_pos], n_candles=int(n_ha))))
 
-    ticker_label = (symbol_label or display or "").strip()
-    if live_price is not None:
-        price_txt = f"${format_price(live_price)}"
-        if live_chg is not None:
-            arrow = "▲" if live_chg >= 0 else "▼"
-            price_txt += f"  {arrow} {live_chg:+.2f}%"
-            price_color = COLOR_GREEN if (live_chg or 0) >= 0 else COLOR_RED
-        else:
-            price_txt = ""
-            price_color = COLOR_TEXT_MAIN
-    else:
-        price_txt = ""
-        price_color = COLOR_TEXT_MAIN
-    vertical_text = f"{ticker_label}   {price_txt}".strip()
-    fig.add_annotation(
-        xref="paper", yref="paper", x=-0.045, y=0.5,
-        text=f"<b>{ticker_label}</b>  <span style='color:{price_color}'>{price_txt}</span>" if vertical_text else "",
-        showarrow=False, textangle=-90, font=dict(color=COLOR_TEXT_MAIN, size=13),
-        xanchor="center", yanchor="middle",
-    )
     fig.update_layout(
         height=950, paper_bgcolor=COLOR_BG_DARK, plot_bgcolor=COLOR_BG_DARK,
         font=dict(color=COLOR_TEXT_MUTED, size=10), showlegend=False,
-        margin=dict(l=48, r=70, t=40, b=10), bargap=0.45,
+        margin=dict(l=10, r=50, t=35, b=10), bargap=0.45,
     )
     fig.update_xaxes(rangeslider_visible=False, showgrid=False, tickfont=dict(size=10))
     fig.update_xaxes(showticklabels=False, row=1, col=1)
@@ -1994,13 +1974,16 @@ if symbol_mode == "Presets":
 else:
     current_symbol = st.sidebar.text_input("Yahoo Finance symbol", value="GC=F")
     current_display = st.sidebar.text_input("Display name", value=current_symbol)
+
 interval = st.sidebar.select_slider("Timeframe", options=list(TIMEFRAME_PERIODS.keys()), value="1d")
 period = TIMEFRAME_PERIODS[interval]
 st.sidebar.markdown("---")
+
 c1, c2, c2b = st.sidebar.columns(3)
 ema_fast = c1.number_input("EMA Fast", min_value=1, max_value=200, value=9)
 ema_mid = c2.number_input("EMA Mid", min_value=1, max_value=200, value=27)
 ema_slow = c2b.number_input("EMA Slow", min_value=1, max_value=200, value=50)
+
 c3, c4 = st.sidebar.columns(2)
 atr_period = c3.number_input("ATR Period", min_value=2, max_value=100, value=21)
 atr_multiplier = c4.number_input("ATR Mult.", min_value=0.1, max_value=10.0, value=3.0, step=0.1)
@@ -2049,6 +2032,7 @@ signal_cooldown = st.sidebar.slider(
 )
 st.sidebar.caption("EMA Fast × EMA Mid (9 × 27) drives the EMA-cross screener boxes and the Renko / Heikin Ashi Buy/Sell signals.")
 st.sidebar.markdown("---")
+
 CHARTINK_EMA_SCREENER_URL = "https://chartink.com/screener/ema9-20-cross-5"
 with st.sidebar:
     st.markdown(f"<div style='font-size:11px;color:{COLOR_TEXT_MUTED};font-weight:600;margin-bottom:6px;'>📊 Chartink Screener</div>", unsafe_allow_html=True)
@@ -2098,7 +2082,6 @@ def run_scan_and_send(tg_token, tg_chat, ema_fast, ema_mid, ema_slow):
                     f"{emoji} *[30m 3-EMA Cross]* *{h['display']}* → *{h['direction']}* "
                     f"(EMA {int(ema_fast)}/{int(ema_mid)}/{int(ema_slow)}, {cat_name})"
                 )
-
     new_last = dict(prev_last)
     conviction_lines = []
     conviction_count = 0
@@ -2120,7 +2103,6 @@ def run_scan_and_send(tg_token, tg_chat, ema_fast, ema_mid, ema_slow):
                 f"🔥 *{h['display']}* — {conviction_price_str(cat_name, h['price'])} ({h['chg']:+.2f}%)"
             )
         conviction_count += len(fresh)
-
     message_sections = []
     if conviction_lines:
         message_sections.append("*🚨 High-Conviction Shares*\n" + "\n".join(conviction_lines))
@@ -2210,6 +2192,7 @@ chart_display = st.session_state.chart_display
 # =====================================================================
 _header_top_commodity = fetch_top_n_movers(tuple(COMMODITIES), n=1)
 _header_top_forex = fetch_top_n_movers(tuple(FOREX_PAIRS), n=1)
+
 if "active_view" not in st.session_state:
     st.session_state.active_view = VIEWS[0]
 
@@ -2265,6 +2248,7 @@ if active_view == "📊 Charts":
                 real_df = raw_df.dropna(subset=["Open", "High", "Low", "Close"]).copy()
                 ha_df = compute_heikin_ashi(real_df, ema_fast=ema_fast, ema_slow=ema_slow, ema_mid=ema_mid)
                 struct_event = latest_structure_event(renko_df, lookback=15)
+                
                 with st.spinner("Scanning watchlists..."):
                     conviction_results = get_conviction_results()
                     ema_cross_nifty, _ = scan_ema_cross_2h(tuple(zip(nifty500_yf, nifty500_raw)), fast=int(ema_fast), slow=int(ema_mid), lookback=1)
@@ -2278,13 +2262,17 @@ if active_view == "📊 Charts":
                         macd_slow=macd_slow,
                         macd_signal=macd_signal,
                     )
+                
                 fig = create_chart_figure(
                     renko_df, ha_df, brick_size, chart_display, ema_fast, ema_slow, ema_mid,
                     live_price=live_price, live_chg=live_chg, symbol_label=chart_display,
                     raw_df=real_df,
                     macd_params=dict(fast=macd_fast, slow=macd_slow, signal=macd_signal, smooth=macd_smooth),
                 )
+                
+                # Main alignment: Left column for chart, Right column for detailed analysis boxes
                 chart_col, right_panel_col = st.columns([0.74, 0.26])
+                
                 with chart_col:
                     search_col, search_btn_col = st.columns([0.85, 0.15])
                     search_col.text_input(
@@ -2323,6 +2311,7 @@ if active_view == "📊 Charts":
                         )
                         ok, m = send_telegram_alert(msg, tg_token, tg_chat)
                         st.success(m) if ok else st.error(m)
+
                 with right_panel_col:
                     def _ema_cross_value_md(cat_name):
                         def _fmt(m):
@@ -2331,6 +2320,7 @@ if active_view == "📊 Charts":
                             recency = "latest" if m["bars_ago"] == 0 else f"{m['bars_ago']} bar ago"
                             return f"{conviction_price_str(cat_name, m['price'])} • :{col}[{arrow} {m['direction']}] • {recency}"
                         return _fmt
+
                     if outlook:
                         dir_color = (
                             COLOR_GREEN
@@ -2353,7 +2343,9 @@ if active_view == "📊 Charts":
                             f"</div>",
                             unsafe_allow_html=True,
                         )
+                    
                     render_conviction_box(conviction_results, key_prefix="hc", on_click=go_to_chart)
+                    
                     for _cat, _hits, _kp in (("Nifty 500", ema_cross_nifty, "emax_nifty"), ("US 100", ema_cross_us100, "emax_us100")):
                         _shown = _hits[:CONVICTION_MAX_DISPLAY]
                         _title = f"⚡ EMA {int(ema_fast)} × {int(ema_mid)} Cross (2H) — {_cat} • {len(_hits)}"
@@ -2380,6 +2372,7 @@ elif active_view == "🔎 Scanner":
                         results.append(res)
             df_res = pd.DataFrame(results)
             st.session_state["scanner_results"] = df_res
+            
     df_res = st.session_state.get("scanner_results")
     if df_res is not None and not df_res.empty:
         display_cols = ["Ticker", "Price", "ChangePct", "Signal", "Structure", "Score", "SL", "TP1", "TP1_PCT", "TP2"]

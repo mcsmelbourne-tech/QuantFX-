@@ -1632,8 +1632,7 @@ live_price=None, live_chg=None, symbol_label=None, raw_df=None, macd_params=None
            2) MACD (independent, from the actual candles)
            3) ATR Renko          4) RSI (Renko bricks)
   Rows 1+2 share one time axis; rows 3+4 share the brick axis."""
-           2) ATR Renko
-           3) MACD (independent, from the actual candles)
+                  3) MACD (independent, from the actual candles)
            4) RSI (Renko bricks)
   Rows 1+3 share the real-candle time axis; rows 2+4 share the brick axis.
   Both groups are kept on the same time window when zooming / panning (see the

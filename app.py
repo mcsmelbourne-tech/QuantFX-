@@ -1542,34 +1542,16 @@ def create_chart_figure(
     live_price=None, live_chg=None, symbol_label=None, raw_df=None, macd_params=None,
 ):
     macd_params = macd_params or {}
-    n_ha = len(ha_df)
-    x_ha = list(range(n_ha))
-    ha_dates = list(raw_df.index) if raw_df is not None and len(raw_df) == n_ha else []
-    ha_tick_vals, ha_tick_texts = _date_ticks(ha_dates)
-    
     n_rk = len(renko_df)
-    brick_pos = None
-    if n_ha > 1 and n_rk > 1:
-        try:
-            if ha_dates and "Date" in renko_df.columns:
-                c_dates = pd.DatetimeIndex(ha_dates)
-                if c_dates.is_monotonic_increasing:
-                    c_idx = np.clip(c_dates.searchsorted(pd.DatetimeIndex(renko_df["Date"]), side="right") - 1, 0, n_ha - 1)
-                    c_ser = pd.Series(c_idx)
-                    k_in = c_ser.groupby(c_ser).cumcount().values
-                    m_in = c_ser.groupby(c_ser).transform("size").values
-                    brick_pos = c_idx - 0.5 + (k_in + 0.5) / m_in
-        except Exception:
-            brick_pos = None
-        if brick_pos is None:
-            brick_pos = np.linspace(0, n_ha - 1, n_rk)
-    else:
-        brick_pos = list(range(n_rk))
+    # Use pure sequential integer indices [0, 1, 2, ...] for Renko and shared subplots to fill gaps seamlessly
+    x_rk = list(range(n_rk))
+    rk_dates = list(renko_df["Date"]) if "Date" in renko_df.columns else []
+    rk_tick_vals, rk_tick_texts = _date_ticks(rk_dates)
 
     _rf = renko_df["EMA_FAST"].astype(float).values
     _rm = (renko_df["EMA_MID"] if "EMA_MID" in renko_df.columns else renko_df["EMA_SLOW"]).astype(float).values
-    _sig = ["HOLD"] * len(renko_df)
-    for _i in range(1, len(renko_df)):
+    _sig = ["HOLD"] * n_rk
+    for _i in range(1, n_rk):
         if np.isfinite(_rf[_i]) and np.isfinite(_rm[_i]) and np.isfinite(_rf[_i - 1]) and np.isfinite(_rm[_i - 1]):
             if _rf[_i] > _rm[_i] and _rf[_i - 1] <= _rm[_i - 1]:
                 _sig[_i] = "BUY"
@@ -1578,7 +1560,7 @@ def create_chart_figure(
     master_signal = pd.Series(_sig)
     
     macd_df = compute_independent_macd(
-        ha_df["Close"] if raw_df is None else raw_df["Close"],
+        renko_df["Close"],
         fast=macd_params.get("fast", 12), slow=macd_params.get("slow", 26),
         signal=macd_params.get("signal", 9), smooth=macd_params.get("smooth", 3),
     )
@@ -1595,7 +1577,9 @@ def create_chart_figure(
         ),
     )
 
-    # ---------------- Row 1: real Heikin Ashi -----------------------------
+    # ---------------- Row 1: Heikin Ashi mapped to sequential index -------
+    n_ha = len(ha_df)
+    x_ha = list(range(n_ha))
     ha_close = ha_df["Close"].astype(float)
     fast_s = ha_df["EMA_FAST"].astype(float)
     slow_s = ha_df["EMA_SLOW"].astype(float)
@@ -1657,22 +1641,22 @@ def create_chart_figure(
     except Exception:
         pass
 
-    # ---------------- Row 2: ATR Renko (Solid overlapping bricks) --------
+    # ---------------- Row 2: ATR Renko (Solid gap-free sequential bars) ---
     rk_open = renko_df["Open"].astype(float).values
     rk_close = renko_df["Close"].astype(float).values
     rk_type = renko_df["Type"].values
     
     up_x, up_base, up_height = [], [], []
     down_x, down_base, down_height = [], [], []
-    for i in range(len(brick_pos)):
+    for i in range(n_rk):
         o, c = rk_open[i], rk_close[i]
         b_min, b_max = min(o, c), max(o, c)
         if rk_type[i] == "up":
-            up_x.append(brick_pos[i])
+            up_x.append(x_rk[i])
             up_base.append(b_min)
             up_height.append(b_max - b_min if b_max > b_min else brick_size)
         else:
-            down_x.append(brick_pos[i])
+            down_x.append(x_rk[i])
             down_base.append(b_min)
             down_height.append(b_max - b_min if b_max > b_min else brick_size)
 
@@ -1691,12 +1675,12 @@ def create_chart_figure(
             ), row=2, col=1,
         )
 
-    fig.add_trace(go.Scatter(x=brick_pos, y=renko_df["EMA_FAST"], line=dict(color=COLOR_MA_FAST, width=1.5), name=f"EMA {ema_fast}", showlegend=False), row=2, col=1)
-    fig.add_trace(go.Scatter(x=brick_pos, y=renko_df["EMA_SLOW"], line=dict(color=COLOR_MA_SLOW, width=1.5), name=f"EMA {ema_slow}", showlegend=False), row=2, col=1)
+    fig.add_trace(go.Scatter(x=x_rk, y=renko_df["EMA_FAST"], line=dict(color=COLOR_MA_FAST, width=1.5), name=f"EMA {ema_fast}", showlegend=False), row=2, col=1)
+    fig.add_trace(go.Scatter(x=x_rk, y=renko_df["EMA_SLOW"], line=dict(color=COLOR_MA_SLOW, width=1.5), name=f"EMA {ema_slow}", showlegend=False), row=2, col=1)
     if ema_mid is not None and "EMA_MID" in renko_df.columns:
-        fig.add_trace(go.Scatter(x=brick_pos, y=renko_df["EMA_MID"], line=dict(color="#FFFFFF", width=1.3), name=f"EMA {ema_mid}", showlegend=False), row=2, col=1)
-    _rk_pad = float(np.nanmax(renko_df["High"].values) - np.nanmin(renko_df["Low"].values)) * 0.02 if len(renko_df) else 0.0
-    add_pill_signals(fig, brick_pos, master_signal, renko_df["Low"].values - _rk_pad, renko_df["High"].values + _rk_pad, row=2)
+        fig.add_trace(go.Scatter(x=x_rk, y=renko_df["EMA_MID"], line=dict(color="#FFFFFF", width=1.3), name=f"EMA {ema_mid}", showlegend=False), row=2, col=1)
+    _rk_pad = float(np.nanmax(renko_df["High"].values) - np.nanmin(renko_df["Low"].values)) * 0.02 if n_rk else 0.0
+    add_pill_signals(fig, x_rk, master_signal, renko_df["Low"].values - _rk_pad, renko_df["High"].values + _rk_pad, row=2)
     
     struct_style = {
         "BOS_DEMAND": (COLOR_BOS_DEMAND, "B-S"),
@@ -1704,25 +1688,25 @@ def create_chart_figure(
         "CHOCH_DEMAND": (COLOR_CHOCH_DEMAND, "CH-S"),
         "CHOCH_SUPPLY": (COLOR_CHOCH_SUPPLY, "CH-D"),
     }
-    last_struct_event = latest_structure_event(renko_df, lookback=len(renko_df))
+    last_struct_event = latest_structure_event(renko_df, lookback=n_rk)
     if last_struct_event is not None:
         s_type = last_struct_event["type"]
         if s_type in struct_style:
             color, label = struct_style[s_type]
             s_level = last_struct_event["level"]
-            i = len(renko_df) - 1 - last_struct_event["bars_ago"]
+            i = n_rk - 1 - last_struct_event["bars_ago"]
             origin_idx = renko_df["StructureOriginIdx"].iloc[i]
             span_start = int(origin_idx) if pd.notna(origin_idx) else max(i - 6, 0)
-            x_start_pos = brick_pos[span_start] if span_start < len(brick_pos) else brick_pos[0]
-            x_end_pos = brick_pos[-1]
+            x_start_pos = x_rk[span_start] if span_start < n_rk else x_rk[0]
+            x_end_pos = x_rk[-1]
             fig.add_shape(type="line", x0=x_start_pos, x1=x_end_pos, y0=s_level, y1=s_level,
                           line=dict(color=color, width=1.5, dash="dash"), opacity=0.6, row=2, col=1)
-            fig.add_annotation(x=brick_pos[i], y=s_level, text=label, showarrow=False,
+            fig.add_annotation(x=x_rk[i], y=s_level, text=label, showarrow=False,
                                font=dict(color="#FFFFFF", size=10), bgcolor="#1E222D", bordercolor=color,
                                borderwidth=1, row=2, col=1,
                                yshift=14 if s_type in ("BOS_DEMAND", "CHOCH_DEMAND") else -14)
 
-    # ---------------- Row 3: independent MACD (TradingView style) ---------
+    # ---------------- Row 3: MACD mapped to sequential index ------------
     hist = macd_df["Hist"].values.astype(float)
     prev_hist = np.r_[np.nan, hist[:-1]]
     hist_colors = []
@@ -1732,11 +1716,11 @@ def create_chart_figure(
             hist_colors.append(COLOR_HIST_POS_UP if rising else COLOR_HIST_POS_DOWN)
         else:
             hist_colors.append(COLOR_HIST_NEG_UP if rising else COLOR_HIST_NEG_DOWN)
-    fig.add_trace(go.Bar(x=x_ha, y=hist, marker_color=hist_colors, marker_line_color=COLOR_BG_DARK, marker_line_width=1,
+    fig.add_trace(go.Bar(x=x_rk, y=hist, marker_color=hist_colors, marker_line_color=COLOR_BG_DARK, marker_line_width=1,
                          name="Histogram", showlegend=False), row=3, col=1)
-    fig.add_trace(go.Scatter(x=x_ha, y=macd_df["MACD"], line=dict(color=COLOR_MACD_LINE, width=1.3),
+    fig.add_trace(go.Scatter(x=x_rk, y=macd_df["MACD"], line=dict(color=COLOR_MACD_LINE, width=1.3),
                              name="MACD", showlegend=False), row=3, col=1)
-    fig.add_trace(go.Scatter(x=x_ha, y=macd_df["Signal"], line=dict(color=COLOR_SIGNAL_LINE, width=1.3),
+    fig.add_trace(go.Scatter(x=x_rk, y=macd_df["Signal"], line=dict(color=COLOR_SIGNAL_LINE, width=1.3),
                              name="Signal", showlegend=False), row=3, col=1)
     fig.add_hline(y=0, line=dict(color="#787B86", width=1, dash="dot"), row=3, col=1)
     m_vals = macd_df["MACD"].values.astype(float)
@@ -1745,15 +1729,15 @@ def create_chart_figure(
     m_pad = (finite.max() - finite.min()) * 0.10 if finite.size else 0.001
     lo_line = np.minimum(np.minimum(m_vals, s_vals), hist)
     hi_line = np.maximum(np.maximum(m_vals, s_vals), hist)
-    add_pill_signals(fig, x_ha, macd_df["Cross"].values, lo_line - m_pad, hi_line + m_pad, row=3)
+    add_pill_signals(fig, x_rk, macd_df["Cross"].values, lo_line - m_pad, hi_line + m_pad, row=3)
 
-    # ---------------- Row 4: RSI (Aligned via brick_pos) -------------------
+    # ---------------- Row 4: RSI mapped to sequential index -------------
     rsi_vals = renko_df["RSI"].values
-    fig.add_trace(go.Scatter(x=brick_pos, y=rsi_vals, line=dict(color="#00D4FF", width=1.8), name="RSI", showlegend=False), row=4, col=1)
+    fig.add_trace(go.Scatter(x=x_rk, y=rsi_vals, line=dict(color="#00D4FF", width=1.8), name="RSI", showlegend=False), row=4, col=1)
     fig.add_hline(y=70, line=dict(color=COLOR_RED, width=1, dash="dash"), row=4, col=1)
     fig.add_hline(y=30, line=dict(color=COLOR_GREEN, width=1, dash="dash"), row=4, col=1)
     fig.update_yaxes(range=[0, 100], row=4, col=1)
-    add_buy_sell_markers(fig, brick_pos, master_signal, renko_df["RSI"], renko_df["RSI"], row=4, col=1, absolute_offset=12.0)
+    add_buy_sell_markers(fig, x_rk, master_signal, renko_df["RSI"], renko_df["RSI"], row=4, col=1, absolute_offset=12.0)
 
     fig.update_layout(
         height=950, paper_bgcolor=COLOR_BG_DARK, plot_bgcolor=COLOR_BG_DARK,
@@ -1765,7 +1749,7 @@ def create_chart_figure(
     fig.update_xaxes(showticklabels=False, row=2, col=1)
     fig.update_xaxes(showticklabels=False, row=3, col=1)
     fig.update_xaxes(showticklabels=True, row=4, col=1,
-                     tickvals=ha_tick_vals or None, ticktext=ha_tick_texts or None)
+                     tickvals=rk_tick_vals or None, ticktext=rk_tick_texts or None)
                      
     for r in range(1, 5):
         fig.update_yaxes(gridcolor="#2A2F3A", side="right", row=r, col=1, tickformat="f",

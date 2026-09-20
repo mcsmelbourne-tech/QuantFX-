@@ -1657,15 +1657,40 @@ def create_chart_figure(
     except Exception:
         pass
 
-    # ---------------- Row 2: ATR Renko (Aligned via brick_pos) -------------
-    fig.add_trace(
-        go.Candlestick(
-            x=brick_pos, open=renko_df["Open"], high=renko_df["High"], low=renko_df["Low"], close=renko_df["Close"],
-            increasing_line_color=COLOR_BULL, decreasing_line_color=COLOR_BEAR,
-            increasing_fillcolor=COLOR_BULL, decreasing_fillcolor=COLOR_BEAR,
-            name="ATR Renko", showlegend=False,
-        ), row=2, col=1,
-    )
+    # ---------------- Row 2: ATR Renko (Solid overlapping bricks) --------
+    rk_open = renko_df["Open"].astype(float).values
+    rk_close = renko_df["Close"].astype(float).values
+    rk_type = renko_df["Type"].values
+    
+    up_x, up_base, up_height = [], [], []
+    down_x, down_base, down_height = [], [], []
+    for i in range(len(brick_pos)):
+        o, c = rk_open[i], rk_close[i]
+        b_min, b_max = min(o, c), max(o, c)
+        if rk_type[i] == "up":
+            up_x.append(brick_pos[i])
+            up_base.append(b_min)
+            up_height.append(b_max - b_min if b_max > b_min else brick_size)
+        else:
+            down_x.append(brick_pos[i])
+            down_base.append(b_min)
+            down_height.append(b_max - b_min if b_max > b_min else brick_size)
+
+    if up_x:
+        fig.add_trace(
+            go.Bar(
+                x=up_x, y=up_height, base=up_base, marker_color=COLOR_BULL,
+                marker_line_width=0, width=1.0, name="Renko Up", showlegend=False,
+            ), row=2, col=1,
+        )
+    if down_x:
+        fig.add_trace(
+            go.Bar(
+                x=down_x, y=down_height, base=down_base, marker_color=COLOR_BEAR,
+                marker_line_width=0, width=1.0, name="Renko Down", showlegend=False,
+            ), row=2, col=1,
+        )
+
     fig.add_trace(go.Scatter(x=brick_pos, y=renko_df["EMA_FAST"], line=dict(color=COLOR_MA_FAST, width=1.5), name=f"EMA {ema_fast}", showlegend=False), row=2, col=1)
     fig.add_trace(go.Scatter(x=brick_pos, y=renko_df["EMA_SLOW"], line=dict(color=COLOR_MA_SLOW, width=1.5), name=f"EMA {ema_slow}", showlegend=False), row=2, col=1)
     if ema_mid is not None and "EMA_MID" in renko_df.columns:
@@ -1733,7 +1758,7 @@ def create_chart_figure(
     fig.update_layout(
         height=950, paper_bgcolor=COLOR_BG_DARK, plot_bgcolor=COLOR_BG_DARK,
         font=dict(color=COLOR_TEXT_MUTED, size=10), showlegend=False,
-        margin=dict(l=10, r=50, t=35, b=10), bargap=0.45,
+        margin=dict(l=10, r=50, t=35, b=10), bargap=0,
     )
     fig.update_xaxes(rangeslider_visible=False, showgrid=False, tickfont=dict(size=10))
     fig.update_xaxes(showticklabels=False, row=1, col=1)

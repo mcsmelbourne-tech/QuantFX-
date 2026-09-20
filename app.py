@@ -1445,13 +1445,6 @@ def create_chart_figure(
   fig.update_xaxes(matches="x", showticklabels=False, row=3, col=1)
   fig.update_xaxes(matches="x", showticklabels=bool(ha_tick_vals), tickvals=ha_tick_vals or None,
                    ticktext=ha_tick_texts or None, row=4, col=1)
-  # keep the view on the data: no panning off into empty space
-  try:
-    for _r in (1, 3, 4):
-      fig.update_xaxes(minallowed=-2, maxallowed=n_ha + 6, row=_r, col=1)
-    fig.update_xaxes(minallowed=-2, maxallowed=len(renko_df) + 6, row=2, col=1)
-  except Exception:
-    pass
   for r in range(1, 4):
     fig.update_yaxes(gridcolor="#2A2F3A", side="right", row=r, col=1, tickformat="f",
                      hoverformat="f", tickfont=dict(size=10), automargin=True,
@@ -1482,28 +1475,36 @@ QFX_SYNC_JS = r"""
 // position table comes from layout.meta.qfx_sync (built in create_chart_figure).
 function qfxLinkY(el) {
   // Heikin Ashi (yaxis) and Renko (yaxis2) are both price panels: moving / zooming one moves the other by the same amount.
-  var A = "yaxis", B = "yaxis2", busy = false;
+  var A = "yaxis", B = "yaxis2", busy = false, prev = {};
   function rng(n) { try { return el._fullLayout[n].range.slice(); } catch (e) { return null; } }
-  var prev = {}; prev[A] = rng(A); prev[B] = rng(B);
-  function changed(ev, n) { return Object.keys(ev).some(function (k) { return k.indexOf(n + ".range") === 0 || k === n + ".autorange"; }); }
-  el.on("plotly_relayout", function (ev) {
+  prev[A] = rng(A); prev[B] = rng(B);
+  function evRange(ev, n) {
+    var a = ev[n + ".range[0]"], b = ev[n + ".range[1]"], r = ev[n + ".range"];
+    if (a !== undefined && b !== undefined) { return [a, b]; }
+    if (r && r.length === 2) { return [r[0], r[1]]; }
+    return null;
+  }
+  function onEvent(ev) {
     if (busy || !ev) { return; }
-    var srcName = changed(ev, A) ? A : (changed(ev, B) ? B : null);
+    var srcName = null;
+    [A, B].forEach(function (n) { if (srcName === null && (evRange(ev, n) || ev[n + ".autorange"] === true)) { srcName = n; } });
     if (!srcName) { return; }
-    var dstName = srcName === A ? B : A;
-    var upd = {};
+    var dstName = srcName === A ? B : A, upd = {};
     if (ev[srcName + ".autorange"] === true) {
       upd[dstName + ".autorange"] = true;
     } else {
-      var now = rng(srcName), was = prev[srcName], dst = prev[dstName];
-      if (!now || !was || !dst) { prev[srcName] = now; return; }
+      var now = evRange(ev, srcName), was = prev[srcName], dst = prev[dstName];
+      if (!now || !was || !dst) { return; }
       upd[dstName + ".range"] = [dst[0] + (now[0] - was[0]), dst[1] + (now[1] - was[1])];
     }
     busy = true;
-    Plotly.relayout(el, upd).then(function () { prev[A] = rng(A); prev[B] = rng(B); busy = false; },
-                                  function () { busy = false; });
+    Plotly.relayout(el, upd).then(function () { busy = false; }, function () { busy = false; });
+  }
+  el.on("plotly_relayouting", onEvent);          // live, while the mouse is still dragging
+  el.on("plotly_relayout", onEvent);             // final value after release / wheel / reset
+  el.on("plotly_relayout", function (ev) {       // remember the settled ranges as the new reference
+    if (ev && !busy) { setTimeout(function () { prev[A] = rng(A); prev[B] = rng(B); }, 0); }
   });
-  el.on("plotly_relayout", function () { if (!busy) { prev[A] = rng(A); prev[B] = rng(B); } });
 }
 function qfxLinkAxes(el, spec) {
   qfxLinkY(el);
@@ -1549,7 +1550,7 @@ function qfxLinkAxes(el, spec) {
     busy = true;
     Plotly.relayout(el, upd).then(function () { busy = false; }, function () { busy = false; });
   }
-  el.on("plotly_relayout", function (ev) {
+  function onXEvent(ev) {
     if (busy || !ev) { return; }
     var fromCandle = touched(ev, CANDLE), fromBrick = touched(ev, BRICK);
     if (fromCandle === fromBrick) { return; }
@@ -1563,7 +1564,9 @@ function qfxLinkAxes(el, spec) {
     try { cur = el._fullLayout[dst[0]].range; } catch (e) { cur = null; }
     if (cur && Math.abs(cur[0] - out[0]) < 1e-6 && Math.abs(cur[1] - out[1]) < 1e-6) { return; }
     apply(dst, out);
-  });
+  }
+  el.on("plotly_relayouting", onXEvent);   // live while dragging
+  el.on("plotly_relayout", onXEvent);      // final value / wheel / reset
 }
 """
 _CHART_TEMPLATE = r"""

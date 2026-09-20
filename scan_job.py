@@ -11,6 +11,7 @@ Run it from any scheduler (GitHub Actions, cron on a small server, Task Schedule
     python scan_job.py                 # scan + send
     python scan_job.py --dry-run       # scan, print what WOULD be sent, send nothing
     python scan_job.py --test          # just send a "connected" message to check the credentials
+    python scan_job.py --full-list     # send the COMPLETE current stock list now
     python scan_job.py --seed-only     # remember today's matches WITHOUT sending (skip the big first message)
     python scan_job.py --reset-state   # forget alert memory (next run sends the full list again)
 
@@ -39,6 +40,7 @@ def main():
   ap = argparse.ArgumentParser(description="QuantFX headless scan + Telegram alert job")
   ap.add_argument("--dry-run", action="store_true", help="print the message instead of sending it")
   ap.add_argument("--test", action="store_true", help="send a test message and exit")
+  ap.add_argument("--full-list", action="store_true", help="send the COMPLETE current stock list now (ignores what was sent before)")
   ap.add_argument("--seed-only", action="store_true", help="record current matches without sending")
   ap.add_argument("--reset-state", action="store_true", help="forget alert memory first")
   ap.add_argument("--ema-fast", type=int, default=_env_int("EMA_FAST", 9))
@@ -70,7 +72,7 @@ def main():
   print(f"QuantFX scan started {stamp}  (EMA {args.ema_fast}/{args.ema_mid}/{args.ema_slow})")
   ok, total_alerts, status = qfx_core.run_scan_and_send(
       token, chat, args.ema_fast, args.ema_mid, args.ema_slow,
-      dry_run=args.dry_run, seed_only=args.seed_only, log=print,
+      dry_run=args.dry_run, seed_only=args.seed_only, full_list=args.full_list, log=print,
   )
   print(f"Result: ok={ok} alerts={total_alerts} | {status} | {time.time() - t0:.0f}s")
   return 0 if ok else 1

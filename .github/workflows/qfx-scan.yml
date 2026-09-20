@@ -1,0 +1,63 @@
+# Runs the QuantFX scan on GitHub's servers, so Telegram alerts arrive even when your
+# computer and phone are off. Secrets needed: TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID.
+name: QuantFX scan
+
+on:
+  schedule:
+    - cron: "*/15 * * * 1-5"      # every 15 min, Mon-Fri (UTC): sends only NEW stocks / new crosses
+    - cron: "30 3 * * 1-5"        # once a day 03:30 UTC (09:00 IST): sends the COMPLETE stock list (edit the time to suit you)
+  workflow_dispatch:               # lets you press "Run workflow" by hand
+    inputs:
+      full_list:
+        description: "Send the COMPLETE current stock list now"
+        type: boolean
+        default: true
+      reset_state:
+        description: "Forget alert memory first (next run sends the full list)"
+        type: boolean
+        default: false
+
+concurrency:
+  group: qfx-scan                  # never run two scans at once
+  cancel-in-progress: false
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-job.txt
+
+      - run: pip install -r requirements-job.txt
+
+      # Alert memory ("only send what is new") is carried from run to run through the Actions cache.
+      - name: Restore alert memory
+        uses: actions/cache/restore@v4
+        with:
+          path: .qfx_conviction_state.json
+          key: qfx-state-${{ github.run_id }}
+          restore-keys: qfx-state-
+
+      - name: Scan and send Telegram alerts
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          QFX_RESET: ${{ inputs.reset_state }}
+          QFX_FULL: ${{ inputs.full_list }}
+          QFX_SCHEDULE: ${{ github.event.schedule }}
+        run: |
+          if [ "$QFX_RESET" = "true" ]; then python scan_job.py --reset-state; exit 0; fi
+          if [ "$QFX_FULL" = "true" ] || [ "$QFX_SCHEDULE" = "30 3 * * 1-5" ]; then python scan_job.py --full-list; else python scan_job.py; fi
+
+      - name: Save alert memory
+        if: always() && hashFiles('.qfx_conviction_state.json') != ''
+        uses: actions/cache/save@v4
+        with:
+          path: .qfx_conviction_state.json
+          key: qfx-state-${{ github.run_id }}-${{ github.run_attempt }}

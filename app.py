@@ -1824,11 +1824,11 @@ interval = st.sidebar.select_slider("Timeframe", options=list(TIMEFRAME_PERIODS.
 period = TIMEFRAME_PERIODS[interval]
 INTRADAY = ("5m", "15m", "30m", "60m", "2h", "4h")
 view_choice = st.sidebar.selectbox(
-    "Chart window (intraday)", ["Last 7 days", "Last 30 days", "All loaded data"], index=0,
+    "Chart window (intraday)", ["Last 5 days", "Last 7 days", "Last 30 days", "All loaded data"], index=1,
     help="All the loaded history stays in the chart - drag / scroll to go back further. "
          "Double-click returns to this window.",
 )
-VIEW_DAYS = {"Last 7 days": 7, "Last 30 days": 30}.get(view_choice) if interval in INTRADAY else None
+VIEW_DAYS = {"Last 5 days": 5, "Last 7 days": 7, "Last 30 days": 30}.get(view_choice) if interval in INTRADAY else None
 st.sidebar.markdown("---")
 c1, c2, c2b = st.sidebar.columns(3)
 ema_fast = c1.number_input("EMA Fast", min_value=1, max_value=200, value=9)

@@ -1904,7 +1904,7 @@ if active_view == "📊 Charts":
           raw_df=real_df,
           macd_params=dict(fast=macd_fast, slow=macd_slow, signal=macd_signal, smooth=macd_smooth),
       )
-      left_panel_col, chart_col = st.columns([0.27, 0.73])
+      chart_col, right_panel_col = st.columns([0.74, 0.26])
       with chart_col:
         search_col, search_btn_col = st.columns([0.85, 0.15])
         search_col.text_input(
@@ -1944,7 +1944,7 @@ if active_view == "📊 Charts":
           )
           ok, m = send_telegram_alert(msg, tg_token, tg_chat)
           st.success(m) if ok else st.error(m)
-      with left_panel_col:
+      with right_panel_col:
         def _ema_cross_value_md(cat_name):
           def _fmt(m):
             col = "green" if m["direction"] == "BUY" else "red"

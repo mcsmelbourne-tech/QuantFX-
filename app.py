@@ -1546,11 +1546,25 @@ def create_chart_figure(
     x_ha = list(range(n_ha))
     ha_dates = list(raw_df.index) if raw_df is not None and len(raw_df) == n_ha else []
     ha_tick_vals, ha_tick_texts = _date_ticks(ha_dates)
-    x_renko = list(range(len(renko_df)))
-    if "Date" in renko_df.columns and len(renko_df) > 0:
-        rk_tick_vals, rk_tick_texts = _date_ticks(list(renko_df["Date"]))
+    
+    n_rk = len(renko_df)
+    brick_pos = None
+    if n_ha > 1 and n_rk > 1:
+        try:
+            if ha_dates and "Date" in renko_df.columns:
+                c_dates = pd.DatetimeIndex(ha_dates)
+                if c_dates.is_monotonic_increasing:
+                    c_idx = np.clip(c_dates.searchsorted(pd.DatetimeIndex(renko_df["Date"]), side="right") - 1, 0, n_ha - 1)
+                    c_ser = pd.Series(c_idx)
+                    k_in = c_ser.groupby(c_ser).cumcount().values
+                    m_in = c_ser.groupby(c_ser).transform("size").values
+                    brick_pos = c_idx - 0.5 + (k_in + 0.5) / m_in
+        except Exception:
+            brick_pos = None
+        if brick_pos is None:
+            brick_pos = np.linspace(0, n_ha - 1, n_rk)
     else:
-        rk_tick_vals, rk_tick_texts = [], []
+        brick_pos = list(range(n_rk))
 
     _rf = renko_df["EMA_FAST"].astype(float).values
     _rm = (renko_df["EMA_MID"] if "EMA_MID" in renko_df.columns else renko_df["EMA_SLOW"]).astype(float).values
@@ -1570,7 +1584,7 @@ def create_chart_figure(
     )
     
     fig = make_subplots(
-        rows=4, cols=1, shared_xaxes=False,
+        rows=4, cols=1, shared_xaxes=True,
         row_heights=[0.34, 0.30, 0.16, 0.20],
         vertical_spacing=0.035,
         subplot_titles=(
@@ -1643,21 +1657,21 @@ def create_chart_figure(
     except Exception:
         pass
 
-    # ---------------- Row 2: ATR Renko -------------------------------------
+    # ---------------- Row 2: ATR Renko (Aligned via brick_pos) -------------
     fig.add_trace(
         go.Candlestick(
-            x=x_renko, open=renko_df["Open"], high=renko_df["High"], low=renko_df["Low"], close=renko_df["Close"],
+            x=brick_pos, open=renko_df["Open"], high=renko_df["High"], low=renko_df["Low"], close=renko_df["Close"],
             increasing_line_color=COLOR_BULL, decreasing_line_color=COLOR_BEAR,
             increasing_fillcolor=COLOR_BULL, decreasing_fillcolor=COLOR_BEAR,
             name="ATR Renko", showlegend=False,
         ), row=2, col=1,
     )
-    fig.add_trace(go.Scatter(x=x_renko, y=renko_df["EMA_FAST"], line=dict(color=COLOR_MA_FAST, width=1.5), name=f"EMA {ema_fast}", showlegend=False), row=2, col=1)
-    fig.add_trace(go.Scatter(x=x_renko, y=renko_df["EMA_SLOW"], line=dict(color=COLOR_MA_SLOW, width=1.5), name=f"EMA {ema_slow}", showlegend=False), row=2, col=1)
+    fig.add_trace(go.Scatter(x=brick_pos, y=renko_df["EMA_FAST"], line=dict(color=COLOR_MA_FAST, width=1.5), name=f"EMA {ema_fast}", showlegend=False), row=2, col=1)
+    fig.add_trace(go.Scatter(x=brick_pos, y=renko_df["EMA_SLOW"], line=dict(color=COLOR_MA_SLOW, width=1.5), name=f"EMA {ema_slow}", showlegend=False), row=2, col=1)
     if ema_mid is not None and "EMA_MID" in renko_df.columns:
-        fig.add_trace(go.Scatter(x=x_renko, y=renko_df["EMA_MID"], line=dict(color="#FFFFFF", width=1.3), name=f"EMA {ema_mid}", showlegend=False), row=2, col=1)
+        fig.add_trace(go.Scatter(x=brick_pos, y=renko_df["EMA_MID"], line=dict(color="#FFFFFF", width=1.3), name=f"EMA {ema_mid}", showlegend=False), row=2, col=1)
     _rk_pad = float(np.nanmax(renko_df["High"].values) - np.nanmin(renko_df["Low"].values)) * 0.02 if len(renko_df) else 0.0
-    add_pill_signals(fig, x_renko, master_signal, renko_df["Low"].values - _rk_pad, renko_df["High"].values + _rk_pad, row=2)
+    add_pill_signals(fig, brick_pos, master_signal, renko_df["Low"].values - _rk_pad, renko_df["High"].values + _rk_pad, row=2)
     
     struct_style = {
         "BOS_DEMAND": (COLOR_BOS_DEMAND, "B-S"),
@@ -1674,9 +1688,11 @@ def create_chart_figure(
             i = len(renko_df) - 1 - last_struct_event["bars_ago"]
             origin_idx = renko_df["StructureOriginIdx"].iloc[i]
             span_start = int(origin_idx) if pd.notna(origin_idx) else max(i - 6, 0)
-            fig.add_shape(type="line", x0=span_start, x1=len(renko_df) - 1, y0=s_level, y1=s_level,
+            x_start_pos = brick_pos[span_start] if span_start < len(brick_pos) else brick_pos[0]
+            x_end_pos = brick_pos[-1]
+            fig.add_shape(type="line", x0=x_start_pos, x1=x_end_pos, y0=s_level, y1=s_level,
                           line=dict(color=color, width=1.5, dash="dash"), opacity=0.6, row=2, col=1)
-            fig.add_annotation(x=i, y=s_level, text=label, showarrow=False,
+            fig.add_annotation(x=brick_pos[i], y=s_level, text=label, showarrow=False,
                                font=dict(color="#FFFFFF", size=10), bgcolor="#1E222D", bordercolor=color,
                                borderwidth=1, row=2, col=1,
                                yshift=14 if s_type in ("BOS_DEMAND", "CHOCH_DEMAND") else -14)
@@ -1706,33 +1722,13 @@ def create_chart_figure(
     hi_line = np.maximum(np.maximum(m_vals, s_vals), hist)
     add_pill_signals(fig, x_ha, macd_df["Cross"].values, lo_line - m_pad, hi_line + m_pad, row=3)
 
-    # ---------------- Row 4: RSI (Renko bricks) ----------------------------
+    # ---------------- Row 4: RSI (Aligned via brick_pos) -------------------
     rsi_vals = renko_df["RSI"].values
-    fig.add_trace(go.Scatter(x=x_renko, y=rsi_vals, line=dict(color="#00D4FF", width=1.8), name="RSI", showlegend=False), row=4, col=1)
+    fig.add_trace(go.Scatter(x=brick_pos, y=rsi_vals, line=dict(color="#00D4FF", width=1.8), name="RSI", showlegend=False), row=4, col=1)
     fig.add_hline(y=70, line=dict(color=COLOR_RED, width=1, dash="dash"), row=4, col=1)
     fig.add_hline(y=30, line=dict(color=COLOR_GREEN, width=1, dash="dash"), row=4, col=1)
     fig.update_yaxes(range=[0, 100], row=4, col=1)
-    add_buy_sell_markers(fig, x_renko, master_signal, renko_df["RSI"], renko_df["RSI"], row=4, col=1, absolute_offset=12.0)
-    
-    n_rk = len(renko_df)
-    brick_pos = None
-    if n_ha > 1 and n_rk > 1:
-        try:
-            if ha_dates and "Date" in renko_df.columns:
-                c_dates = pd.DatetimeIndex(ha_dates)
-                if c_dates.is_monotonic_increasing:
-                    c_idx = np.clip(c_dates.searchsorted(pd.DatetimeIndex(renko_df["Date"]), side="right") - 1, 0, n_ha - 1)
-                    c_ser = pd.Series(c_idx)
-                    k_in = c_ser.groupby(c_ser).cumcount().values
-                    m_in = c_ser.groupby(c_ser).transform("size").values
-                    brick_pos = c_idx - 0.5 + (k_in + 0.5) / m_in
-        except Exception:
-            brick_pos = None
-        if brick_pos is None:
-            brick_pos = np.linspace(0, n_ha - 1, n_rk)
-        if np.all(np.diff(brick_pos) > 0):
-            fig.update_layout(meta=dict(qfx_sync=dict(
-                brick_pos=[round(float(v), 6) for v in brick_pos], n_candles=int(n_ha))))
+    add_buy_sell_markers(fig, brick_pos, master_signal, renko_df["RSI"], renko_df["RSI"], row=4, col=1, absolute_offset=12.0)
 
     fig.update_layout(
         height=950, paper_bgcolor=COLOR_BG_DARK, plot_bgcolor=COLOR_BG_DARK,
@@ -1741,11 +1737,11 @@ def create_chart_figure(
     )
     fig.update_xaxes(rangeslider_visible=False, showgrid=False, tickfont=dict(size=10))
     fig.update_xaxes(showticklabels=False, row=1, col=1)
-    fig.update_xaxes(matches="x", row=2, col=1, showticklabels=bool(ha_tick_vals),
-                     tickvals=ha_tick_vals or None, ticktext=ha_tick_texts or None)
+    fig.update_xaxes(showticklabels=False, row=2, col=1)
     fig.update_xaxes(showticklabels=False, row=3, col=1)
-    fig.update_xaxes(matches="x2", row=4, col=1, showticklabels=bool(rk_tick_vals),
-                     tickvals=rk_tick_vals or None, ticktext=rk_tick_texts or None)
+    fig.update_xaxes(showticklabels=True, row=4, col=1,
+                     tickvals=ha_tick_vals or None, ticktext=ha_tick_texts or None)
+                     
     for r in range(1, 5):
         fig.update_yaxes(gridcolor="#2A2F3A", side="right", row=r, col=1, tickformat="f",
                          hoverformat="f", tickfont=dict(size=10), automargin=True,
@@ -1771,68 +1767,6 @@ def run_chart_search():
             return
     go_to_chart(query, query)
 
-QFX_SYNC_JS = r"""
-function qfxLinkAxes(el, spec) {
-  var meta = spec && spec.layout && spec.layout.meta;
-  var sync = meta && meta.qfx_sync;
-  if (!sync || !sync.brick_pos || sync.brick_pos.length < 2) { return; }
-  var P = sync.brick_pos, nB = P.length;
-  var CANDLE = ["xaxis", "xaxis2"];
-  var BRICK = ["xaxis3", "xaxis4"];
-  var perCandle = (nB - 1) / Math.max(P[nB - 1] - P[0], 1e-9);
-  function candleToBrick(x) {
-    if (x <= P[0]) { return (x - P[0]) * perCandle; }
-    if (x >= P[nB - 1]) { return (nB - 1) + (x - P[nB - 1]) * perCandle; }
-    var lo = 0, hi = nB - 1;
-    while (hi - lo > 1) { var mid = (lo + hi) >> 1; if (P[mid] <= x) { lo = mid; } else { hi = mid; } }
-    return lo + (x - P[lo]) / (P[lo + 1] - P[lo]);
-  }
-  function brickToCandle(b) {
-    if (b <= 0) { return P[0] + b / perCandle; }
-    if (b >= nB - 1) { return P[nB - 1] + (b - (nB - 1)) / perCandle; }
-    var j = Math.floor(b);
-    return P[j] + (b - j) * (P[j + 1] - P[j]);
-  }
-  function touched(ev, names) {
-    return Object.keys(ev).some(function (k) {
-      return names.some(function (n) { return k.indexOf(n + ".range") === 0 || k.indexOf(n + ".autorange") === 0; });
-    });
-  }
-  function pickRange(ev, names) {
-    for (var i = 0; i < names.length; i++) {
-      var a = ev[names[i] + ".range[0]"], b = ev[names[i] + ".range[1]"], r = ev[names[i] + ".range"];
-      if (a !== undefined && b !== undefined) { return [a, b]; }
-      if (r && r.length === 2) { return [r[0], r[1]]; }
-    }
-    return null;
-  }
-  var busy = false;
-  function apply(names, range) {
-    var upd = {};
-    names.forEach(function (n) {
-      if (range) { upd[n + ".range"] = [range[0], range[1]]; } else { upd[n + ".autorange"] = true; }
-    });
-    busy = true;
-    Plotly.relayout(el, upd).then(function () { busy = false; }, function () { busy = false; });
-  }
-  el.on("plotly_relayout", function (ev) {
-    if (busy || !ev) { return; }
-    var fromCandle = touched(ev, CANDLE), fromBrick = touched(ev, BRICK);
-    if (fromCandle === fromBrick) { return; }
-    var src = fromCandle ? CANDLE : BRICK, dst = fromCandle ? BRICK : CANDLE;
-    if (src.some(function (n) { return ev[n + ".autorange"] === true; })) { apply(dst, null); return; }
-    var r = pickRange(ev, src);
-    if (!r) { return; }
-    var lo = Math.min(r[0], r[1]), hi = Math.max(r[0], r[1]);
-    var out = fromCandle ? [candleToBrick(lo), candleToBrick(hi)] : [brickToCandle(lo), brickToCandle(hi)];
-    var cur = null;
-    try { cur = el._fullLayout[dst[0]].range; } catch (e) { cur = null; }
-    if (cur && Math.abs(cur[0] - out[0]) < 1e-6 && Math.abs(cur[1] - out[1]) < 1e-6) { return; }
-    apply(dst, out);
-  });
-}
-"""
-
 def render_zoomable_chart(fig, key, height=950):
     fig_json = fig.to_json()
     div_id = f"qfx_chart_{key}"
@@ -1849,7 +1783,6 @@ def render_zoomable_chart(fig, key, height=950):
    </div>
    <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
    <script>
-      {QFX_SYNC_JS}
      (function() {{
        var figSpec = {fig_json};
        var config = {{scrollZoom: true, displaylogo: false, responsive: false}};
@@ -1862,7 +1795,6 @@ def render_zoomable_chart(fig, key, height=950):
              ann.classList.add('qfx-blinking-signal');
            }}
          }});
-          qfxLinkAxes(el, figSpec);
        }});
        var wrapper = document.getElementById("{div_id}_wrapper");
        if (window.ResizeObserver) {{
@@ -2270,7 +2202,6 @@ if active_view == "📊 Charts":
                     macd_params=dict(fast=macd_fast, slow=macd_slow, signal=macd_signal, smooth=macd_smooth),
                 )
                 
-                # Main alignment: Left column for chart, Right column for detailed analysis boxes
                 chart_col, right_panel_col = st.columns([0.74, 0.26])
                 
                 with chart_col:

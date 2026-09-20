@@ -1433,7 +1433,7 @@ def create_chart_figure(
   fig.update_layout(
       height=950, paper_bgcolor=COLOR_BG_DARK, plot_bgcolor=COLOR_BG_DARK,
       font=dict(color=COLOR_TEXT_MUTED, size=10), showlegend=False,
-      margin=dict(l=48, r=70, t=40, b=10), bargap=0.45,
+      margin=dict(l=48, r=70, t=40, b=10), bargap=0.45, dragmode="pan",
   )
   fig.update_xaxes(rangeslider_visible=False, showgrid=False, tickfont=dict(size=10))
   # Heikin Ashi (x) + MACD (x3) use the real-candle axis; Renko (x2) + RSI (x4) use evenly spaced bricks.
@@ -1472,7 +1472,33 @@ QFX_SYNC_JS = r"""
 // Keeps the Heikin Ashi + MACD axes (real candles) and the Renko + RSI axes (bricks)
 // on the same time window while zooming, panning and resetting. The brick -> candle
 // position table comes from layout.meta.qfx_sync (built in create_chart_figure).
+function qfxLinkY(el) {
+  // Heikin Ashi (yaxis) and Renko (yaxis2) are both price panels: moving / zooming one moves the other by the same amount.
+  var A = "yaxis", B = "yaxis2", busy = false;
+  function rng(n) { try { return el._fullLayout[n].range.slice(); } catch (e) { return null; } }
+  var prev = {}; prev[A] = rng(A); prev[B] = rng(B);
+  function changed(ev, n) { return Object.keys(ev).some(function (k) { return k.indexOf(n + ".range") === 0 || k === n + ".autorange"; }); }
+  el.on("plotly_relayout", function (ev) {
+    if (busy || !ev) { return; }
+    var srcName = changed(ev, A) ? A : (changed(ev, B) ? B : null);
+    if (!srcName) { return; }
+    var dstName = srcName === A ? B : A;
+    var upd = {};
+    if (ev[srcName + ".autorange"] === true) {
+      upd[dstName + ".autorange"] = true;
+    } else {
+      var now = rng(srcName), was = prev[srcName], dst = prev[dstName];
+      if (!now || !was || !dst) { prev[srcName] = now; return; }
+      upd[dstName + ".range"] = [dst[0] + (now[0] - was[0]), dst[1] + (now[1] - was[1])];
+    }
+    busy = true;
+    Plotly.relayout(el, upd).then(function () { prev[A] = rng(A); prev[B] = rng(B); busy = false; },
+                                  function () { busy = false; });
+  });
+  el.on("plotly_relayout", function () { if (!busy) { prev[A] = rng(A); prev[B] = rng(B); } });
+}
 function qfxLinkAxes(el, spec) {
+  qfxLinkY(el);
   var meta = spec && spec.layout && spec.layout.meta;
   var sync = meta && meta.qfx_sync;
   if (!sync || !sync.brick_pos || sync.brick_pos.length < 2) { return; }
@@ -1541,7 +1567,7 @@ _CHART_TEMPLATE = r"""
   <div id="__ID__" style="width: 100%; height: 100%;"></div>
 </div>
 <div style="font-size:10px;color:__MUTED__;margin-top:4px;font-family:sans-serif;">
-  🖱️ Scroll to zoom • Drag to box-zoom • Drag corner to resize
+  🖱️ Drag to move left / right / up / down • Scroll to zoom • Double-click to reset • Drag corner to resize
 </div>
 <script>
 __SYNC_JS__

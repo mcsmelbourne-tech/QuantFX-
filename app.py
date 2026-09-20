@@ -1233,10 +1233,6 @@ def create_chart_figure(
   ha_tick_vals, ha_tick_texts = _date_ticks(ha_dates)
   brick_pos = _brick_positions(ha_dates, renko_df, n_ha)   # only used to keep the time window in sync
   x_renko = list(range(len(renko_df)))
-  if "Date" in renko_df.columns and len(renko_df) > 0:
-    rk_tick_vals, rk_tick_texts = _date_ticks(list(renko_df["Date"]))
-  else:
-    rk_tick_vals, rk_tick_texts = [], []
   # Renko / RSI signal: Buy when EMA fast crosses above EMA mid (9 x 27), Sell when below.
   _rf = renko_df["EMA_FAST"].astype(float).values
   _rm = (renko_df["EMA_MID"] if "EMA_MID" in renko_df.columns else renko_df["EMA_SLOW"]).astype(float).values
@@ -1261,7 +1257,7 @@ def create_chart_figure(
           f"{display} — Heikin Ashi (EMA {ema_fast}/{ema_mid or ema_slow})",
           f"{display} — ATR Renko (Buy/Sell = EMA {ema_fast} × {ema_mid or ema_slow} cross)",
           f"MACD {macd_params.get('fast', 12)}/{macd_params.get('slow', 26)}/{macd_params.get('signal', 9)} — independent Buy/Sell (MACD × Signal)",
-          f"RSI (Buy/Sell = Renko EMA {ema_fast} × {ema_mid or ema_slow} cross • Green 30 / Red 70 levels)",
+          f"RSI 14 (Buy/Sell = Renko EMA {ema_fast} × {ema_mid or ema_slow} cross • Green 30 / Red 70 levels)",
       ),
   )
   # ---------------- Row 1: real Heikin Ashi -----------------------------
@@ -1401,13 +1397,19 @@ def create_chart_figure(
   lo_line = np.minimum(np.minimum(m_vals, s_vals), hist)
   hi_line = np.maximum(np.maximum(m_vals, s_vals), hist)
   add_pill_signals(fig, x_ha, macd_df["Cross"].values, lo_line - m_pad, hi_line + m_pad, row=3)
-  # ---------------- Row 4: RSI (Renko bricks) ----------------------------
-  rsi_vals = renko_df["RSI"].values
-  fig.add_trace(go.Scatter(x=x_renko, y=rsi_vals, line=dict(color="#00D4FF", width=1.8), name="RSI", showlegend=False), row=4, col=1)
+  # ---------------- Row 4: RSI (real candles, same axis as Heikin Ashi / MACD) ---------
+  _rsi_src = raw_df["Close"] if raw_df is not None and len(raw_df) == n_ha else ha_df["Close"]
+  rsi_vals = qfx_core._wilder_rsi(pd.Series(_rsi_src.astype(float).values), 14).values
+  fig.add_trace(go.Scatter(x=x_ha, y=rsi_vals, line=dict(color="#00D4FF", width=1.8), name="RSI", showlegend=False), row=4, col=1)
   fig.add_hline(y=70, line=dict(color=COLOR_RED, width=1, dash="dash"), row=4, col=1)
   fig.add_hline(y=30, line=dict(color=COLOR_GREEN, width=1, dash="dash"), row=4, col=1)
   fig.update_yaxes(range=[0, 100], row=4, col=1)
-  add_buy_sell_markers(fig, x_renko, master_signal, renko_df["RSI"], renko_df["RSI"], row=4, col=1, absolute_offset=12.0)
+  _fin = np.isfinite(rsi_vals)
+  if _fin.sum() > 1:
+    _rsi_at_brick = np.interp(brick_pos, np.asarray(x_ha, dtype=float)[_fin], rsi_vals[_fin])
+  else:
+    _rsi_at_brick = np.full(len(brick_pos), 50.0)
+  add_buy_sell_markers(fig, list(brick_pos), master_signal, _rsi_at_brick, _rsi_at_brick, row=4, col=1, absolute_offset=12.0)
   # ---------------- Zoom-sync map (Renko bricks <-> real candles) --------
   if len(brick_pos) > 1 and n_ha > 1:
     fig.update_layout(meta=dict(qfx_sync=dict(
@@ -1436,14 +1438,20 @@ def create_chart_figure(
       margin=dict(l=48, r=70, t=40, b=10), bargap=0.45, dragmode="pan",
   )
   fig.update_xaxes(rangeslider_visible=False, showgrid=False, tickfont=dict(size=10))
-  # Heikin Ashi (x) + MACD (x3) use the real-candle axis; Renko (x2) + RSI (x4) use evenly spaced bricks.
-  # qfxLinkAxes() (render_zoomable_chart) keeps both groups on the same time window while zooming / panning.
+  # Heikin Ashi (x), MACD (x3) and RSI (x4) share the real-candle axis, so they line up exactly.
+  # Renko (x2) has evenly spaced bricks; qfxLinkAxes() keeps it on the same time window while panning / zooming.
   fig.update_xaxes(showticklabels=False, row=1, col=1)
   fig.update_xaxes(showticklabels=False, row=2, col=1)
-  fig.update_xaxes(matches="x", row=3, col=1, showticklabels=bool(ha_tick_vals),
-                   tickvals=ha_tick_vals or None, ticktext=ha_tick_texts or None)
-  fig.update_xaxes(matches="x2", row=4, col=1, showticklabels=bool(rk_tick_vals),
-                   tickvals=rk_tick_vals or None, ticktext=rk_tick_texts or None)
+  fig.update_xaxes(matches="x", showticklabels=False, row=3, col=1)
+  fig.update_xaxes(matches="x", showticklabels=bool(ha_tick_vals), tickvals=ha_tick_vals or None,
+                   ticktext=ha_tick_texts or None, row=4, col=1)
+  # keep the view on the data: no panning off into empty space
+  try:
+    for _r in (1, 3, 4):
+      fig.update_xaxes(minallowed=-2, maxallowed=n_ha + 6, row=_r, col=1)
+    fig.update_xaxes(minallowed=-2, maxallowed=len(renko_df) + 6, row=2, col=1)
+  except Exception:
+    pass
   for r in range(1, 4):
     fig.update_yaxes(gridcolor="#2A2F3A", side="right", row=r, col=1, tickformat="f",
                      hoverformat="f", tickfont=dict(size=10), automargin=True,
@@ -1503,8 +1511,8 @@ function qfxLinkAxes(el, spec) {
   var sync = meta && meta.qfx_sync;
   if (!sync || !sync.brick_pos || sync.brick_pos.length < 2) { return; }
   var P = sync.brick_pos, nB = P.length;
-  var CANDLE = ["xaxis", "xaxis3"];   // Heikin Ashi + MACD
-  var BRICK = ["xaxis2", "xaxis4"];   // Renko + RSI
+  var CANDLE = ["xaxis", "xaxis3", "xaxis4"];   // Heikin Ashi + MACD + RSI
+  var BRICK = ["xaxis2"];   // Renko
   var perCandle = (nB - 1) / Math.max(P[nB - 1] - P[0], 1e-9);   // bricks per candle (edge extrapolation)
   function candleToBrick(x) {
     if (x <= P[0]) { return (x - P[0]) * perCandle; }
@@ -1748,7 +1756,7 @@ if symbol_mode == "Presets":
 else:
   current_symbol = st.sidebar.text_input("Yahoo Finance symbol", value="GC=F")
   current_display = st.sidebar.text_input("Display name", value=current_symbol)
-interval = st.sidebar.select_slider("Timeframe", options=list(TIMEFRAME_PERIODS.keys()), value="1d")
+interval = st.sidebar.select_slider("Timeframe", options=list(TIMEFRAME_PERIODS.keys()), value="30m")
 period = TIMEFRAME_PERIODS[interval]
 st.sidebar.markdown("---")
 c1, c2, c2b = st.sidebar.columns(3)
@@ -1757,7 +1765,7 @@ ema_mid = c2.number_input("EMA Mid", min_value=1, max_value=200, value=27)
 ema_slow = c2b.number_input("EMA Slow", min_value=1, max_value=200, value=50)
 c3, c4 = st.sidebar.columns(2)
 atr_period = c3.number_input("ATR Period", min_value=2, max_value=100, value=21)
-atr_multiplier = c4.number_input("ATR Mult.", min_value=0.1, max_value=10.0, value=3.0, step=0.1)
+atr_multiplier = c4.number_input("ATR Mult.", min_value=0.1, max_value=10.0, value=1.0, step=0.1)
 st.sidebar.markdown("---")
 SETTINGS_PATH = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), ".qfx_settings.json"

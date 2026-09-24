@@ -73,6 +73,7 @@ v12 additions:
 - "High-Conviction Calls" box: Nifty 500 / US 100 / Commodities / Forex are now separate colour-coded blocks
   (own accent colour, icon, match count and left rail) with a count-chip summary on top. Scan clause, charts,
   MACD, RSI and everything else are unchanged.
+- Heikin Ashi + Renko EMA lines: fast = green, mid = red, slow = yellow; Renko EMA cloud fill removed.
 """
 import json
 import os
@@ -131,8 +132,9 @@ COLOR_BULL = "#26FF9A"
 COLOR_BEAR = "#FF4F7B"
 COLOR_GREEN = "#00FF66"
 COLOR_RED = "#FF3333"
-COLOR_MA_FAST = "#00FF66"
-COLOR_MA_SLOW = "#FF3333"
+COLOR_MA_FAST = "#00FF66"   # fast EMA  = green
+COLOR_MA_MID = "#FF3333"    # mid EMA   = red
+COLOR_MA_SLOW = "#FFD700"   # slow EMA  = yellow
 COLOR_MACD_LINE = "#2962FF"
 COLOR_SIGNAL_LINE = "#FF6D00"
 COLOR_ZERO_LINE = "#4C566A"
@@ -1389,10 +1391,10 @@ def create_chart_figure(
           name="Heikin Ashi", showlegend=False,
       ), row=1, col=1,
   )
-  fig.add_trace(go.Scatter(x=x_ha, y=fast_s, line=dict(color="#FFFFFF", width=1.2), name=f"HA EMA {ema_fast}", showlegend=False), row=1, col=1)
+  fig.add_trace(go.Scatter(x=x_ha, y=fast_s, line=dict(color=COLOR_MA_FAST, width=1.3), name=f"HA EMA {ema_fast}", showlegend=False), row=1, col=1)
   if mid_s is not slow_s:
-    fig.add_trace(go.Scatter(x=x_ha, y=mid_s, line=dict(color="#F0456F", width=1.2), name=f"HA EMA {ema_mid}", showlegend=False), row=1, col=1)
-  fig.add_trace(go.Scatter(x=x_ha, y=slow_s, line=dict(color="#9FA8C3", width=1.2), name=f"HA EMA {ema_slow}", showlegend=False), row=1, col=1)
+    fig.add_trace(go.Scatter(x=x_ha, y=mid_s, line=dict(color=COLOR_MA_MID, width=1.3), name=f"HA EMA {ema_mid}", showlegend=False), row=1, col=1)
+  fig.add_trace(go.Scatter(x=x_ha, y=slow_s, line=dict(color=COLOR_MA_SLOW, width=1.3), name=f"HA EMA {ema_slow}", showlegend=False), row=1, col=1)
   # Ribbon-cross Buy/Sell on the Heikin Ashi candles
   ha_sig = ["HOLD"] * n_ha
   for i in range(1, n_ha):
@@ -1436,14 +1438,7 @@ def create_chart_figure(
                            line=dict(color=RK_UP, width=1, dash="dash"), opacity=0.7), row=2, col=1)
   fig.add_trace(go.Scatter(x=x_renko, y=_bb_m - 2 * _bb_s, mode="lines", hoverinfo="skip", showlegend=False,
                            line=dict(color=RK_DN, width=1, dash="dash"), opacity=0.7), row=2, col=1)
-  # EMA ribbon: green while fast > mid, pink while fast < mid
-  _fa = renko_df["EMA_FAST"].astype(float)
-  _mi = (renko_df["EMA_MID"] if "EMA_MID" in renko_df.columns else renko_df["EMA_SLOW"]).astype(float)
-  _hi_g, _lo_p = _fa.where(_fa >= _mi, _mi), _fa.where(_fa < _mi, _mi)
-  for _base, _top, _fill in ((_mi, _hi_g, "rgba(130,170,140,0.45)"), (_lo_p, _mi, "rgba(200,140,140,0.45)")):
-    fig.add_trace(go.Scatter(x=x_renko, y=_base, mode="lines", line=dict(width=0), hoverinfo="skip", showlegend=False), row=2, col=1)
-    fig.add_trace(go.Scatter(x=x_renko, y=_top, mode="lines", line=dict(width=0), fill="tonexty", fillcolor=_fill,
-                             hoverinfo="skip", showlegend=False), row=2, col=1)
+  # (EMA ribbon colour fill removed - only the three EMA lines are drawn)
   fig.add_trace(
       go.Candlestick(
           x=x_renko, open=renko_df["Open"], high=renko_df["High"], low=renko_df["Low"], close=renko_df["Close"],
@@ -1452,10 +1447,10 @@ def create_chart_figure(
           name="ATR Renko", showlegend=False,
       ), row=2, col=1,
   )
-  fig.add_trace(go.Scatter(x=x_renko, y=renko_df["EMA_FAST"], line=dict(color="#FFFFFF", width=1.3), name=f"EMA {ema_fast}", showlegend=False), row=2, col=1)
-  fig.add_trace(go.Scatter(x=x_renko, y=renko_df["EMA_SLOW"], line=dict(color=COLOR_MA_SLOW, width=1.5), name=f"EMA {ema_slow}", showlegend=False), row=2, col=1)
+  fig.add_trace(go.Scatter(x=x_renko, y=renko_df["EMA_FAST"], line=dict(color=COLOR_MA_FAST, width=1.3), name=f"EMA {ema_fast}", showlegend=False), row=2, col=1)
+  fig.add_trace(go.Scatter(x=x_renko, y=renko_df["EMA_SLOW"], line=dict(color=COLOR_MA_SLOW, width=1.3), name=f"EMA {ema_slow}", showlegend=False), row=2, col=1)
   if ema_mid is not None and "EMA_MID" in renko_df.columns:
-    fig.add_trace(go.Scatter(x=x_renko, y=renko_df["EMA_MID"], line=dict(color="#F0456F", width=1.2), name=f"EMA {ema_mid}", showlegend=False), row=2, col=1)
+    fig.add_trace(go.Scatter(x=x_renko, y=renko_df["EMA_MID"], line=dict(color=COLOR_MA_MID, width=1.3), name=f"EMA {ema_mid}", showlegend=False), row=2, col=1)
   _rk_pad = float(np.nanmax(renko_df["High"].values) - np.nanmin(renko_df["Low"].values)) * 0.02 if len(renko_df) else 0.0
   add_pill_signals(fig, x_renko, master_signal, renko_df["Low"].values - _rk_pad, renko_df["High"].values + _rk_pad, row=2)
   struct_style = {

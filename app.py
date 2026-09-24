@@ -1055,12 +1055,100 @@ TIMEFRAME_PERIODS = {
 # Yahoo Finance daily bars — that lets it run on US100, Commodities and Forex too.
 CONVICTION_MAX_DISPLAY = 30
 
-def get_conviction_results():
-  """{category: [hits]} for every watchlist — feeds the right-hand box."""
+# ---- Chartink-exact daily pullback clause, evaluated locally on Yahoo daily bars -------------
+#   ( cash (
+#       daily close > daily ema(daily close, 200)
+#   and daily ema(daily close, 9) > daily ema(daily close, 200)
+#   and daily close > 5 days ago high
+#   and daily close > 10 days ago high
+#   and daily ema(daily close, 9) > daily ema(daily close, 20)
+#   and daily rsi(14) > 50
+#   and daily low <= daily ema(daily close, 9)
+#   and daily close > daily ema(daily close, 9)
+#   and daily volume > daily sma(daily volume, 20) ) )
+def _wilder_rsi_local(close, period=14):
+  delta = close.diff()
+  gain = delta.clip(lower=0.0)
+  loss = -delta.clip(upper=0.0)
+  avg_gain = gain.ewm(alpha=1.0 / period, adjust=False, min_periods=period).mean()
+  avg_loss = loss.ewm(alpha=1.0 / period, adjust=False, min_periods=period).mean()
+  rs = avg_gain / avg_loss.replace(0.0, np.nan)
+  rsi = 100.0 - (100.0 / (1.0 + rs))
+  return rsi.where(avg_loss != 0.0, 100.0)
+
+def evaluate_chartink_pullback(df):
+  """df: daily OHLCV with columns Open/High/Low/Close/Volume. Returns a dict for the LAST bar if the
+  clause is true, else None. 'N days ago high' = the High of the bar N trading days earlier."""
+  if df is None or len(df) < 210:
+    return None
+  df = df.dropna(subset=["Close", "High", "Low"])
+  if len(df) < 210:
+    return None
+  close, high, low = df["Close"].astype(float), df["High"].astype(float), df["Low"].astype(float)
+  vol = df["Volume"].astype(float).fillna(0.0)
+  ema9 = close.ewm(span=9, adjust=False).mean()
+  ema20 = close.ewm(span=20, adjust=False).mean()
+  ema200 = close.ewm(span=200, adjust=False).mean()
+  rsi14 = _wilder_rsi_local(close, 14)
+  vsma20 = vol.rolling(20).mean()
+  c, l, v = close.iloc[-1], low.iloc[-1], vol.iloc[-1]
+  h5, h10 = high.iloc[-1 - 5], high.iloc[-1 - 10]
+  ok = (
+      c > ema200.iloc[-1]
+      and ema9.iloc[-1] > ema200.iloc[-1]
+      and c > h5
+      and c > h10
+      and ema9.iloc[-1] > ema20.iloc[-1]
+      and rsi14.iloc[-1] > 50
+      and l <= ema9.iloc[-1]
+      and c > ema9.iloc[-1]
+      and v > vsma20.iloc[-1]
+  )
+  if not ok:
+    return None
+  prev = close.iloc[-2]
   return {
-      cat: scan_conviction_category(tuple(symbols))[0]
+      "price": float(c),
+      "chg": float((c / prev - 1.0) * 100.0) if prev else 0.0,
+      "rsi": float(rsi14.iloc[-1]),
+      "vol_ratio": float(v / vsma20.iloc[-1]) if vsma20.iloc[-1] else 0.0,
+  }
+
+def _scan_pullback_local(pairs, chunk=40):
+  """pairs: tuple of (yahoo_symbol, display). Returns (hits, failed_count). Hits sorted by volume surge."""
+  pairs = [p if isinstance(p, (tuple, list)) else (p, p) for p in pairs]
+  hits, failed = [], 0
+  for i in range(0, len(pairs), chunk):
+    part = pairs[i:i + chunk]
+    syms = [p[0] for p in part]
+    try:
+      data = yf.download(syms, period="2y", interval="1d", group_by="ticker",
+                         auto_adjust=False, progress=False, threads=True)
+    except Exception:
+      failed += len(part)
+      continue
+    for sym, disp in part:
+      try:
+        d = data[sym] if isinstance(data.columns, pd.MultiIndex) else data
+        res = evaluate_chartink_pullback(d)
+      except Exception:
+        failed += 1
+        continue
+      if res:
+        res.update({"symbol": sym, "display": disp})
+        hits.append(res)
+  hits.sort(key=lambda m: m["vol_ratio"], reverse=True)
+  return hits, failed
+
+scan_pullback_local = st.cache_data(ttl=900, show_spinner=False)(_scan_pullback_local)
+
+def get_conviction_results():
+  """{category: [hits]} for every watchlist — feeds the right-hand box (clause evaluated in this file)."""
+  return {
+      cat: scan_pullback_local(tuple(tuple(s) if isinstance(s, list) else s for s in symbols))[0]
       for cat, symbols in CONVICTION_UNIVERSE.items()
   }
+
 # Heavy watchlist scans live in qfx_core (no Streamlit); cache them here so a rerun is instant.
 scan_conviction_category = st.cache_data(ttl=900, show_spinner=False)(qfx_core.scan_conviction_category)
 scan_ema_cross_2h = st.cache_data(ttl=900, show_spinner=False)(qfx_core.scan_ema_cross_2h)

@@ -1837,25 +1837,19 @@ def render_conviction_box(results_by_cat, key_prefix, on_click):
     if extra > 0:
       title += f"<span style='color:{COLOR_TEXT_MUTED};'> (top {len(shown)} shown)</span>"
 
-    # Coloured left rail for this market's block (targets the keyed container below).
+    # Coloured divider bar above each market block (plain markup, works on any Streamlit version).
     st.markdown(
-        f"<style>div[class*='st-key-qfxhc_{slug}'] {{ border-left: 4px solid {s['accent']} !important; "
-        f"border-radius: 8px; background-color: rgba(255,255,255,0.015); margin-bottom: 14px; }}</style>",
+        f"<div style='height:4px;background:{s['accent']};border-radius:4px;margin:16px 0 6px 0;'></div>",
         unsafe_allow_html=True,
     )
-    try:
-      block = st.container(border=True, key=f"qfxhc_{slug}")
-    except TypeError:  # older Streamlit without container(key=...)
-      block = st.container(border=True)
-    with block:
-      render_clickable_list_box(
-          title,
-          shown,
-          key_prefix=f"{key_prefix}_{slug}",
-          on_click=on_click,
-          value_fmt=_value_html,
-          empty_text="No matches today",
-      )
+    render_clickable_list_box(
+        title,
+        shown,
+        key_prefix=f"{key_prefix}_{slug}",
+        on_click=on_click,
+        value_fmt=_value_html,
+        empty_text="No matches today",
+    )
 
 # =====================================================================
 # SIDEBAR CONTROLS
@@ -2155,9 +2149,12 @@ if active_view == "📊 Charts":
               unsafe_allow_html=True,
           )
         if show_scanners:
-          with st.spinner("Scanning Nifty 500 / US 100 / Commodities / Forex — first load can take a few minutes, then it is cached for 15 min..."):
-            conviction_results = get_conviction_results()
-          render_conviction_box(conviction_results, key_prefix="hc", on_click=go_to_chart)
+          try:
+            with st.spinner("Scanning Nifty 500 / US 100 / Commodities / Forex — first load can take a few minutes, then it is cached for 15 min..."):
+              conviction_results = get_conviction_results()
+            render_conviction_box(conviction_results, key_prefix="hc", on_click=go_to_chart)
+          except Exception as _hc_err:
+            st.error(f"High-Conviction scan failed: {type(_hc_err).__name__}: {_hc_err}")
           for _cat, _pairs, _kp in (
               ("Nifty 500", tuple(zip(nifty500_yf, nifty500_raw)), "emax_nifty"),
               ("US 100", tuple(zip(us100_yf, us100_raw + ["IXIC"])), "emax_us100"),

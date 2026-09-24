@@ -1076,9 +1076,13 @@ def _wilder_rsi_local(close, period=14):
   rsi = 100.0 - (100.0 / (1.0 + rs))
   return rsi.where(avg_loss != 0.0, 100.0)
 
-def evaluate_chartink_pullback(df):
-  """df: daily OHLCV with columns Open/High/Low/Close/Volume. Returns a dict for the LAST bar if the
-  clause is true, else None. 'N days ago high' = the High of the bar N trading days earlier."""
+def evaluate_chartink_pullback(df, side="BUY"):
+  """df: daily OHLCV. Returns a dict for the LAST bar if the clause is true for `side`, else None.
+  BUY  = your Chartink clause exactly.
+  SELL = its mirror image (close < EMA200, EMA9 < EMA200 & EMA20, RSI14 < 50, close < 5d & 10d-ago low,
+         high >= EMA9 > close, volume > 20d average).
+  'N days ago high/low' = the bar N trading days earlier. Symbols with no volume data (Yahoo forex)
+  skip the volume test instead of never matching."""
   if df is None or len(df) < 210:
     return None
   df = df.dropna(subset=["Close", "High", "Low"])
@@ -1090,32 +1094,29 @@ def evaluate_chartink_pullback(df):
   ema20 = close.ewm(span=20, adjust=False).mean()
   ema200 = close.ewm(span=200, adjust=False).mean()
   rsi14 = _wilder_rsi_local(close, 14)
-  vsma20 = vol.rolling(20).mean()
-  c, l, v = close.iloc[-1], low.iloc[-1], vol.iloc[-1]
-  h5, h10 = high.iloc[-1 - 5], high.iloc[-1 - 10]
-  ok = (
-      c > ema200.iloc[-1]
-      and ema9.iloc[-1] > ema200.iloc[-1]
-      and c > h5
-      and c > h10
-      and ema9.iloc[-1] > ema20.iloc[-1]
-      and rsi14.iloc[-1] > 50
-      and l <= ema9.iloc[-1]
-      and c > ema9.iloc[-1]
-      and v > vsma20.iloc[-1]
-  )
+  vsma20 = float(vol.rolling(20).mean().iloc[-1])
+  c, h, l, v = close.iloc[-1], high.iloc[-1], low.iloc[-1], float(vol.iloc[-1])
+  e9, e20, e200, r = ema9.iloc[-1], ema20.iloc[-1], ema200.iloc[-1], rsi14.iloc[-1]
+  vol_ok = (v > vsma20) if vsma20 > 0 else True
+  if side == "BUY":
+    ok = (c > e200 and e9 > e200 and c > high.iloc[-1 - 5] and c > high.iloc[-1 - 10]
+          and e9 > e20 and r > 50 and l <= e9 and c > e9 and vol_ok)
+  else:
+    ok = (c < e200 and e9 < e200 and c < low.iloc[-1 - 5] and c < low.iloc[-1 - 10]
+          and e9 < e20 and r < 50 and h >= e9 and c < e9 and vol_ok)
   if not ok:
     return None
   prev = close.iloc[-2]
   return {
+      "side": side,
       "price": float(c),
       "chg": float((c / prev - 1.0) * 100.0) if prev else 0.0,
-      "rsi": float(rsi14.iloc[-1]),
-      "vol_ratio": float(v / vsma20.iloc[-1]) if vsma20.iloc[-1] else 0.0,
+      "rsi": float(r),
+      "vol_ratio": float(v / vsma20) if vsma20 > 0 else 0.0,
   }
 
-def _scan_pullback_local(pairs, chunk=40):
-  """pairs: tuple of (yahoo_symbol, display). Returns (hits, failed_count). Hits sorted by volume surge."""
+def _scan_pullback_local(pairs, sides=("BUY",), chunk=40):
+  """pairs: tuple of (yahoo_symbol, display); sides: ("BUY",) or ("BUY","SELL"). Returns (hits, failed_count)."""
   pairs = [p if isinstance(p, (tuple, list)) else (p, p) for p in pairs]
   hits, failed = [], 0
   for i in range(0, len(pairs), chunk):
@@ -1130,22 +1131,30 @@ def _scan_pullback_local(pairs, chunk=40):
     for sym, disp in part:
       try:
         d = data[sym] if isinstance(data.columns, pd.MultiIndex) else data
-        res = evaluate_chartink_pullback(d)
+        results = [evaluate_chartink_pullback(d, sd) for sd in sides]
       except Exception:
         failed += 1
         continue
-      if res:
-        res.update({"symbol": sym, "display": disp})
-        hits.append(res)
+      for res in results:
+        if res:
+          res.update({"symbol": sym, "display": disp})
+          hits.append(res)
   hits.sort(key=lambda m: m["vol_ratio"], reverse=True)
   return hits, failed
 
 scan_pullback_local = st.cache_data(ttl=900, show_spinner=False)(_scan_pullback_local)
 
+# BUY only for stocks; BUY + SELL for Commodities and Forex.
+MARKET_SIDES = {"commodities": ("BUY", "SELL"), "forex": ("BUY", "SELL")}
+
+def market_sides(cat_name):
+  return MARKET_SIDES.get(re.sub(r"[^a-z0-9]", "", str(cat_name).lower()), ("BUY",))
+
 def get_conviction_results():
   """{category: [hits]} for every watchlist — feeds the right-hand box (clause evaluated in this file)."""
   return {
-      cat: scan_pullback_local(tuple(tuple(s) if isinstance(s, list) else s for s in symbols))[0]
+      cat: scan_pullback_local(tuple(tuple(s) if isinstance(s, list) else s for s in symbols),
+                               market_sides(cat))[0]
       for cat, symbols in CONVICTION_UNIVERSE.items()
   }
 
@@ -1884,6 +1893,13 @@ def _market_style(cat_name):
   k = re.sub(r"[^a-z0-9]", "", str(cat_name).lower())
   return CONVICTION_MARKET_STYLE.get(k, {"icon": "📌", "label": str(cat_name), "accent": COLOR_TEXT_MUTED})
 
+def _chip_counts(hits, cat_name):
+  sides = market_sides(cat_name)
+  if len(sides) == 1:
+    return f"{len(hits)} BUY"
+  b = sum(1 for m in hits if m.get("side") == "BUY")
+  return f"{b} BUY / {len(hits) - b} SELL"
+
 def render_conviction_box(results_by_cat, key_prefix, on_click):
   # ---- Summary header: rule + one count chip per market -------------------
   chips = ""
@@ -1892,7 +1908,7 @@ def render_conviction_box(results_by_cat, key_prefix, on_click):
     chips += (
         f"<span style='display:inline-block;margin:4px 6px 0 0;padding:2px 9px;border-radius:12px;"
         f"border:1px solid {s['accent']};color:{s['accent']};font-size:11px;font-weight:700;'>"
-        f"{s['icon']} {s['label']} · {len(hits)}</span>"
+        f"{s['icon']} {s['label']} · {_chip_counts(hits, cat_name)}</span>"
     )
   st.markdown(
       f"<div style='background-color:{COLOR_PANEL_BG};border:1px solid {COLOR_BORDER};"
@@ -1900,7 +1916,7 @@ def render_conviction_box(results_by_cat, key_prefix, on_click):
       f"<div style='font-size:12px;color:{COLOR_TEXT_MAIN};font-weight:700;margin-bottom:4px;'>🚨 High-Conviction Calls</div>"
       f"<div style='font-size:10px;color:{COLOR_TEXT_MUTED};line-height:1.5;'>"
       f"Daily: Close &gt; EMA200 • EMA9 &gt; EMA200 &amp; EMA20 • RSI14 &gt; 50 • Close &gt; 5d &amp; 10d-ago high • "
-      f"Low ≤ EMA9 &lt; Close • Volume &gt; 20d avg</div>"
+      f"Low ≤ EMA9 &lt; Close • Volume &gt; 20d avg &nbsp;|&nbsp; SELL (Commodities &amp; Forex) = mirror of these rules</div>"
       f"<div>{chips}</div></div>",
       unsafe_allow_html=True,
   )
@@ -1915,29 +1931,37 @@ def render_conviction_box(results_by_cat, key_prefix, on_click):
       arrow = "▲" if m["chg"] >= 0 else "▼"
       return f"{conviction_price_str(cat_name, m['price'])} :{col}[{arrow} {m['chg']:+.2f}%]"
 
-    shown = hits[:CONVICTION_MAX_DISPLAY]
-    extra = len(hits) - len(shown)
-    n = len(hits)
-    title = (
-        f"<span style='color:{s['accent']};font-weight:800;font-size:13px;'>{s['icon']} {s['label']}</span>"
-        f"<span style='color:{COLOR_TEXT_MUTED};'> &nbsp;•&nbsp; {n} match{'es' if n != 1 else ''}</span>"
-    )
-    if extra > 0:
-      title += f"<span style='color:{COLOR_TEXT_MUTED};'> (top {len(shown)} shown)</span>"
-
-    # Coloured divider bar above each market block (plain markup, works on any Streamlit version).
     st.markdown(
         f"<div style='height:4px;background:{s['accent']};border-radius:4px;margin:16px 0 6px 0;'></div>",
         unsafe_allow_html=True,
     )
-    render_clickable_list_box(
-        title,
-        shown,
-        key_prefix=f"{key_prefix}_{slug}",
-        on_click=on_click,
-        value_fmt=_value_html,
-        empty_text="No matches today",
+    sides = market_sides(cat_name)
+    st.markdown(
+        f"<div style='font-size:13px;font-weight:800;color:{s['accent']};margin-bottom:4px;'>"
+        f"{s['icon']} {s['label']} <span style='font-size:10px;font-weight:600;color:{COLOR_TEXT_MUTED};'>"
+        f"&nbsp;{'BUY + SELL' if len(sides) > 1 else 'BUY only'}</span></div>",
+        unsafe_allow_html=True,
     )
+    for side in sides:
+      side_hits = [m for m in hits if m.get("side", "BUY") == side]
+      shown = side_hits[:CONVICTION_MAX_DISPLAY]
+      n = len(side_hits)
+      side_col = COLOR_GREEN if side == "BUY" else COLOR_RED
+      side_icon = "🟢" if side == "BUY" else "🔴"
+      title = (
+          f"<span style='color:{side_col};font-weight:800;font-size:12px;'>{side_icon} {side}</span>"
+          f"<span style='color:{COLOR_TEXT_MUTED};'> &nbsp;•&nbsp; {n} match{'es' if n != 1 else ''}</span>"
+      )
+      if n > len(shown):
+        title += f"<span style='color:{COLOR_TEXT_MUTED};'> (top {len(shown)} shown)</span>"
+      render_clickable_list_box(
+          title,
+          shown,
+          key_prefix=f"{key_prefix}_{slug}_{side.lower()}",
+          on_click=on_click,
+          value_fmt=_value_html,
+          empty_text=f"No {side} matches today",
+      )
 
 # =====================================================================
 # SIDEBAR CONTROLS

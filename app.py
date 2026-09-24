@@ -75,7 +75,7 @@ v12 additions:
   MACD, RSI and everything else are unchanged.
 - Heikin Ashi + Renko EMA lines: fast = green, mid = red, slow = yellow; Renko EMA cloud fill removed.
 - Heikin Ashi markers are now A (fast EMA crosses mid EMA), B (pullback to fast EMA holds) and C (trend break:
-  close crosses the fast EMA against the trend); they replace the plain Buy/Sell pills on that panel.
+  close crosses the fast EMA against the trend; sidebar picks: only after a B / after 2 closes / both); they replace the plain Buy/Sell pills on that panel.
 """
 import json
 import os
@@ -1264,19 +1264,26 @@ def compute_independent_macd(close, fast=12, slow=26, signal=9, smooth=3):
       cross[i] = "SELL"
   return pd.DataFrame({"MACD": macd, "Signal": sig, "Hist": hist, "Cross": cross})
 
-def compute_abc_signals(high, low, close, fast, mid, pullback_cooldown=3, warmup=30):
+ABC_C_MODE = "b"   # overwritten by the sidebar selector below
+
+def compute_abc_signals(high, low, close, fast, mid, pullback_cooldown=3, warmup=30, c_window=15, c_mode="b"):
   """Heikin Ashi A / B / C markers. Returns a list (one entry per bar) of None or (letter, direction, note)
   direction is 'UP' (bullish, drawn below the candle) or 'DOWN' (bearish, drawn above the candle).
     A = fast EMA crosses the mid EMA (UP = crosses above, DOWN = crosses below).
     B = pullback: while fast is on the trend side of mid, the candle dips to the fast EMA and closes back on
         the trend side of it, still beyond the mid EMA (buy-the-dip / sell-the-rally). Cooldown between B's.
     C = trend break: EMAs still say trend (fast vs mid), but the candle closes through the FAST EMA against
-        the trend - fires on the bar the close crosses the fast EMA."""
+        the trend. c_mode picks how strict it is:
+          "b"    - fires on the bar the close crosses the fast EMA, only after a B in the same trend
+                   (within `c_window` bars); one C per B.
+          "two"  - fires on the 2nd consecutive close beyond the fast EMA (no B needed).
+          "both" - needs a prior B AND two consecutive closes beyond the fast EMA."""
   h, l, c = np.asarray(high, float), np.asarray(low, float), np.asarray(close, float)
   f, m = np.asarray(fast, float), np.asarray(mid, float)
   n = len(c)
   out = [None] * n
   last_b = -10**9
+  b_idx, b_dir = -10**9, None   # most recent B (bar index, direction) that C may follow
   for i in range(max(1, warmup), n):  # skip EMA warm-up bars (the EMAs start equal, which would fake an 'A')
     if not (np.isfinite(f[i]) and np.isfinite(m[i]) and np.isfinite(f[i - 1]) and np.isfinite(m[i - 1])):
       continue
@@ -1285,25 +1292,41 @@ def compute_abc_signals(high, low, close, fast, mid, pullback_cooldown=3, warmup
     # A - EMA cross
     if up_now and not up_prev:
       out[i] = ("A", "UP", "Fast EMA crossed ABOVE mid EMA")
+      b_idx, b_dir = -10**9, None
       continue
     if dn_now and not dn_prev:
       out[i] = ("A", "DOWN", "Fast EMA crossed BELOW mid EMA")
+      b_idx, b_dir = -10**9, None
       continue
     # C - trend break (close crosses the FAST EMA against the trend while EMAs still hold the trend)
-    if up_now and up_prev and c[i - 1] >= f[i - 1] and c[i] < f[i]:
+    need_b = c_mode in ("b", "both")
+    need_two = c_mode in ("two", "both")
+    b_ok_up = (not need_b) or (b_dir == "UP" and i - b_idx <= c_window)
+    b_ok_dn = (not need_b) or (b_dir == "DOWN" and i - b_idx <= c_window)
+    if need_two and i >= 2:
+      brk_dn = c[i - 2] >= f[i - 2] and c[i - 1] < f[i - 1] and c[i] < f[i]
+      brk_up = c[i - 2] <= f[i - 2] and c[i - 1] > f[i - 1] and c[i] > f[i]
+    else:
+      brk_dn = (not need_two) and c[i - 1] >= f[i - 1] and c[i] < f[i]
+      brk_up = (not need_two) and c[i - 1] <= f[i - 1] and c[i] > f[i]
+    if up_now and up_prev and b_ok_up and brk_dn:
       out[i] = ("C", "DOWN", "Trend break: closed below fast EMA in an uptrend")
+      b_idx, b_dir = -10**9, None
       continue
-    if dn_now and dn_prev and c[i - 1] <= f[i - 1] and c[i] > f[i]:
+    if dn_now and dn_prev and b_ok_dn and brk_up:
       out[i] = ("C", "UP", "Trend break: closed above fast EMA in a downtrend")
+      b_idx, b_dir = -10**9, None
       continue
     # B - pullback to fast EMA that holds
     if i - last_b > pullback_cooldown:
       if up_now and up_prev and l[i] <= f[i] and c[i] > f[i] and c[i] > m[i]:
         out[i] = ("B", "UP", "Pullback to fast EMA held (uptrend)")
         last_b = i
+        b_idx, b_dir = i, "UP"
       elif dn_now and dn_prev and h[i] >= f[i] and c[i] < f[i] and c[i] < m[i]:
         out[i] = ("B", "DOWN", "Pullback to fast EMA rejected (downtrend)")
         last_b = i
+        b_idx, b_dir = i, "DOWN"
   return out
 
 def add_abc_pills(fig, x_vals, signals, lows, highs, row, size=11):
@@ -1461,7 +1484,8 @@ def create_chart_figure(
     fig.add_trace(go.Scatter(x=x_ha, y=mid_s, line=dict(color=COLOR_MA_MID, width=1.3), name=f"HA EMA {ema_mid}", showlegend=False), row=1, col=1)
   fig.add_trace(go.Scatter(x=x_ha, y=slow_s, line=dict(color=COLOR_MA_SLOW, width=1.3), name=f"HA EMA {ema_slow}", showlegend=False), row=1, col=1)
   # A / B / C markers on the Heikin Ashi candles (A = EMA cross, B = pullback, C = trend break)
-  ha_abc = compute_abc_signals(ha_df["High"].values, ha_df["Low"].values, ha_df["Close"].values, f_arr, m_arr)
+  ha_abc = compute_abc_signals(ha_df["High"].values, ha_df["Low"].values, ha_df["Close"].values, f_arr, m_arr,
+                               c_mode=ABC_C_MODE)
   ha_rng = float(np.nanmax(ha_df["High"].values) - np.nanmin(ha_df["Low"].values)) if n_ha else 0.0
   ha_pad = ha_rng * 0.02
   add_abc_pills(fig, x_ha, ha_abc, ha_df["Low"].values - ha_pad, ha_df["High"].values + ha_pad, row=1)
@@ -2098,6 +2122,16 @@ show_scanners = st.sidebar.checkbox(
          "Untick for a fast, chart-only view.",
 )
 st.sidebar.caption("EMA Fast × EMA Mid (9 × 27) drives the EMA-cross screener boxes and the Renko / Heikin Ashi Buy/Sell signals.")
+_C_RULES = {
+    "Only after a B": "b",
+    "Only after 2 closes beyond fast EMA": "two",
+    "Both (after a B + 2 closes)": "both",
+}
+_c_choice = st.sidebar.selectbox(
+    "Heikin Ashi 'C' (trend break) rule", list(_C_RULES.keys()), index=0,
+    help="C fires when the close crosses the fast EMA against the trend. Pick how strict it should be.",
+)
+ABC_C_MODE = _C_RULES[_c_choice]
 st.sidebar.markdown("---")
 CHARTINK_EMA_SCREENER_URL = "https://chartink.com/screener/ema9-20-cross-5"
 with st.sidebar:

@@ -74,6 +74,8 @@ v12 additions:
   (own accent colour, icon, match count and left rail) with a count-chip summary on top. Scan clause, charts,
   MACD, RSI and everything else are unchanged.
 - Heikin Ashi + Renko EMA lines: fast = green, mid = red, slow = yellow; Renko EMA cloud fill removed.
+- Heikin Ashi markers are now A (fast EMA crosses mid EMA), B (pullback to fast EMA holds) and C (trend break:
+  close crosses the mid EMA against the trend); they replace the plain Buy/Sell pills on that panel.
 """
 import json
 import os
@@ -1262,6 +1264,69 @@ def compute_independent_macd(close, fast=12, slow=26, signal=9, smooth=3):
       cross[i] = "SELL"
   return pd.DataFrame({"MACD": macd, "Signal": sig, "Hist": hist, "Cross": cross})
 
+def compute_abc_signals(high, low, close, fast, mid, pullback_cooldown=3):
+  """Heikin Ashi A / B / C markers. Returns a list (one entry per bar) of None or (letter, direction, note)
+  direction is 'UP' (bullish, drawn below the candle) or 'DOWN' (bearish, drawn above the candle).
+    A = fast EMA crosses the mid EMA (UP = crosses above, DOWN = crosses below).
+    B = pullback: while fast is on the trend side of mid, the candle dips to the fast EMA and closes back on
+        the trend side of it, still beyond the mid EMA (buy-the-dip / sell-the-rally). Cooldown between B's.
+    C = trend break: EMAs still say trend, but the candle closes through the mid EMA against the trend
+        (a pullback deep enough to break the trend) - fires on the bar the close crosses the mid EMA."""
+  h, l, c = np.asarray(high, float), np.asarray(low, float), np.asarray(close, float)
+  f, m = np.asarray(fast, float), np.asarray(mid, float)
+  n = len(c)
+  out = [None] * n
+  last_b = -10**9
+  for i in range(1, n):
+    if not (np.isfinite(f[i]) and np.isfinite(m[i]) and np.isfinite(f[i - 1]) and np.isfinite(m[i - 1])):
+      continue
+    up_now, up_prev = f[i] > m[i], f[i - 1] > m[i - 1]
+    dn_now, dn_prev = f[i] < m[i], f[i - 1] < m[i - 1]
+    # A - EMA cross
+    if up_now and not up_prev:
+      out[i] = ("A", "UP", "Fast EMA crossed ABOVE mid EMA")
+      continue
+    if dn_now and not dn_prev:
+      out[i] = ("A", "DOWN", "Fast EMA crossed BELOW mid EMA")
+      continue
+    # C - trend break (close crosses mid EMA against the trend while EMAs still hold the trend)
+    if up_now and up_prev and c[i - 1] >= m[i - 1] and c[i] < m[i]:
+      out[i] = ("C", "DOWN", "Trend break: closed below mid EMA in an uptrend")
+      continue
+    if dn_now and dn_prev and c[i - 1] <= m[i - 1] and c[i] > m[i]:
+      out[i] = ("C", "UP", "Trend break: closed above mid EMA in a downtrend")
+      continue
+    # B - pullback to fast EMA that holds
+    if i - last_b > pullback_cooldown:
+      if up_now and up_prev and l[i] <= f[i] and c[i] > f[i] and c[i] > m[i]:
+        out[i] = ("B", "UP", "Pullback to fast EMA held (uptrend)")
+        last_b = i
+      elif dn_now and dn_prev and h[i] >= f[i] and c[i] < f[i] and c[i] < m[i]:
+        out[i] = ("B", "DOWN", "Pullback to fast EMA rejected (downtrend)")
+        last_b = i
+  return out
+
+def add_abc_pills(fig, x_vals, signals, lows, highs, row, size=11):
+  """Draw A / B / C pills: bullish below the candle (green), bearish above the candle (red)."""
+  x_arr = np.asarray(x_vals)
+  lo = np.asarray(lows, dtype=float)
+  hi = np.asarray(highs, dtype=float)
+  for i, sg in enumerate(signals):
+    if not sg:
+      continue
+    letter, direction, note = sg
+    up = direction == "UP"
+    y = lo[i] if up else hi[i]
+    if not np.isfinite(y):
+      continue
+    col = COLOR_PILL_BUY if up else COLOR_PILL_SELL
+    fig.add_annotation(
+        x=x_arr[i], y=y, text=f"<b>{letter}</b>", hovertext=note, showarrow=False,
+        font=dict(color="#FFFFFF", size=size), bgcolor=col, bordercolor=col,
+        borderwidth=1, borderpad=4, opacity=0.95,
+        yanchor="top" if up else "bottom", row=row, col=1,
+    )
+
 def add_pill_signals(fig, x_vals, signals, y_buy, y_sell, row, size=11):
   """Muted 'Buy' / 'Sell' pills (TradingView look)."""
   x_arr = np.asarray(x_vals)
@@ -1363,7 +1428,7 @@ def create_chart_figure(
       row_heights=[0.34, 0.30, 0.16, 0.20],
       vertical_spacing=0.035,
       subplot_titles=(
-          f"{display} — Heikin Ashi (EMA {ema_fast}/{ema_mid or ema_slow})",
+          f"{display} — Heikin Ashi (EMA {ema_fast}/{ema_mid or ema_slow}) • A = EMA cross • B = pullback • C = trend break",
           f"{display} — ATR Renko (Buy/Sell = EMA {ema_fast} × {ema_mid or ema_slow} cross)",
           f"MACD {macd_params.get('fast', 12)}/{macd_params.get('slow', 26)}/{macd_params.get('signal', 9)} — independent Buy/Sell (MACD × Signal)",
           f"RSI 14 (Buy/Sell = Renko EMA {ema_fast} × {ema_mid or ema_slow} cross • Green 30 / Red 70 levels)",
@@ -1395,17 +1460,11 @@ def create_chart_figure(
   if mid_s is not slow_s:
     fig.add_trace(go.Scatter(x=x_ha, y=mid_s, line=dict(color=COLOR_MA_MID, width=1.3), name=f"HA EMA {ema_mid}", showlegend=False), row=1, col=1)
   fig.add_trace(go.Scatter(x=x_ha, y=slow_s, line=dict(color=COLOR_MA_SLOW, width=1.3), name=f"HA EMA {ema_slow}", showlegend=False), row=1, col=1)
-  # Ribbon-cross Buy/Sell on the Heikin Ashi candles
-  ha_sig = ["HOLD"] * n_ha
-  for i in range(1, n_ha):
-    if np.isfinite(f_arr[i]) and np.isfinite(m_arr[i]) and np.isfinite(f_arr[i - 1]) and np.isfinite(m_arr[i - 1]):
-      if f_arr[i] > m_arr[i] and f_arr[i - 1] <= m_arr[i - 1]:
-        ha_sig[i] = "BUY"
-      elif f_arr[i] < m_arr[i] and f_arr[i - 1] >= m_arr[i - 1]:
-        ha_sig[i] = "SELL"
+  # A / B / C markers on the Heikin Ashi candles (A = EMA cross, B = pullback, C = trend break)
+  ha_abc = compute_abc_signals(ha_df["High"].values, ha_df["Low"].values, ha_df["Close"].values, f_arr, m_arr)
   ha_rng = float(np.nanmax(ha_df["High"].values) - np.nanmin(ha_df["Low"].values)) if n_ha else 0.0
   ha_pad = ha_rng * 0.02
-  add_pill_signals(fig, x_ha, ha_sig, ha_df["Low"].values - ha_pad, ha_df["High"].values + ha_pad, row=1)
+  add_abc_pills(fig, x_ha, ha_abc, ha_df["Low"].values - ha_pad, ha_df["High"].values + ha_pad, row=1)
   if raw_df is not None and n_ha:
     last_close = float(raw_df["Close"].iloc[-1])
     fig.add_hline(y=last_close, line=dict(color=COLOR_HA_UP, width=1, dash="dot"), row=1, col=1)

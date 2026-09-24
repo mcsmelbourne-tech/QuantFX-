@@ -67,6 +67,12 @@ v11 additions (page-load fixes + background alerts):
   same Telegram alerts while your computer and phone are off - see SETUP.md.
 - .streamlit/config.toml sets the dark theme the CSS assumes (sidebar labels were unreadable on the light theme).
 - Yahoo downloads retry with back-off; Telegram falls back to plain text if Markdown parsing fails.
+
+v12 additions:
+
+- "High-Conviction Calls" box: Nifty 500 / US 100 / Commodities / Forex are now separate colour-coded blocks
+  (own accent colour, icon, match count and left rail) with a count-chip summary on top. Scan clause, charts,
+  MACD, RSI and everything else are unchanged.
 """
 import json
 import os
@@ -1778,34 +1784,79 @@ def render_clickable_list_box(title, movers, key_prefix, on_click, value_fmt=Non
     )
   st.markdown(f"<div style='height:12px;'></div>", unsafe_allow_html=True)
 
+# Accent colour + icon per market so each block is instantly recognisable.
+CONVICTION_MARKET_STYLE = {
+    "nifty500":    {"icon": "🇮🇳", "label": "Nifty 500",   "accent": "#FF9933"},
+    "us100":       {"icon": "🇺🇸", "label": "US 100",      "accent": "#4DA3FF"},
+    "commodities": {"icon": "🛢️", "label": "Commodities", "accent": "#FFD24D"},
+    "forex":       {"icon": "💱", "label": "Forex",       "accent": "#B388FF"},
+}
+
+def _market_style(cat_name):
+  k = re.sub(r"[^a-z0-9]", "", str(cat_name).lower())
+  return CONVICTION_MARKET_STYLE.get(k, {"icon": "📌", "label": str(cat_name), "accent": COLOR_TEXT_MUTED})
+
 def render_conviction_box(results_by_cat, key_prefix, on_click):
+  # ---- Summary header: rule + one count chip per market -------------------
+  chips = ""
+  for cat_name, hits in results_by_cat.items():
+    s = _market_style(cat_name)
+    chips += (
+        f"<span style='display:inline-block;margin:4px 6px 0 0;padding:2px 9px;border-radius:12px;"
+        f"border:1px solid {s['accent']};color:{s['accent']};font-size:11px;font-weight:700;'>"
+        f"{s['icon']} {s['label']} · {len(hits)}</span>"
+    )
   st.markdown(
       f"<div style='background-color:{COLOR_PANEL_BG};border:1px solid {COLOR_BORDER};"
-      f"border-radius:6px;padding:10px 14px;margin-bottom:8px;'>"
-      f"<div style='font-size:12px;color:{COLOR_TEXT_MAIN};font-weight:700;margin-bottom:4px;'>🚨 High-Conviction Shares</div>"
+      f"border-radius:6px;padding:10px 14px;margin-bottom:10px;'>"
+      f"<div style='font-size:12px;color:{COLOR_TEXT_MAIN};font-weight:700;margin-bottom:4px;'>🚨 High-Conviction Calls</div>"
       f"<div style='font-size:10px;color:{COLOR_TEXT_MUTED};line-height:1.5;'>"
       f"Daily: Close &gt; EMA200 • EMA9 &gt; EMA200 &amp; EMA20 • RSI14 &gt; 50 • Close &gt; 5d &amp; 10d-ago high • "
-      f"Low ≤ EMA9 &lt; Close • Volume &gt; 20d avg</div></div>",
+      f"Low ≤ EMA9 &lt; Close • Volume &gt; 20d avg</div>"
+      f"<div>{chips}</div></div>",
       unsafe_allow_html=True,
   )
+
+  # ---- One clearly separated, colour-coded block per market ---------------
   for cat_name, hits in results_by_cat.items():
+    s = _market_style(cat_name)
+    slug = re.sub(r"[^a-z0-9]", "", str(cat_name).lower())
+
     def _value_html(m, cat_name=cat_name):
       col = "green" if m["chg"] >= 0 else "red"
       arrow = "▲" if m["chg"] >= 0 else "▼"
       return f"{conviction_price_str(cat_name, m['price'])} :{col}[{arrow} {m['chg']:+.2f}%]"
+
     shown = hits[:CONVICTION_MAX_DISPLAY]
     extra = len(hits) - len(shown)
-    title = f"{cat_name} • {len(hits)} match{'es' if len(hits) != 1 else ''}"
-    if extra > 0:
-      title += f" (top {len(shown)} shown)"
-    render_clickable_list_box(
-        title,
-        shown,
-        key_prefix=f"{key_prefix}_{cat_name.lower().replace(' ', '')}",
-        on_click=on_click,
-        value_fmt=_value_html,
-        empty_text="No matches",
+    n = len(hits)
+    title = (
+        f"<span style='color:{s['accent']};font-weight:800;font-size:13px;'>{s['icon']} {s['label']}</span>"
+        f"<span style='color:{COLOR_TEXT_MUTED};'> &nbsp;•&nbsp; {n} match{'es' if n != 1 else ''}</span>"
     )
+    if extra > 0:
+      title += f"<span style='color:{COLOR_TEXT_MUTED};'> (top {len(shown)} shown)</span>"
+
+    # Coloured left rail for this market's block (targets the keyed container below).
+    st.markdown(
+        f"<style>div[class*='st-key-qfxhc_{slug}'] {{ border-left: 4px solid {s['accent']} !important; "
+        f"border-radius: 8px; background-color: rgba(255,255,255,0.015); margin-bottom: 14px; }}</style>",
+        unsafe_allow_html=True,
+    )
+    try:
+      block = st.container(border=True, key=f"qfxhc_{slug}")
+    except TypeError:  # older Streamlit without container(key=...)
+      block = st.container(border=True)
+    with block:
+      render_clickable_list_box(
+          title,
+          shown,
+          key_prefix=f"{key_prefix}_{slug}",
+          on_click=on_click,
+          value_fmt=_value_html,
+          empty_text="No matches today",
+      )
+
 # =====================================================================
 # SIDEBAR CONTROLS
 # =====================================================================

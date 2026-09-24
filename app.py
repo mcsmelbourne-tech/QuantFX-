@@ -75,7 +75,7 @@ v12 additions:
   MACD, RSI and everything else are unchanged.
 - Heikin Ashi + Renko EMA lines: fast = green, mid = red, slow = yellow; Renko EMA cloud fill removed.
 - Heikin Ashi markers are now A (fast EMA crosses mid EMA), B (pullback to fast EMA holds) and C (trend break:
-  close crosses the mid EMA against the trend); they replace the plain Buy/Sell pills on that panel.
+  close crosses the fast EMA against the trend); they replace the plain Buy/Sell pills on that panel.
 """
 import json
 import os
@@ -1264,20 +1264,20 @@ def compute_independent_macd(close, fast=12, slow=26, signal=9, smooth=3):
       cross[i] = "SELL"
   return pd.DataFrame({"MACD": macd, "Signal": sig, "Hist": hist, "Cross": cross})
 
-def compute_abc_signals(high, low, close, fast, mid, pullback_cooldown=3):
+def compute_abc_signals(high, low, close, fast, mid, pullback_cooldown=3, warmup=30):
   """Heikin Ashi A / B / C markers. Returns a list (one entry per bar) of None or (letter, direction, note)
   direction is 'UP' (bullish, drawn below the candle) or 'DOWN' (bearish, drawn above the candle).
     A = fast EMA crosses the mid EMA (UP = crosses above, DOWN = crosses below).
     B = pullback: while fast is on the trend side of mid, the candle dips to the fast EMA and closes back on
         the trend side of it, still beyond the mid EMA (buy-the-dip / sell-the-rally). Cooldown between B's.
-    C = trend break: EMAs still say trend, but the candle closes through the mid EMA against the trend
-        (a pullback deep enough to break the trend) - fires on the bar the close crosses the mid EMA."""
+    C = trend break: EMAs still say trend (fast vs mid), but the candle closes through the FAST EMA against
+        the trend - fires on the bar the close crosses the fast EMA."""
   h, l, c = np.asarray(high, float), np.asarray(low, float), np.asarray(close, float)
   f, m = np.asarray(fast, float), np.asarray(mid, float)
   n = len(c)
   out = [None] * n
   last_b = -10**9
-  for i in range(1, n):
+  for i in range(max(1, warmup), n):  # skip EMA warm-up bars (the EMAs start equal, which would fake an 'A')
     if not (np.isfinite(f[i]) and np.isfinite(m[i]) and np.isfinite(f[i - 1]) and np.isfinite(m[i - 1])):
       continue
     up_now, up_prev = f[i] > m[i], f[i - 1] > m[i - 1]
@@ -1289,12 +1289,12 @@ def compute_abc_signals(high, low, close, fast, mid, pullback_cooldown=3):
     if dn_now and not dn_prev:
       out[i] = ("A", "DOWN", "Fast EMA crossed BELOW mid EMA")
       continue
-    # C - trend break (close crosses mid EMA against the trend while EMAs still hold the trend)
-    if up_now and up_prev and c[i - 1] >= m[i - 1] and c[i] < m[i]:
-      out[i] = ("C", "DOWN", "Trend break: closed below mid EMA in an uptrend")
+    # C - trend break (close crosses the FAST EMA against the trend while EMAs still hold the trend)
+    if up_now and up_prev and c[i - 1] >= f[i - 1] and c[i] < f[i]:
+      out[i] = ("C", "DOWN", "Trend break: closed below fast EMA in an uptrend")
       continue
-    if dn_now and dn_prev and c[i - 1] <= m[i - 1] and c[i] > m[i]:
-      out[i] = ("C", "UP", "Trend break: closed above mid EMA in a downtrend")
+    if dn_now and dn_prev and c[i - 1] <= f[i - 1] and c[i] > f[i]:
+      out[i] = ("C", "UP", "Trend break: closed above fast EMA in a downtrend")
       continue
     # B - pullback to fast EMA that holds
     if i - last_b > pullback_cooldown:

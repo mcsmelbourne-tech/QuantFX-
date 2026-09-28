@@ -76,6 +76,13 @@ v12 additions:
 - Heikin Ashi + Renko EMA lines: fast = green, mid = red, slow = yellow; Renko EMA cloud fill removed.
 - Heikin Ashi markers are now A (fast EMA crosses mid EMA), B (pullback to fast EMA holds) and C (trend break:
   close crosses the fast EMA against the trend; sidebar picks: only after a B / after 2 closes / both); they replace the plain Buy/Sell pills on that panel.
+v13 additions (MA 30 + EMA 9-21 scanner + background loading):
+- White MA 30 line on the Heikin Ashi and ATR Renko panels (sidebar "MA line & EMA x MA scanner": period, SMA/EMA, on/off).
+- New right-side box "EMA 9-21 x MA 30": Nifty 500 / US 100 / Forex / Commodities lists of symbols where EMA 9 AND EMA 21
+  have just crossed MA 30 (BUY = both above the MA, SELL = both below). Click a row to open its chart.
+- Faster start: the slow scans (~600 symbols), the header Top Commodity / Top Forex boxes and the Chartink box now run on a
+  background worker thread. The chart paints first, the boxes fill in by themselves, and the last results are kept in
+  .qfx_scan_cache.json so re-opening the app shows them instantly.
 """
 import json
 import os
@@ -137,6 +144,7 @@ COLOR_RED = "#FF3333"
 COLOR_MA_FAST = "#00FF66"   # fast EMA  = green
 COLOR_MA_MID = "#FF3333"    # mid EMA   = red
 COLOR_MA_SLOW = "#FFD700"   # slow EMA  = yellow
+COLOR_MA30 = "#FFFFFF"      # MA 30 = white
 COLOR_MACD_LINE = "#2962FF"
 COLOR_SIGNAL_LINE = "#FF6D00"
 COLOR_ZERO_LINE = "#4C566A"
@@ -768,8 +776,7 @@ def get_live_price_and_chg(symbol):
   except Exception:
     return 0.0, 0.0
 
-@st.cache_data(ttl=300, show_spinner=False)
-def fetch_top_n_movers(symbols_tuple, n=1):
+def _fetch_top_n_movers_raw(symbols_tuple, n=1):
   symbols = list(symbols_tuple)
   tickers = [s for s, _ in symbols]
   if not tickers:
@@ -795,9 +802,9 @@ def fetch_top_n_movers(symbols_tuple, n=1):
       continue
   results.sort(key=lambda r: r["chg"], reverse=True)
   return results[:n]
+fetch_top_n_movers = st.cache_data(ttl=300, show_spinner=False)(_fetch_top_n_movers_raw)
 
-@st.cache_data(ttl=300, show_spinner=False)
-def fetch_chartink_screener(url):
+def _fetch_chartink_screener_raw(url):
   try:
     session = requests.Session()
     headers = {"User-Agent": "Mozilla/5.0"}
@@ -834,6 +841,7 @@ def fetch_chartink_screener(url):
     return results
   except Exception:
     return []
+fetch_chartink_screener = st.cache_data(ttl=300, show_spinner=False)(_fetch_chartink_screener_raw)
 
 def evaluate_oracle_score(symbol, display=None, macd_fast=12, macd_slow=26, macd_signal=9):
   try:
@@ -1168,6 +1176,270 @@ scan_ema_cross_2h = st.cache_data(ttl=900, show_spinner=False)(qfx_core.scan_ema
 _scan_triple_ema_cross_30m = st.cache_data(ttl=300, show_spinner=False)(qfx_core.scan_triple_ema_cross_30m)
 
 # =====================================================================
+# BACKGROUND SCANNER (v13) - slow scans run on a worker thread, the page only READS results
+# =====================================================================
+# Before: every page open scanned ~600 symbols on the Streamlit script thread, so the page sat on a spinner.
+# Now one daemon thread keeps the results fresh:
+#   * the chart paints straight away;
+#   * the right-hand boxes fill in by themselves as each scan finishes (st.fragment, see LIVE BOXES below);
+#   * the last results are saved to .qfx_scan_cache.json, so a fresh open shows them instantly.
+import sys
+import threading
+import time
+import types
+
+SCAN_CACHE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".qfx_scan_cache.json")
+SCAN_TTL = {"movers": 300, "chartink": 300, "ma30": 600, "emax": 900, "conviction": 900}   # seconds
+SCAN_ORDER = ("movers", "ma30", "chartink", "emax", "conviction")                           # refresh order
+SCAN_PROGRESSIVE = ("ma30", "emax", "conviction")   # these publish each market as soon as it is done
+
+def _json_default(o):
+  try:
+    return o.item()          # numpy scalar -> plain python number
+  except Exception:
+    return str(o)
+
+class _ScanStore:
+  """Thread-safe home of the latest scan results (one per Streamlit server process)."""
+
+  def __init__(self):
+    self.lock = threading.RLock()
+    self.results = {}    # job -> {"value": ..., "ts": epoch seconds, "sig": text, "partial": bool}
+    self.wanted = {}     # job -> (sig, fn, args): what the page currently asks for
+    self.attempt = {}    # job -> epoch of the last failed try (retried after 60 s)
+    self.errors = {}
+    self.busy = None
+    self.wake = threading.Event()
+    self._load()
+
+  # ---- disk cache: opening the app again shows the last results at once ----
+  def _load(self):
+    try:
+      if os.path.exists(SCAN_CACHE_PATH):
+        with open(SCAN_CACHE_PATH, "r", encoding="utf-8") as f:
+          data = json.load(f)
+        if isinstance(data, dict):
+          self.results = {k: v for k, v in data.items() if isinstance(v, dict) and "value" in v}
+    except Exception:
+      self.results = {}
+
+  def _save(self):
+    try:
+      with self.lock:
+        payload = json.dumps(self.results, default=_json_default)
+      tmp = SCAN_CACHE_PATH + ".tmp"
+      with open(tmp, "w", encoding="utf-8") as f:
+        f.write(payload)
+      os.replace(tmp, SCAN_CACHE_PATH)
+    except Exception:
+      pass
+
+  # ---- what the page asks for ----
+  def want(self, job, sig, fn, *args):
+    sig = str(sig)
+    with self.lock:
+      old = self.wanted.get(job)
+      self.wanted[job] = (sig, fn, args)
+    if old is None or old[0] != sig:
+      self.wake.set()
+
+  def drop(self, job):
+    with self.lock:
+      self.wanted.pop(job, None)
+
+  def refresh_all(self):
+    """The sidebar Refresh button: treat every result as stale and re-scan now."""
+    with self.lock:
+      for r in self.results.values():
+        r["ts"] = 0
+      self.errors.clear()
+      self.attempt.clear()
+    self.wake.set()
+
+  # ---- what the page shows ----
+  def _due(self, job):
+    w = self.wanted.get(job)
+    if w is None:
+      return False
+    if job in self.errors and time.time() - self.attempt.get(job, 0) < 60:
+      return False                                   # failed a moment ago - back off
+    r = self.results.get(job)
+    if r is None or r.get("sig") != w[0] or r.get("partial"):
+      return True
+    return time.time() - r.get("ts", 0) > SCAN_TTL.get(job, 600)
+
+  def get(self, job, sig):
+    """(value, timestamp, updating). value is None until a result for THIS setting exists."""
+    sig = str(sig)
+    with self.lock:
+      r = self.results.get(job)
+      value = r["value"] if (r and r.get("sig") == sig) else None
+      ts = r.get("ts") if value is not None else None
+      updating = self._due(job) or self.busy == job
+    return value, ts, updating
+
+  def publish(self, job, value):
+    """Called by a running job to show finished markets before the whole job is done."""
+    with self.lock:
+      w = self.wanted.get(job)
+      if w is None:
+        return
+      self.results[job] = {"value": dict(value), "ts": time.time(), "sig": w[0], "partial": True}
+
+  # ---- the worker ----
+  def run_forever(self, registry):
+    while getattr(registry, "current", None) is self:   # an older worker exits after a code reload
+      job = None
+      with self.lock:
+        for j in SCAN_ORDER:
+          if self._due(j):
+            job = j
+            break
+        if job:
+          sig, fn, args = self.wanted[job]
+          self.busy = job
+      if job is None:
+        self.wake.wait(timeout=10)
+        self.wake.clear()
+        continue
+      try:
+        if job in SCAN_PROGRESSIVE:
+          value = fn(*args, publish=lambda v, _j=job: self.publish(_j, v))
+        else:
+          value = fn(*args)
+        with self.lock:
+          self.results[job] = {"value": value, "ts": time.time(), "sig": sig, "partial": False}
+          self.errors.pop(job, None)
+        self._save()
+      except Exception as exc:
+        with self.lock:
+          self.errors[job] = f"{type(exc).__name__}: {exc}"
+          self.attempt[job] = time.time()
+      finally:
+        with self.lock:
+          self.busy = None
+
+@st.cache_resource(show_spinner=False)
+def _get_scan_store():
+  reg = sys.modules.setdefault("_qfx_registry", types.ModuleType("_qfx_registry"))
+  store = _ScanStore()
+  reg.current = store
+  threading.Thread(target=store.run_forever, args=(reg,), name="qfx-scan-worker", daemon=True).start()
+  return store
+
+# ---- the jobs the worker runs (plain functions: no Streamlit calls in here) ----------------------
+def _job_movers():
+  return {
+      "commodity": _fetch_top_n_movers_raw(tuple(COMMODITIES), 1),
+      "forex": _fetch_top_n_movers_raw(tuple(FOREX_PAIRS), 1),
+  }
+
+def _job_conviction(publish=None):
+  out = {}
+  for cat, symbols in CONVICTION_UNIVERSE.items():
+    syms = tuple(tuple(s) if isinstance(s, list) else s for s in symbols)
+    out[cat] = _scan_pullback_local(syms, market_sides(cat))[0]
+    if publish:
+      publish(out)
+  return out
+
+def _job_emax(fast, slow, publish=None):
+  out = {}
+  for cat, pairs in (("Nifty 500", tuple(zip(nifty500_yf, nifty500_raw))),
+                     ("US 100", tuple(zip(us100_yf, us100_raw + ["IXIC"])))):
+    out[cat] = qfx_core.scan_ema_cross_2h(pairs, fast=fast, slow=slow, lookback=1)[0]
+    if publish:
+      publish(out)
+  return out
+
+# ---- EMA a-b x MA L scanner ------------------------------------------------------------------------
+MA_SCAN_MARKETS = (          # (label shown, WATCHLIST_CATEGORIES key, timeframe group)
+    ("Nifty 500", "Nifty500", "stock"),
+    ("US 100", "US100", "stock"),
+    ("Forex", "Forex", "fx"),
+    ("Commodities", "Commodities", "fx"),
+)
+_MA_TF = {                   # label -> (yahoo interval, yahoo period, resample rule)
+    "15m": ("15m", "30d", None),
+    "30m": ("30m", "45d", None),
+    "1h": ("60m", "90d", None),
+    "2h": ("60m", "90d", "2h"),      # Yahoo has no 2h / 4h bars - built from 60m bars
+    "4h": ("60m", "90d", "4h"),
+}
+
+def _ma_cross_state(c, a, b, length, kind, look_back):
+  """c = price series. Returns ("BUY"|"SELL", bars_ago) when BOTH EMA a and EMA b have just crossed the MA
+  (BUY = both now above it, SELL = both now below it) within the last `look_back` bars and still stand there."""
+  c = pd.Series(c).astype(float).dropna().reset_index(drop=True)
+  if len(c) < max(a, b, length) * 2 + look_back + 5:
+    return None
+  ea = c.ewm(span=a, adjust=False).mean()
+  eb = c.ewm(span=b, adjust=False).mean()
+  if str(kind).upper() == "EMA":
+    ma = c.ewm(span=length, adjust=False, min_periods=length).mean()
+  else:
+    ma = c.rolling(length, min_periods=length).mean()
+  up = ((ea > ma) & (eb > ma)).values
+  dn = ((ea < ma) & (eb < ma)).values
+  n = len(c)
+  for back in range(look_back):
+    i = n - 1 - back
+    if i < 1:
+      break
+    if up[i] and not up[i - 1] and up[-1]:
+      return "BUY", back
+    if dn[i] and not dn[i - 1] and dn[-1]:
+      return "SELL", back
+  return None
+
+def _scan_ma_cross(pairs, tf, a, b, length, kind, look_back, chunk=40):
+  """pairs: ((yahoo_symbol, display), ...). Uses the Heikin Ashi close (= (O+H+L+C)/4), the same series the
+  chart's EMA / MA lines are drawn on, so a hit here matches what you see on the chart."""
+  interval, period, rule = _MA_TF[tf]
+  pairs = [p if isinstance(p, (tuple, list)) else (p, p) for p in pairs]
+  hits, failed = [], 0
+  for i in range(0, len(pairs), chunk):
+    part = pairs[i:i + chunk]
+    syms = [p[0] for p in part]
+    try:
+      data = yf.download(syms, period=period, interval=interval, group_by="ticker",
+                         auto_adjust=False, progress=False, threads=True)
+    except Exception:
+      failed += len(part)
+      continue
+    for sym, disp in part:
+      try:
+        d = data[sym] if isinstance(data.columns, pd.MultiIndex) else data
+        d = d.dropna(subset=["Close"])
+        if rule:
+          d = d.resample(rule).agg({"Open": "first", "High": "max", "Low": "min", "Close": "last"}).dropna(subset=["Close"])
+        if len(d) < 3:
+          failed += 1
+          continue
+        res = _ma_cross_state((d["Open"] + d["High"] + d["Low"] + d["Close"]) / 4.0, a, b, length, kind, look_back)
+        if res:
+          last, prev = float(d["Close"].iloc[-1]), float(d["Close"].iloc[-2])
+          hits.append({"symbol": sym, "display": disp, "price": last,
+                       "chg": (last / prev - 1.0) * 100.0 if prev else 0.0,
+                       "direction": res[0], "bars_ago": int(res[1])})
+      except Exception:
+        failed += 1
+  hits.sort(key=lambda m: (m["bars_ago"], m["display"]))
+  return hits, failed
+
+def _job_ma30(params, publish=None):
+  a, b, length, kind, tf_stock, tf_fx, look_back = params
+  out = {}
+  # smallest lists first, so Commodities / Forex appear within seconds while Nifty 500 is still running
+  for label, key, grp in sorted(MA_SCAN_MARKETS, key=lambda m: len(WATCHLIST_CATEGORIES[m[1]])):
+    pairs = tuple(tuple(p) for p in WATCHLIST_CATEGORIES[key])
+    out[label] = _scan_ma_cross(pairs, tf_stock if grp == "stock" else tf_fx, a, b, length, kind, look_back)[0]
+    if publish:
+      publish(out)
+  return out
+
+
+# =====================================================================
 # CHARTING
 # =====================================================================
 def add_buy_sell_markers(
@@ -1412,9 +1684,18 @@ def _brick_positions(ha_dates, renko_df, n_ha):
   return np.asarray(pos, dtype=float)
 
 
+def _ma_line(series, length, kind="SMA"):
+  """The white MA line. SMA = simple moving average, EMA = exponential."""
+  s = pd.Series(series).astype(float).reset_index(drop=True)
+  n = int(length)
+  if str(kind).upper() == "EMA":
+    return s.ewm(span=n, adjust=False, min_periods=n).mean()
+  return s.rolling(n, min_periods=n).mean()
+
 def create_chart_figure(
     renko_df, ha_df, brick_size, display, ema_fast, ema_slow, ema_mid=None,
     live_price=None, live_chg=None, symbol_label=None, raw_df=None, macd_params=None, view_days=None,
+    ma30_len=0, ma30_type="SMA",
 ):
   """Rows: 1) real Heikin Ashi (built from the actual candles)
            2) ATR Renko
@@ -1451,7 +1732,8 @@ def create_chart_figure(
       row_heights=[0.34, 0.30, 0.16, 0.20],
       vertical_spacing=0.035,
       subplot_titles=(
-          f"{display} — Heikin Ashi (EMA {ema_fast}/{ema_mid or ema_slow}) • A = EMA cross • B = pullback • C = trend break",
+          f"{display} — Heikin Ashi (EMA {ema_fast}/{ema_mid or ema_slow}) • A = EMA cross • B = pullback • C = trend break"
+          + (f" • white = {ma30_type} {ma30_len}" if ma30_len else ""),
           f"{display} — ATR Renko (Buy/Sell = EMA {ema_fast} × {ema_mid or ema_slow} cross)",
           f"MACD {macd_params.get('fast', 12)}/{macd_params.get('slow', 26)}/{macd_params.get('signal', 9)} — independent Buy/Sell (MACD × Signal)",
           f"RSI 14 (Buy/Sell = Renko EMA {ema_fast} × {ema_mid or ema_slow} cross • Green 30 / Red 70 levels)",
@@ -1483,6 +1765,9 @@ def create_chart_figure(
   if mid_s is not slow_s:
     fig.add_trace(go.Scatter(x=x_ha, y=mid_s, line=dict(color=COLOR_MA_MID, width=1.3), name=f"HA EMA {ema_mid}", showlegend=False), row=1, col=1)
   fig.add_trace(go.Scatter(x=x_ha, y=slow_s, line=dict(color=COLOR_MA_SLOW, width=1.3), name=f"HA EMA {ema_slow}", showlegend=False), row=1, col=1)
+  if ma30_len:
+    fig.add_trace(go.Scatter(x=x_ha, y=_ma_line(ha_close, ma30_len, ma30_type), mode="lines",
+                             line=dict(color=COLOR_MA30, width=1.8), name=f"{ma30_type} {ma30_len}", showlegend=False), row=1, col=1)
   # A / B / C markers on the Heikin Ashi candles (A = EMA cross, B = pullback, C = trend break)
   ha_abc = compute_abc_signals(ha_df["High"].values, ha_df["Low"].values, ha_df["Close"].values, f_arr, m_arr,
                                c_mode=ABC_C_MODE)
@@ -1534,6 +1819,9 @@ def create_chart_figure(
   fig.add_trace(go.Scatter(x=x_renko, y=renko_df["EMA_SLOW"], line=dict(color=COLOR_MA_SLOW, width=1.3), name=f"EMA {ema_slow}", showlegend=False), row=2, col=1)
   if ema_mid is not None and "EMA_MID" in renko_df.columns:
     fig.add_trace(go.Scatter(x=x_renko, y=renko_df["EMA_MID"], line=dict(color=COLOR_MA_MID, width=1.3), name=f"EMA {ema_mid}", showlegend=False), row=2, col=1)
+  if ma30_len:
+    fig.add_trace(go.Scatter(x=x_renko, y=_ma_line(_rc, ma30_len, ma30_type), mode="lines",
+                             line=dict(color=COLOR_MA30, width=1.8), name=f"{ma30_type} {ma30_len}", showlegend=False), row=2, col=1)
   _rk_pad = float(np.nanmax(renko_df["High"].values) - np.nanmin(renko_df["Low"].values)) * 0.02 if len(renko_df) else 0.0
   add_pill_signals(fig, x_renko, master_signal, renko_df["Low"].values - _rk_pad, renko_df["High"].values + _rk_pad, row=2)
   struct_style = {
@@ -1905,13 +2193,13 @@ def _md_safe(text):
   # "$" would start LaTeX inside a button label — escape it.
   return text.replace("$", "\\$")
 
-def render_clickable_single_box(title, movers, key_prefix, on_click, compact=False):
+def render_clickable_single_box(title, movers, key_prefix, on_click, compact=False, empty_text="No data"):
   if not movers:
     st.markdown(
         f"<div style='background-color:{COLOR_PANEL_BG};border:1px solid {COLOR_BORDER};"
         f"border-radius:6px;padding:3px 8px;'>"
         f"<div style='font-size:10px;color:{COLOR_TEXT_MUTED};font-weight:600;'>{title}:"
-        f" <span style='font-weight:400;'>No data</span></div></div>",
+        f" <span style='font-weight:400;'>{empty_text}</span></div></div>",
         unsafe_allow_html=True,
     )
     return
@@ -1986,7 +2274,7 @@ def render_conviction_box(results_by_cat, key_prefix, on_click):
     chips += (
         f"<span style='display:inline-block;margin:4px 6px 0 0;padding:2px 9px;border-radius:12px;"
         f"border:1px solid {s['accent']};color:{s['accent']};font-size:11px;font-weight:700;'>"
-        f"{s['icon']} {s['label']} · {_chip_counts(hits, cat_name)}</span>"
+        f"{s['icon']} {s['label']} • {_chip_counts(hits, cat_name)}</span>"
     )
   st.markdown(
       f"<div style='background-color:{COLOR_PANEL_BG};border:1px solid {COLOR_BORDER};"
@@ -2040,6 +2328,147 @@ def render_conviction_box(results_by_cat, key_prefix, on_click):
           value_fmt=_value_html,
           empty_text=f"No {side} matches today",
       )
+
+# =====================================================================
+# LIVE BOXES (v13) - fragments that re-draw themselves as the background worker finishes
+# =====================================================================
+if hasattr(st, "fragment"):
+  _bg_fragment = st.fragment(run_every=8)
+else:                                      # very old Streamlit: no auto-refresh, boxes update on the next click
+  def _bg_fragment(fn):
+    return fn
+
+def _go_from_box(symbol, display):
+  """Row click inside a live box: open that chart. The fragment then asks for a full rerun so the chart redraws."""
+  go_to_chart(symbol, display)
+  st.session_state["_qfx_full_rerun"] = True
+
+def _full_rerun_if_clicked():
+  if st.session_state.pop("_qfx_full_rerun", False):
+    st.rerun()
+
+def _scan_status(ts, updating):
+  when = time.strftime("%H:%M", time.localtime(ts)) if ts else "-"
+  if updating and not ts:
+    return "⏳ scanning in the background - this box fills in by itself"
+  return f"{'⏳ refreshing • ' if updating else ''}updated {when}"
+
+def _cross_value_md(cat_name):
+  def _fmt(m):
+    col = "green" if m["direction"] == "BUY" else "red"
+    arrow = "▲" if m["direction"] == "BUY" else "▼"
+    ago = int(m["bars_ago"])
+    recency = "latest bar" if ago == 0 else (f"{ago} bar ago" if ago == 1 else f"{ago} bars ago")
+    return f"{conviction_price_str(cat_name, m['price'])} • :{col}[{arrow} {m['direction']}] • {recency}"
+  return _fmt
+
+@_bg_fragment
+def _render_header_mover(kind, title):
+  _full_rerun_if_clicked()
+  value, _ts, _busy = _get_scan_store().get("movers", "v1")
+  render_clickable_single_box(
+      title, (value or {}).get(kind, []), key_prefix=f"header_top_{kind}",
+      on_click=_go_from_box, compact=True,
+      empty_text="loading…" if value is None else "No data",
+  )
+
+@_bg_fragment
+def _render_chartink_box():
+  _full_rerun_if_clicked()
+  value, _ts, _busy = _get_scan_store().get("chartink", CHARTINK_EMA_SCREENER_URL)
+  render_clickable_list_box(
+      "Chartink — EMA 9/20 Cross", value or [], key_prefix="chartink_ema920_sidebar",
+      on_click=_go_from_box,
+      empty_text="⏳ loading in the background…" if value is None else "No data",
+  )
+
+@_bg_fragment
+def _render_scan_boxes(ema_fast, ema_mid, ma_params):
+  _full_rerun_if_clicked()
+  store = _get_scan_store()
+  a, b, length, kind, tf_stock, tf_fx, look_back = ma_params
+
+  # ---- 1) EMA a-b x MA L : Nifty 500 / US 100 / Forex / Commodities ----------------------------
+  ma_val, ma_ts, ma_busy = store.get("ma30", ma_params)
+  chips = ""
+  for label, _key, _grp in MA_SCAN_MARKETS:
+    hits = (ma_val or {}).get(label)
+    if hits is None:
+      continue
+    s = _market_style(label)
+    nb = sum(1 for m in hits if m["direction"] == "BUY")
+    chips += (
+        f"<span style='display:inline-block;margin:4px 6px 0 0;padding:2px 9px;border-radius:12px;"
+        f"border:1px solid {s['accent']};color:{s['accent']};font-size:11px;font-weight:700;'>"
+        f"{s['icon']} {label} • {nb} BUY / {len(hits) - nb} SELL</span>"
+    )
+  st.markdown(
+      f"<div style='background-color:{COLOR_PANEL_BG};border:1px solid {COLOR_BORDER};"
+      f"border-radius:6px;padding:10px 14px;margin-bottom:10px;'>"
+      f"<div style='font-size:12px;color:{COLOR_TEXT_MAIN};font-weight:700;margin-bottom:4px;'>"
+      f"⚪ EMA {a}-{b} × MA {length}</div>"
+      f"<div style='font-size:10px;color:{COLOR_TEXT_MUTED};line-height:1.5;'>"
+      f"EMA {a} <b>and</b> EMA {b} have crossed the white {kind} {length} line in the last {look_back} bar(s). "
+      f"BUY = both now above it • SELL = both now below it. "
+      f"Nifty 500 / US 100: {tf_stock} • Forex / Commodities: {tf_fx}</div>"
+      f"<div>{chips}</div>"
+      f"<div style='font-size:10px;color:{COLOR_TEXT_MUTED};margin-top:6px;'>{_scan_status(ma_ts, ma_busy)}</div></div>",
+      unsafe_allow_html=True,
+  )
+  for label, _key, grp in MA_SCAN_MARKETS:
+    s = _market_style(label)
+    slug = re.sub(r"[^a-z0-9]", "", label.lower())
+    tf = tf_stock if grp == "stock" else tf_fx
+    title = f"{s['icon']} EMA {a}-{b} × MA {length} ({tf}) — {label}"
+    hits = (ma_val or {}).get(label)
+    if hits is None:
+      render_clickable_list_box(
+          title, [], key_prefix=f"ma30_{slug}", on_click=_go_from_box,
+          empty_text="⏳ Scanning in the background…" if (ma_busy or ma_val is None) else "No data",
+      )
+      continue
+    shown = hits[:CONVICTION_MAX_DISPLAY]
+    title += f" • {len(hits)}"
+    if len(hits) > len(shown):
+      title += f" (newest {len(shown)} shown)"
+    render_clickable_list_box(
+        title, shown, key_prefix=f"ma30_{slug}", on_click=_go_from_box,
+        value_fmt=_cross_value_md(label), empty_text="No fresh crosses",
+    )
+
+  # ---- 2) High-Conviction calls (daily pullback clause) --------------------------------------------
+  conv, conv_ts, conv_busy = store.get("conviction", "v1")
+  if conv:
+    render_conviction_box(conv, key_prefix="hc", on_click=_go_from_box)
+  else:
+    st.markdown(
+        f"<div style='background-color:{COLOR_PANEL_BG};border:1px solid {COLOR_BORDER};"
+        f"border-radius:6px;padding:10px 14px;margin-bottom:10px;font-size:12px;color:{COLOR_TEXT_MUTED};'>"
+        f"🚨 High-Conviction Calls — ⏳ scanning in the background…</div>",
+        unsafe_allow_html=True,
+    )
+  st.caption(f"High-Conviction: {_scan_status(conv_ts, conv_busy)}")
+
+  # ---- 3) EMA fast x mid cross (2H) : Nifty 500 / US 100 -----------------------------------------------
+  emax, emax_ts, emax_busy = store.get("emax", (ema_fast, ema_mid))
+  for cat, kp in (("Nifty 500", "emax_nifty"), ("US 100", "emax_us100")):
+    title = f"⚡ EMA {ema_fast} × {ema_mid} Cross (2H) — {cat}"
+    hits = (emax or {}).get(cat)
+    if hits is None:
+      render_clickable_list_box(
+          title, [], key_prefix=kp, on_click=_go_from_box,
+          empty_text="⏳ Scanning in the background…" if (emax_busy or emax is None) else "No data",
+      )
+      continue
+    shown = hits[:CONVICTION_MAX_DISPLAY]
+    title += f" • {len(hits)}"
+    if len(hits) > len(shown):
+      title += f" (newest {len(shown)} shown)"
+    render_clickable_list_box(
+        title, shown, key_prefix=kp, on_click=_go_from_box,
+        value_fmt=_cross_value_md(cat), empty_text="No fresh crosses",
+    )
+
 
 # =====================================================================
 # SIDEBAR CONTROLS
@@ -2118,8 +2547,8 @@ signal_cooldown = st.sidebar.slider(
 )
 show_scanners = st.sidebar.checkbox(
     "Load scanner boxes (right panel)", value=True,
-    help="The right-hand boxes scan ~600 symbols. They load AFTER the chart appears and are cached for 15 min. "
-         "Untick for a fast, chart-only view.",
+    help="The right-hand boxes scan ~600 symbols. They run on a background worker, so the chart paints first and the boxes "
+         "fill in by themselves (results are kept between visits). Untick for a chart-only view.",
 )
 st.sidebar.caption("EMA Fast × EMA Mid (9 × 27) drives the EMA-cross screener boxes and the Renko / Heikin Ashi Buy/Sell signals.")
 _C_RULES = {
@@ -2132,6 +2561,19 @@ _c_choice = st.sidebar.selectbox(
     help="C fires when the close crosses the fast EMA against the trend. Pick how strict it should be.",
 )
 ABC_C_MODE = _C_RULES[_c_choice]
+with st.sidebar.expander("⚪ MA line & EMA × MA scanner", expanded=False):
+  show_ma30 = st.checkbox("Show the white MA line on the charts", value=True, key="show_ma30_in")
+  mm1, mm2, mm3 = st.columns(3)
+  x_ema_a = mm1.number_input("EMA A", min_value=1, max_value=200, value=9, key="x_ema_a_in")
+  x_ema_b = mm2.number_input("EMA B", min_value=1, max_value=200, value=21, key="x_ema_b_in")
+  ma30_len = mm3.number_input("MA", min_value=2, max_value=400, value=30, key="ma30_len_in")
+  ma30_type = st.selectbox("MA type", ["SMA", "EMA"], index=0, key="ma30_type_in",
+                           help="SMA = simple moving average (default), EMA = exponential.")
+  x_tf_stock = st.selectbox("Nifty 500 / US 100 timeframe", ["1h", "2h", "4h"], index=1, key="x_tf_stock_in")
+  x_tf_fx = st.selectbox("Forex / Commodities timeframe", ["15m", "30m", "1h"], index=1, key="x_tf_fx_in")
+  x_look = st.slider("Show crosses from the last N bars", min_value=1, max_value=10, value=3, key="x_look_in",
+                     help="1 = only a cross on the latest bar. Higher = also crosses a few bars back that still hold.")
+_ma_params = (int(x_ema_a), int(x_ema_b), int(ma30_len), str(ma30_type), str(x_tf_stock), str(x_tf_fx), int(x_look))
 st.sidebar.markdown("---")
 CHARTINK_EMA_SCREENER_URL = "https://chartink.com/screener/ema9-20-cross-5"
 with st.sidebar:
@@ -2197,6 +2639,7 @@ with st.sidebar.expander("🔔 Telegram Alerts & Automated Triggers", expanded=F
 _auto_status_slot = st.sidebar.container()
 if st.sidebar.button("🔄 Refresh data", **STRETCH):
   st.cache_data.clear()
+  _get_scan_store().refresh_all()
   st.rerun()
 if "chart_symbol" not in st.session_state:
   st.session_state.chart_symbol = current_symbol
@@ -2211,8 +2654,17 @@ chart_display = st.session_state.chart_display
 # =====================================================================
 # MAIN LAYOUT
 # =====================================================================
-_header_top_commodity = fetch_top_n_movers(tuple(COMMODITIES), n=1)
-_header_top_forex = fetch_top_n_movers(tuple(FOREX_PAIRS), n=1)
+# Everything slow is handed to the background worker (see BACKGROUND SCANNER above); the page only reads results.
+_bg = _get_scan_store()
+_bg.want("movers", "v1", _job_movers)
+_bg.want("chartink", CHARTINK_EMA_SCREENER_URL, _fetch_chartink_screener_raw, CHARTINK_EMA_SCREENER_URL)
+if show_scanners:
+  _bg.want("ma30", _ma_params, _job_ma30, _ma_params)
+  _bg.want("emax", (int(ema_fast), int(ema_mid)), _job_emax, int(ema_fast), int(ema_mid))
+  _bg.want("conviction", "v1", _job_conviction)
+else:
+  for _j in ("ma30", "emax", "conviction"):
+    _bg.drop(_j)
 if "active_view" not in st.session_state:
   st.session_state.active_view = VIEWS[0]
 live_price, live_chg = get_live_price_and_chg(chart_symbol)
@@ -2233,9 +2685,9 @@ with header_col1:
 with header_col2:
   active_view = st.radio("View", VIEWS, horizontal=True, label_visibility="collapsed", key="active_view")
 with top_commodity_col:
-  render_clickable_single_box("Top Commodity", _header_top_commodity, key_prefix="header_top_commodity", on_click=go_to_chart, compact=True)
+  _render_header_mover("commodity", "Top Commodity")
 with top_forex_col:
-  render_clickable_single_box("Top Forex", _header_top_forex, key_prefix="header_top_forex", on_click=go_to_chart, compact=True)
+  _render_header_mover("forex", "Top Forex")
 # ---- Charts view --------------------------------------------------------
 if active_view == "📊 Charts":
   with st.spinner(f"Fetching {chart_display}..."):
@@ -2272,6 +2724,7 @@ if active_view == "📊 Charts":
           raw_df=real_df,
           macd_params=dict(fast=macd_fast, slow=macd_slow, signal=macd_signal, smooth=macd_smooth),
           view_days=VIEW_DAYS,
+          ma30_len=(int(ma30_len) if show_ma30 else 0), ma30_type=ma30_type,
       )
       chart_col, right_panel_col = st.columns([0.74, 0.26])
       with chart_col:
@@ -2349,26 +2802,7 @@ if active_view == "📊 Charts":
               unsafe_allow_html=True,
           )
         if show_scanners:
-          try:
-            with st.spinner("Scanning Nifty 500 / US 100 / Commodities / Forex — first load can take a few minutes, then it is cached for 15 min..."):
-              conviction_results = get_conviction_results()
-            render_conviction_box(conviction_results, key_prefix="hc", on_click=go_to_chart)
-          except Exception as _hc_err:
-            st.error(f"High-Conviction scan failed: {type(_hc_err).__name__}: {_hc_err}")
-          for _cat, _pairs, _kp in (
-              ("Nifty 500", tuple(zip(nifty500_yf, nifty500_raw)), "emax_nifty"),
-              ("US 100", tuple(zip(us100_yf, us100_raw + ["IXIC"])), "emax_us100"),
-          ):
-            with st.spinner(f"Scanning 2H EMA {int(ema_fast)} × {int(ema_mid)} cross — {_cat}..."):
-              _hits, _ = scan_ema_cross_2h(_pairs, fast=int(ema_fast), slow=int(ema_mid), lookback=1)
-            _shown = _hits[:CONVICTION_MAX_DISPLAY]
-            _title = f"⚡ EMA {int(ema_fast)} × {int(ema_mid)} Cross (2H) — {_cat} • {len(_hits)}"
-            if len(_hits) > len(_shown):
-              _title += f" (newest {len(_shown)} shown)"
-            render_clickable_list_box(
-                _title, _shown, key_prefix=_kp, on_click=go_to_chart,
-                value_fmt=_ema_cross_value_md(_cat), empty_text="No fresh crosses",
-            )
+          _render_scan_boxes(int(ema_fast), int(ema_mid), _ma_params)
         else:
           st.caption("Scanner boxes are switched off (sidebar → “Load scanner boxes”).")
 # ---- Scanner view ---------------------------------------------------------
@@ -2417,13 +2851,7 @@ elif active_view == "🔎 Scanner":
 # =====================================================================
 with _chartink_slot:
   st.markdown(f"<div style='font-size:11px;color:{COLOR_TEXT_MUTED};font-weight:600;margin-bottom:6px;'>📊 Chartink Screener</div>", unsafe_allow_html=True)
-  _sidebar_chartink_hits = fetch_chartink_screener(CHARTINK_EMA_SCREENER_URL)
-  render_clickable_list_box(
-      "Chartink — EMA 9/20 Cross",
-      _sidebar_chartink_hits,
-      key_prefix="chartink_ema920_sidebar",
-      on_click=go_to_chart,
-  )
+  _render_chartink_box()
   st.markdown(
       f"<div style='font-size:11px;margin:2px 0 10px 2px;'>"
       f"<a href='{CHARTINK_EMA_SCREENER_URL}' target='_blank' style='color:{COLOR_TEXT_MUTED};text-decoration:none;'>Open full screener on Chartink ↗</a>"
